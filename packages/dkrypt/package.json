@@ -25,9 +25,9 @@
   "dependencies": {
     "@discordjs/rest": "^2.6.3",
     "@fastify/static": "^10.1.4",
-    "@fastify/swagger": "^9.9.0",
+    "@fastify/swagger": "^9.9.1",
     "@fastify/type-provider-typebox": "^6.1.0",
-    "@scalar/fastify-api-reference": "^1.71.0",
+    "@scalar/fastify-api-reference": "^1.73.1",
     "@sinclair/typebox": "^0.34.52",
     "@simplewebauthn/server": "^14.0.2",
     "adm-zip": "^0.6.1",
@@ -36,11 +36,11 @@
     "discord-api-types": "^0.38.55",
     "fastify": "^5.12.5",
     "node-cron": "^4.6.0",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.0.16",
     "plist": "^5.0.0",
     "safe-regex2": "^5.1.1",
     "ssh2": "^1.17.0",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
