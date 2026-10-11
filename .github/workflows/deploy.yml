@@ -120,7 +120,7 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.sha }}
       - name: Generate image SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           image: ghcr.io/${{ github.repository }}:${{ github.sha }}
           output-file: dkrypt-sbom.spdx.json
