@@ -69,6 +69,7 @@ export const dashboardUserRoutes: FastifyPluginAsyncTypebox = async (server) => 
       const assignment = assignments.get(profile.userId);
       return {
         username: profile.userId,
+        accountUsername: profile.username,
         displayName: profile.displayName,
         avatarUrl: profile.avatarUrl,
         roleIds: assignment?.roleIds ?? [],
@@ -83,6 +84,7 @@ export const dashboardUserRoutes: FastifyPluginAsyncTypebox = async (server) => 
       if (!users.some((user) => user.username === assignment.username)) {
         users.push({
           username: assignment.username,
+          accountUsername: assignment.username,
           displayName: assignment.username,
           avatarUrl: '',
           roleIds: assignment.roleIds,
@@ -117,7 +119,8 @@ export const dashboardUserRoutes: FastifyPluginAsyncTypebox = async (server) => 
       return createHttpErrorEnvelope(request.id, 403, "you can't grant permissions you don't have yourself");
     }
     reply.code(201);
-    return addAllowedUser(username, request.body.roleIds, getFastifySession(request)!.sub);
+    const account = listAuthProfiles().find((profile) => profile.username.toLowerCase() === username.toLowerCase());
+    return addAllowedUser(account?.userId ?? username, request.body.roleIds, getFastifySession(request)!.sub);
   });
 
   server.patch<DashboardUserUpdateRoute>('/v1/dashboard/users/:username', {

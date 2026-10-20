@@ -8,7 +8,7 @@ export const liveState = $state<{
   overview: OverviewPayload | null;
   logs: LogEntry[];
   historyAdditions: JobHistoryEntry[];
-  onlineUsers: string[];
+  onlineUsers: Array<{ userId: string; displayName: string }>;
   connected: boolean;
   overviewLoaded: boolean;
   overviewRefreshFailed: boolean;
@@ -188,7 +188,7 @@ export function connectLive(): void {
   });
 
   eventSource.addEventListener('presence', (e) => {
-    liveState.onlineUsers = readEvent<string[]>(e);
+    liveState.onlineUsers = readEvent<Array<{ userId: string; displayName: string }>>(e);
   });
 
   eventSource.addEventListener('billing', (e) => {

@@ -5,6 +5,7 @@ import { dashboardEvents, getOnlineUsernames, registerDashboardConnection, regis
 import type { LogEntry } from '#logger.js';
 import { hasPermission, isSubsetPermission, PermissionFlag } from '#permissions.js';
 import { getRouteContract } from '#contracts.js';
+import { getAuthProfile } from '#identity.js';
 import { canAccessProject, dashboardHistoryEntry } from '#dashboardJobPresentation.js';
 import { buildDashboardOverview } from '#dashboardOverview.js';
 import { logBelongsToProject } from '#dashboardLogPresentation.js';
@@ -67,7 +68,8 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
     const unregisterDashboardConnection = registerDashboardConnection(() => {
       if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
     });
-    sendEvent('presence', getOnlineUsernames());
+    const presentOnlineUsers = (usernames: string[]) => usernames.map((userId) => ({ userId, displayName: getAuthProfile(userId)?.displayName ?? (userId === 'root' ? 'Administrator' : userId) }));
+    sendEvent('presence', presentOnlineUsers(getOnlineUsernames()));
 
     const onJobsChanged = () => sendEvent('overview', buildDashboardOverview(session.permissions, sub, projectId));
     const onLogAdded = (entry: LogEntry) => {
@@ -76,7 +78,7 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
     const onHistoryAdded = (entry: JobHistoryEntry) => {
       if ((entry.projectId ?? DEFAULT_PROJECT_ID) === projectId) sendEvent('history', dashboardHistoryEntry(entry));
     };
-    const onPresenceChanged = (usernames: string[]) => sendEvent('presence', usernames);
+    const onPresenceChanged = (usernames: string[]) => sendEvent('presence', presentOnlineUsers(usernames));
     const onBillingChanged = () => sendEvent('billing', {});
     const onProjectChanged = (changedProjectId?: string) => {
       if (changedProjectId === undefined || changedProjectId === projectId) {

@@ -26,6 +26,7 @@ export interface AuthProfile {
   email?: string;
   avatarUrl?: string;
   customDisplayName?: string;
+  customUsername?: string;
   identities?: AuthIdentity[];
   aliases?: string[];
   updatedAt: string;
@@ -69,18 +70,52 @@ function mergeIdentities(...groups: AuthIdentity[][]): AuthIdentity[] {
 }
 
 function normalizeProfile(profile: AuthProfile): AuthProfile {
-  const identities = mergeIdentities([legacyIdentity(profile)], profile.identities ?? []);
+  const identities = mergeIdentities(profile.identities ?? [], [legacyIdentity(profile)]);
+  const primary = identities.find((identity) => identityKey(identity) === profile.userId)
+    ?? identities.find((identity) => identity.source === 'oauth')
+    ?? identities.find((identity) => identity.provider === profile.provider && identity.providerId === profile.providerId)
+    ?? identities[0];
+  const username = profile.customUsername ?? primary?.username ?? profile.username;
+  const displayName = profile.customDisplayName ?? primary?.displayName ?? profile.displayName;
   return {
     ...profile,
-    displayName: profile.customDisplayName ?? profile.displayName,
+    username,
+    customUsername: username,
+    displayName,
+    customDisplayName: displayName,
     identities,
     aliases: [...new Set((profile.aliases ?? []).filter((alias) => alias && alias !== profile.userId))],
   };
 }
 
+function availableUsername(candidate: string, profiles: AuthProfile[], userId: string): string {
+  const cleaned = candidate.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 40);
+  const base = cleaned.length >= 2 ? cleaned : 'member';
+  const used = new Set(['root', 'system', ...profiles.filter((profile) => profile.userId !== userId).map((profile) => profile.username.toLowerCase())]);
+  if (!used.has(base.toLowerCase())) return base;
+  for (let suffix = 2; suffix < 100_000; suffix += 1) {
+    const value = `${base.slice(0, 40 - String(suffix).length - 1)}-${suffix}`;
+    if (!used.has(value.toLowerCase())) return value;
+  }
+  throw new Error('no available account username');
+}
+
+function normalizeAccountUsernames(profiles: AuthProfile[]): AuthProfile[] {
+  const assigned: AuthProfile[] = [];
+  for (const profile of profiles) {
+    profile.username = availableUsername(profile.username, assigned, profile.userId);
+    profile.customUsername = profile.username;
+    assigned.push(profile);
+  }
+  return assigned;
+}
+
 function load(): IdentitySnapshot {
   identityRepository.importLegacySnapshot(loadLegacyProfiles);
-  return { profiles: identityRepository.listAll().map(normalizeProfile) };
+  const persisted = identityRepository.listAll();
+  const profiles = normalizeAccountUsernames(persisted.map(normalizeProfile));
+  if (JSON.stringify(persisted) !== JSON.stringify(profiles)) identityRepository.replaceAll(profiles);
+  return { profiles };
 }
 
 function loadLegacyProfiles(): AuthProfile[] | undefined {
@@ -123,6 +158,8 @@ export function upsertAuthProfile(profile: AuthProfile): AuthProfile {
   const incoming = normalizeProfile(profile);
   const existing = state.profiles.find((item) => item.userId === incoming.userId);
   if (!existing) {
+    incoming.username = availableUsername(incoming.username, state.profiles, incoming.userId);
+    incoming.customUsername = incoming.username;
     state.profiles.push(incoming);
     persistProfiles({ upserts: [incoming], deletedUserIds: [] });
     return incoming;
@@ -130,8 +167,10 @@ export function upsertAuthProfile(profile: AuthProfile): AuthProfile {
 
   const customDisplayName = existing.customDisplayName ?? incoming.customDisplayName;
   Object.assign(existing, incoming, {
+    username: existing.username,
     customDisplayName,
-    displayName: customDisplayName ?? incoming.displayName,
+    customUsername: existing.customUsername ?? incoming.customUsername,
+    displayName: customDisplayName ?? existing.displayName,
     identities: mergeIdentities(existing.identities ?? [], incoming.identities ?? []),
     aliases: [...new Set([...(existing.aliases ?? []), ...(incoming.aliases ?? [])])],
   });
@@ -157,12 +196,8 @@ export function upsertAuthIdentity(userId: string, identity: AuthIdentity): Auth
 
   existing.identities = mergeIdentities(existing.identities ?? [legacyIdentity(existing)], [identity]);
   if (identity.source === 'oauth') {
-    existing.provider = identity.provider;
-    existing.providerId = identity.providerId;
-    existing.username = identity.username;
     existing.email = identity.email ?? existing.email;
-    existing.avatarUrl = identity.avatarUrl ?? existing.avatarUrl;
-    existing.displayName = existing.customDisplayName ?? identity.displayName;
+    existing.avatarUrl = existing.avatarUrl ?? identity.avatarUrl;
   }
   existing.updatedAt = identity.updatedAt;
   persistProfiles({ upserts: [existing], deletedUserIds: [] });
@@ -208,8 +243,6 @@ export function mergeAuthProfiles(targetUserId: string, sourceUserId: string): A
     source.identities ?? [legacyIdentity(source)],
   );
   target.aliases = [...new Set([...(target.aliases ?? []), source.userId, ...(source.aliases ?? [])])];
-  target.customDisplayName = target.customDisplayName ?? source.customDisplayName;
-  target.displayName = target.customDisplayName ?? target.displayName;
   target.email = target.email ?? source.email;
   target.avatarUrl = target.avatarUrl ?? source.avatarUrl;
   target.updatedAt = new Date().toISOString();
@@ -251,11 +284,9 @@ export function removeAuthIdentity(userId: string, provider: AuthProvider): Auth
   profile.identities = identities;
   profile.provider = primary.provider;
   profile.providerId = primary.providerId;
-  profile.username = primary.username;
   profile.email = primary.email;
   profile.avatarUrl = primary.avatarUrl;
   profile.aliases = (profile.aliases ?? []).filter((alias) => alias !== `${provider}:${removedIdentity.providerId}`);
-  profile.displayName = profile.customDisplayName ?? primary.displayName;
   profile.updatedAt = new Date().toISOString();
   persistProfiles({ upserts: [profile], deletedUserIds: [] });
   return profile;
@@ -263,6 +294,20 @@ export function removeAuthIdentity(userId: string, provider: AuthProvider): Auth
 
 export function exportIdentitySnapshot(): IdentitySnapshot {
   return structuredClone(state);
+}
+
+export function setAuthUsername(userId: string, username: string): AuthProfile | undefined {
+  const profile = getAuthProfile(userId);
+  if (!profile) return undefined;
+  const requested = username.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,39}$/.test(requested)) throw new Error('username must be 2–40 characters using letters, numbers, dots, underscores, or hyphens');
+  if (requested.toLowerCase() === 'root' || requested.toLowerCase() === 'system') throw new Error('username is unavailable');
+  if (state.profiles.some((other) => other !== profile && other.username.toLowerCase() === requested.toLowerCase())) throw new Error('username is already taken');
+  profile.customUsername = requested;
+  profile.username = requested;
+  profile.updatedAt = new Date().toISOString();
+  persistProfiles({ upserts: [profile], deletedUserIds: [] });
+  return profile;
 }
 
 export function deleteAuthProfile(userId: string): boolean {
@@ -280,6 +325,6 @@ export function isIdentitySnapshot(value: unknown): value is IdentitySnapshot {
 }
 
 export function replaceIdentitySnapshot(snapshot: IdentitySnapshot, options: { persist?: boolean } = {}): void {
-  state.profiles = structuredClone(snapshot.profiles).map(normalizeProfile);
+  state.profiles = normalizeAccountUsernames(structuredClone(snapshot.profiles).map(normalizeProfile));
   if (options.persist !== false) persistIdentitySnapshot();
 }

@@ -8,6 +8,7 @@ import { dashboardRouter } from '#routes/dashboard.js';
 import { createDashboardJobActionRoutes, type DashboardJobActionServices } from '#routes/dashboardJobActionRoutes.js';
 import { setSessionCookie } from '#session.js';
 import type { JobHistoryEntry } from '#store/state.js';
+import { buildTestServer } from '#testServer.js';
 
 function sessionCookie(permissions: bigint): string {
   let value = '';
@@ -66,6 +67,17 @@ test('dashboard job actions are not registered through the legacy router', () =>
   expect(routes).not.toContain('POST /v1/dashboard/jobs/:id/retry');
   expect(routes).not.toContain('GET /v1/dashboard/jobs/:id/diagnostic');
   expect(routes).not.toContain('POST /v1/dashboard/decrypt');
+});
+
+test('failed-job resolution notices stay out of public API-key documentation', async () => {
+  const server = await buildTestServer({ includePublicRoutes: false });
+  try {
+    await server.ready();
+    const document = server.swagger() as { paths?: Record<string, unknown> };
+    expect(Object.keys(document.paths ?? {}).some((path) => path.includes('resolution-notice'))).toBe(false);
+  } finally {
+    await server.close();
+  }
 });
 
 test('manual decrypt submission preserves project, device, and version selection', async () => {
@@ -216,6 +228,86 @@ test('retry uses the requested primary device and retains source job metadata', 
         minimumOsVersion: '17.1',
       },
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('failed-job resolution notices require permission and project access and are sent only once', async () => {
+  const entry = createHistoryEntry();
+  let mailSends = 0;
+  let noticeCreates = 0;
+  const server = build({
+    getJobHistoryEntryById: () => entry,
+    getAuthProfile: () => ({
+      userId: 'requester',
+      provider: 'discord',
+      providerId: '123',
+      username: 'requester',
+      displayName: 'Requester',
+      email: 'requester@example.test',
+      updatedAt: new Date(0).toISOString(),
+    }),
+    canSendDirectMailToUser: () => true,
+    sendDirectMailToUser: async () => { mailSends += 1; },
+    recordJobResolutionNotice: (_id, actor) => {
+      noticeCreates += 1;
+      entry.resolutionNotice = { sentAt: 300, sentBy: actor, emailStatus: 'pending' };
+      return entry.resolutionNotice;
+    },
+    setJobResolutionEmailStatus: (_id, status) => { entry.resolutionNotice!.emailStatus = status; },
+  });
+
+  try {
+    const url = '/v1/dashboard/jobs/history-1/resolution-notice';
+    const reader = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const manager = { cookie: sessionCookie(PermissionFlag.notifyFailedJobOwners) };
+    expect((await server.inject({ method: 'GET', url, headers: reader })).statusCode).toBe(403);
+    expect((await server.inject({ method: 'POST', url, headers: reader })).statusCode).toBe(403);
+
+    const preview = await server.inject({ method: 'GET', url, headers: manager });
+    expect(preview.statusCode).toBe(200);
+    expect(JSON.parse(preview.body)).toMatchObject({ requester: 'Requester', emailAvailable: true });
+    expect(JSON.parse(preview.body).notice).toBeUndefined();
+    const first = await server.inject({ method: 'POST', url, headers: manager });
+    expect(first.statusCode).toBe(200);
+    expect(JSON.parse(first.body).notice).toMatchObject({ emailStatus: 'sent', sentBy: 'root' });
+    const second = await server.inject({ method: 'POST', url, headers: manager });
+    expect(second.statusCode).toBe(200);
+    expect(noticeCreates).toBe(1);
+    expect(mailSends).toBe(1);
+
+    entry.projectId = 'other';
+    expect((await server.inject({ method: 'GET', url, headers: manager })).statusCode).toBe(404);
+    expect((await server.inject({ method: 'POST', url, headers: manager })).statusCode).toBe(404);
+  } finally {
+    await server.close();
+  }
+});
+
+test('resolution notice reports email failure without retrying or duplicating the in-app notice', async () => {
+  const entry = createHistoryEntry();
+  let noticeCreates = 0;
+  const server = build({
+    getJobHistoryEntryById: () => entry,
+    getAuthProfile: () => ({ userId: 'requester', provider: 'discord', providerId: '123', username: 'requester', displayName: 'Requester', updatedAt: new Date(0).toISOString() }),
+    canSendDirectMailToUser: () => true,
+    sendDirectMailToUser: async () => { throw new Error('SMTP unavailable'); },
+    recordJobResolutionNotice: (_id, actor) => {
+      noticeCreates += 1;
+      entry.resolutionNotice = { sentAt: 300, sentBy: actor, emailStatus: 'pending' };
+      return entry.resolutionNotice;
+    },
+    setJobResolutionEmailStatus: (_id, status) => { entry.resolutionNotice!.emailStatus = status; },
+  });
+
+  try {
+    const request = { method: 'POST' as const, url: '/v1/dashboard/jobs/history-1/resolution-notice', headers: { cookie: sessionCookie(PermissionFlag.notifyFailedJobOwners) } };
+    const first = await server.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(JSON.parse(first.body).notice.emailStatus).toBe('failed');
+    await server.inject(request);
+    expect(noticeCreates).toBe(1);
   } finally {
     await server.close();
   }

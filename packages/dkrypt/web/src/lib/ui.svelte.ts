@@ -163,6 +163,7 @@ export type SettingsMode = 'basic' | 'advanced';
 export type ArtifactColumnId = 'app' | 'bundleId' | 'version' | 'source' | 'size' | 'created';
 
 export const densityState = $state<{ value: DisplayDensity }>({ value: 'comfortable' });
+export const sidebarState = $state<{ width: number; collapsed: boolean }>({ width: 256, collapsed: false });
 export const settingsModeState = $state<{ value: SettingsMode }>({ value: 'basic' });
 export const displayTimeZoneState = $state<{ value: string }>({ value: 'system' });
 export const largeTargetsState = $state<{ value: boolean }>({ value: false });
@@ -185,6 +186,11 @@ export const homeViewModesState = $state<{ value: HomeViewModes }>({ value: { ..
 export function setDensity(density: DisplayDensity): void {
   densityState.value = density;
   document.documentElement.setAttribute('data-density', density);
+}
+
+export function setSidebarPreferences(width: number, collapsed: boolean): void {
+  sidebarState.width = Math.max(200, Math.min(360, Math.round(width)));
+  sidebarState.collapsed = collapsed;
 }
 
 export function initDensity(): void {
@@ -254,6 +260,7 @@ export function setHomeViewModes(viewModes: Partial<HomeViewModes>): void {
 
 export function resetUserInterfacePreferences(): void {
   setDensity('comfortable');
+  setSidebarPreferences(256, false);
   setSettingsMode('basic');
   setDisplayTimeZone('system');
   setLargeTargets(false);

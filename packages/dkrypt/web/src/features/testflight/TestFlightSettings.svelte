@@ -202,7 +202,7 @@
                   {#if app}
                     <div class="mt-1 truncate text-[11px] text-muted">{app.devices.map((device) => device.name).join(', ')}</div>
                   {:else if subscription && canManage}
-                    <div class="mt-1 flex items-center gap-1 text-[11px] text-muted"><UserRound class="h-3 w-3" /> {subscription.requestedBy}</div>
+                    <div class="mt-1 flex items-center gap-1 text-[11px] text-muted"><UserRound class="h-3 w-3" /> {subscription.requestedByDisplayName ?? subscription.requestedBy}</div>
                   {/if}
                 </div>
               </div>

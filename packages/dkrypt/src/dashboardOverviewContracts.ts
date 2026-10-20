@@ -43,6 +43,7 @@ export const dashboardOverviewResponseSchema = Type.Object({
       buildNumber: Type.Optional(Type.String()),
     }, { additionalProperties: true })),
     queuedBy: Type.Optional(Type.String()),
+    queuedByDisplayName: Type.Optional(Type.String()),
     priority: Type.Number(),
     createdAt: Type.Number(),
     queue: Type.Optional(Type.Object({

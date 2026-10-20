@@ -26,6 +26,7 @@ const userBillingEntitlementsSchema = Type.Object({
 export const dashboardUserDirectoryResponseSchema = Type.Object({
   users: Type.Array(Type.Object({
     username: identifierSchema,
+    accountUsername: Type.Optional(Type.String()),
     displayName: Type.String(),
     avatarUrl: Type.Optional(Type.String()),
     roleIds: Type.Array(identifierSchema),

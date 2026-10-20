@@ -199,7 +199,7 @@
               <label class="flex items-center gap-3 border-b border-border/50 px-3 py-2 last:border-b-0">
                 <Checkbox checked={memberIds.includes(member.id)} onCheckedChange={() => toggleMember(member.id)} aria-label="Assign {member.displayName}" />
                 {#if member.avatarUrl}<img src={member.avatarUrl} alt="" class="size-7 rounded-full" />{/if}
-                <span class="min-w-0"><span class="block truncate text-sm" data-sensitive="true">{member.displayName}</span><span class="block truncate text-xs text-muted-foreground" data-sensitive="true">{member.username}</span></span>
+                <span class="min-w-0"><span class="block truncate text-sm" data-sensitive="true">{member.displayName}</span><span class="block truncate text-xs text-muted-foreground" data-sensitive="true">@{member.username}</span></span>
               </label>
             {/each}
           </div>

@@ -18,7 +18,7 @@ export const authReauthenticateBodySchema = Type.Object(
   { additionalProperties: true },
 );
 export const authPrivacyDeleteBodySchema = Type.Object({ confirmation: Type.Literal('DELETE MY ACCOUNT') }, { additionalProperties: true });
-export const authProfileBodySchema = Type.Object({ displayName: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: true });
+export const authProfileBodySchema = Type.Object({ displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })), username: Type.Optional(Type.String({ minLength: 2, maxLength: 40 })) }, { additionalProperties: true, minProperties: 1 });
 export const authConnectionParamsSchema = Type.Object(
   { provider: Type.Union([Type.Literal('github'), Type.Literal('discord')]) },
   { additionalProperties: true },

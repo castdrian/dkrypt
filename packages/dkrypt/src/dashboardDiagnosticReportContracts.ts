@@ -22,6 +22,7 @@ export const diagnosticReportSubmitBodySchema = Type.Object({
 export const diagnosticReportRecordSchema = Type.Object({
   id: Type.String(),
   userId: Type.Optional(Type.String()),
+  userDisplayName: Type.Optional(Type.String()),
   projectId: Type.String(),
   category: reportCategorySchema,
   summary: Type.String(),

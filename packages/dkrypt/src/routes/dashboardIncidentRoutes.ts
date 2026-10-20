@@ -3,6 +3,7 @@ import { Type } from '@sinclair/typebox';
 import type { DashboardIncidentRoute } from '#dashboardIncidentContracts.js';
 import { dashboardIncidentQuerySchema, dashboardIncidentResponseSchema } from '#dashboardIncidentContracts.js';
 import { getRecentLogs, type LogEntry } from '#logger.js';
+import { getAuthProfile } from '#identity.js';
 import { getActiveJobs } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
 import { logBelongsToProject } from '#dashboardLogPresentation.js';
@@ -98,7 +99,7 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
       const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
       if (!services.getProject(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
       reconcileOperationalIncidents();
-      return { projectId, incidents: listOperationalIncidents(projectId) };
+      return { projectId, incidents: listOperationalIncidents(projectId).map((incident) => ({ ...incident, assignedToDisplayName: incident.assignedTo ? getAuthProfile(incident.assignedTo)?.displayName : undefined })) };
     });
 
     server.patch('/v1/dashboard/action-center/:id', {
@@ -112,7 +113,7 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
         const incident = updateOperationalIncident(request.params.id, request.body.projectId, session.sub, request.body);
         if (!incident) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'incident not found'));
         recordAudit(session.sub, 'incident.update', incident.id, `${incident.kind} · ${incident.status}`);
-        return { incident };
+        return { incident: { ...incident, assignedToDisplayName: incident.assignedTo ? getAuthProfile(incident.assignedTo)?.displayName : undefined } };
       } catch (error) {
         return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, error instanceof Error ? error.message : 'invalid incident change'));
       }

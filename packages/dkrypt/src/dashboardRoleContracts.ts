@@ -40,7 +40,7 @@ export const dashboardRoleOkResponseSchema = Type.Object({ ok: Type.Boolean() },
 export const dashboardRoleImpactBodySchema = Type.Object({ permissions: Type.String({ maxLength: 128 }) }, { additionalProperties: false });
 export const dashboardRoleImpactResponseSchema = Type.Object({
   affectedCount: Type.Integer({ minimum: 0 }),
-  members: Type.Array(Type.Object({ username: Type.String(), beforePermissions: Type.String(), afterPermissions: Type.String() }), { maxItems: 100 }),
+  members: Type.Array(Type.Object({ username: Type.String(), displayName: Type.Optional(Type.String()), beforePermissions: Type.String(), afterPermissions: Type.String() }), { maxItems: 100 }),
   truncated: Type.Boolean(),
   memberDetailsHidden: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });

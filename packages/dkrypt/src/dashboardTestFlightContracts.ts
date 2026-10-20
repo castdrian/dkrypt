@@ -95,6 +95,7 @@ export const testFlightSubscriptionResponseSchema = Type.Object({
   url: Type.String(),
   inviteCode: Type.String(),
   requestedBy: identifierSchema,
+  requestedByDisplayName: Type.Optional(Type.String()),
   status: Type.Union([Type.Literal('pending'), Type.Literal('approved'), Type.Literal('denied'), Type.Literal('withdrawn')]),
   appId: Type.Optional(Type.Integer({ minimum: 1 })),
   bundleId: Type.Optional(bundleIdSchema),

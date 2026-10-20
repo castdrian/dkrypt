@@ -22,6 +22,7 @@ import type {
   DashboardApiKeyUsageRoute,
 } from '#dashboardApiKeyContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
+import { getAuthProfile } from '#identity.js';
 import { getRouteContract } from '#contracts.js';
 import { EMBED_COLOR, notify } from '#notify.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
@@ -75,6 +76,11 @@ const MAX_DAILY_LIMIT = 10_000;
 const MIN_EXPIRY_EXTEND_DAYS = 1;
 const MAX_EXPIRY_EXTEND_DAYS = 3650;
 const BUNDLE_ID_RE = /^[A-Za-z0-9.-]{3,200}$/;
+
+function presentKey<T extends { ownerId: string }>(key: T): T & { ownerDisplayName?: string; ownerUsername?: string } {
+  const owner = getAuthProfile(key.ownerId);
+  return { ...key, ownerDisplayName: owner?.displayName, ownerUsername: owner?.username };
+}
 
 function parseDailyLimit(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -179,7 +185,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   server.get<DashboardApiKeyListRoute>('/v1/dashboard/keys/mine', {
     schema: getRouteContract('GET', '/v1/dashboard/keys/mine'),
     preHandler: canViewOwnApiKeys,
-  }, (request) => ({ keys: listApiKeysForOwner(getFastifySession(request)!.sub) }));
+  }, (request) => ({ keys: listApiKeysForOwner(getFastifySession(request)!.sub).map(presentKey) }));
 
   server.post<DashboardApiKeyCreateRequestRoute>('/v1/dashboard/keys/request', {
     schema: getRouteContract('POST', '/v1/dashboard/keys/request'),
@@ -333,7 +339,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   server.get<DashboardApiKeyListRoute>('/v1/dashboard/keys/pending', {
     schema: getRouteContract('GET', '/v1/dashboard/keys/pending'),
     preHandler: canApproveApiKeys,
-  }, () => ({ keys: listPendingApiKeys() }));
+  }, () => ({ keys: listPendingApiKeys().map(presentKey) }));
 
   server.get<DashboardApiKeyPageRoute>('/v1/dashboard/keys/all', {
     schema: getRouteContract('GET', '/v1/dashboard/keys/all'),
@@ -344,7 +350,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
       ? decodeCursor(request.query.cursor)
       : Math.max(Number.parseInt(String(request.query.offset ?? '0'), 10) || 0, 0);
     const page = listAllApiKeysPage(offset, limit, request.query.search);
-    return { ...page, nextCursor: nextCursor(offset, page.keys.length, page.total) };
+    return { ...page, keys: page.keys.map(presentKey), nextCursor: nextCursor(offset, page.keys.length, page.total) };
   });
 
   server.post<DashboardApiKeyIdRoute>('/v1/dashboard/keys/:id/approve', {

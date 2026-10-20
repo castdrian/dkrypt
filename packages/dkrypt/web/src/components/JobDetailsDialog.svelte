@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { Copy, Download, FileSearch, GitBranch } from 'lucide-svelte';
+  import { Copy, Download, FileSearch, GitBranch, Mail } from 'lucide-svelte';
   import Alert from '#lib/components/ui/Alert.svelte';
-  import { fetchJobTimeline, jobDiagnosticUrl, type JobTimeline } from '#lib/api';
+  import { fetchJobResolutionNotice, fetchJobTimeline, jobDiagnosticUrl, sendJobResolutionNotice, type JobResolutionNoticePreview, type JobTimeline } from '#lib/api';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import InspectorPane from '#components/InspectorPane.svelte';
+  import Dialog from '#lib/components/ui/Dialog.svelte';
+  import { PermissionFlag } from '#lib/permissions';
+  import { sessionHasPermission } from '#lib/session.svelte';
   import { fmtSize, fmtTime } from '#lib/format.svelte';
   import { buttonVariants, statusToBadgeVariant } from '#lib/components/ui/variants';
   import { showToast } from '#lib/ui.svelte';
@@ -13,16 +16,40 @@
   let { open = $bindable(), jobId, title }: { open: boolean; jobId: string; title: string } = $props();
   let timeline = $state<JobTimeline | null>(null);
   let loading = $state(false);
+  let resolutionPreview = $state<JobResolutionNoticePreview | null>(null);
+  let resolutionDialogOpen = $state(false);
+  let sendingResolution = $state(false);
 
   async function load(): Promise<void> {
     if (!jobId) return;
     loading = true;
+    resolutionPreview = null;
     try {
       timeline = await fetchJobTimeline(jobId);
+      if (timeline.status === 'failed' && sessionHasPermission(PermissionFlag.notifyFailedJobOwners)) {
+        try {
+          resolutionPreview = await fetchJobResolutionNotice(jobId);
+        } catch {
+          resolutionPreview = null;
+        }
+      }
     } catch {
       timeline = null;
     } finally {
       loading = false;
+    }
+  }
+
+  async function sendResolution(): Promise<void> {
+    sendingResolution = true;
+    try {
+      resolutionPreview = await sendJobResolutionNotice(jobId);
+      resolutionDialogOpen = false;
+      showToast(resolutionPreview.notice?.emailStatus === 'failed' ? 'In-app notice sent; email delivery failed' : 'Requester notified', resolutionPreview.notice?.emailStatus === 'failed' ? 'error' : 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not send the notice', 'error');
+    } finally {
+      sendingResolution = false;
     }
   }
 
@@ -72,6 +99,22 @@
         <div class="font-medium">Completed with warnings</div>
         <div class="mt-1 text-xs">{timeline.warnings.join(' ')}</div>
       </Alert>
+    {/if}
+    {#if resolutionPreview}
+      <section class="border-border mb-4 rounded-lg border p-3 text-sm">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div class="font-medium">Requester update</div>
+            <div class="mt-1 text-xs text-muted" data-sensitive="true">{resolutionPreview.requester}</div>
+          </div>
+          {#if !resolutionPreview.notice}
+            <Button size="sm" variant="secondary" onclick={() => (resolutionDialogOpen = true)}><Mail class="h-3.5 w-3.5" />Notify issue resolved</Button>
+          {/if}
+        </div>
+        {#if resolutionPreview.notice}
+          <div class="mt-2 text-xs text-muted">In-app notice sent {fmtTime(resolutionPreview.notice.sentAt)} · Email {resolutionPreview.notice.emailStatus === 'sent' ? 'sent' : resolutionPreview.notice.emailStatus === 'unavailable' ? 'unavailable' : resolutionPreview.notice.emailStatus === 'failed' ? 'failed' : 'pending'}</div>
+        {/if}
+      </section>
     {/if}
     {#if timeline.guidance || timeline.queueReason}
       <div class="border-warn/40 bg-warn/10 mb-4 rounded-lg border p-3 text-sm">
@@ -132,3 +175,17 @@
     <div class="text-sm text-muted">Timeline is unavailable for this job.</div>
   {/if}
 </InspectorPane>
+
+<Dialog bind:open={resolutionDialogOpen} title="Notify requester" class="max-w-lg">
+  <div class="text-sm font-medium">Notify the requester that this issue is resolved?</div>
+  <p class="mt-2 text-sm text-muted">Send this only after verifying the cause of this failed job has been fixed.</p>
+  <div class="border-border bg-panel-muted mt-3 rounded-lg border p-3 text-sm">
+    <div class="font-medium" data-sensitive="true">{resolutionPreview?.requester}</div>
+    <p class="mt-2">{resolutionPreview?.message}</p>
+    <p class="mt-2 text-xs text-muted">In-app notification{resolutionPreview?.emailAvailable ? ' and email' : ' · Email unavailable for this account'}</p>
+  </div>
+  <div class="mt-4 flex justify-end gap-2">
+    <Button variant="secondary" onclick={() => (resolutionDialogOpen = false)}>Cancel</Button>
+    <Button loading={sendingResolution} onclick={() => void sendResolution()}>Send notice</Button>
+  </div>
+</Dialog>

@@ -40,7 +40,7 @@
         <article class="rounded-lg border border-border/70 bg-panel/40 p-3">
           <div class="flex flex-wrap items-start justify-between gap-2"><div><h3 class="text-sm font-semibold">{report.summary}</h3><p class="mt-1 text-xs text-muted">{report.category} · {report.projectId} · {fmtDateTime(report.createdAt)}</p></div><span class="rounded-full bg-muted/20 px-2 py-1 text-[10px] text-muted">Received</span></div>
           <pre class="mt-3 whitespace-pre-wrap break-words text-xs text-muted">{report.details}</pre>
-          <div data-sensitive="true" class="mt-3 font-mono text-[10px] text-muted">{report.userId} · {report.id}</div>
+          <div data-sensitive="true" class="mt-3 font-mono text-[10px] text-muted">{report.userDisplayName ?? report.userId} · {report.id}</div>
         </article>
       {/each}
     </div>

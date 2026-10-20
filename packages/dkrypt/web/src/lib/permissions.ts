@@ -41,6 +41,7 @@ export const PermissionFlag = {
   viewDiagnosticReports: 1n << 40n,
   viewIncidents: 1n << 41n,
   manageIncidents: 1n << 42n,
+  notifyFailedJobOwners: 1n << 43n,
 } as const;
 
 export type PermissionFlagKey = keyof typeof PermissionFlag;
@@ -95,6 +96,7 @@ export const PERMISSION_META = [
   { key: 'viewDiagnosticReports', label: 'View diagnostic reports', description: 'Read user-submitted redacted support reports and their project context.', group: 'General' },
   { key: 'viewIncidents', label: 'View incidents', description: 'Read actionable incidents in accessible projects.', group: 'General' },
   { key: 'manageIncidents', label: 'Manage incidents', description: 'Assign, snooze, and resolve incidents in accessible projects.', group: 'General' },
+  { key: 'notifyFailedJobOwners', label: 'Notify failed-job requesters', description: 'Send a manual resolution notice to the requester of a failed job in an accessible project.', group: 'General' },
   { key: 'requestApiKeys', label: 'Request API keys', description: 'Submit a personal API-key request for approval. Requested keys remain unusable until someone with Manage API keys approves them.', group: 'API Keys' },
   { key: 'createApiKeys', label: 'Create API keys', description: 'Create, reveal, regenerate, revoke, and use personal API keys immediately. This bypasses the approval queue only for the account’s own keys.', group: 'API Keys' },
   { key: 'viewApiKeys', label: 'View API keys', description: 'Read every API key, including its owner, status, usage, and configuration. Key secrets are never exposed by this permission.', group: 'API Keys' },

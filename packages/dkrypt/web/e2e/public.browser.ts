@@ -514,12 +514,12 @@ test('IPA Library visual layout stays consistent on desktop and mobile', async (
   const metadataRows = await artifactRow.locator('dt').evaluateAll((headings) => Object.fromEntries(headings.map((heading) => [heading.textContent?.trim(), heading.getBoundingClientRect().top])));
   expect(metadataRows.Size).toBe(metadataRows.App);
   const actionsTop = await artifactRow.locator('.artifact-library-row-actions').evaluate((element) => element.getBoundingClientRect().top);
-  expect(actionsTop).toBeLessThan(metadataRows.App + 35);
+  expect(actionsTop).toBeGreaterThan(metadataRows.App + 35);
   await expectVisualSnapshot(page, libraryCard, 'ipa-library-desktop.png');
 
   const boundaryStyle = await page.addStyleTag({ content: '[data-artifact-id="visual-artifact"] { width: calc(100% - 2px); }' });
   const boundaryActionsTop = await artifactRow.locator('.artifact-library-row-actions').evaluate((element) => element.getBoundingClientRect().top);
-  expect(boundaryActionsTop).toBeLessThan(metadataRows.App + 35);
+  expect(boundaryActionsTop).toBeGreaterThan(metadataRows.App + 35);
   await boundaryStyle.evaluate((element) => element.remove());
 
   for (const width of [1200, 1652]) {
@@ -527,7 +527,7 @@ test('IPA Library visual layout stays consistent on desktop and mobile', async (
     const rows = await artifactRow.locator('dt').evaluateAll((headings) => Object.fromEntries(headings.map((heading) => [heading.textContent?.trim(), heading.getBoundingClientRect().top])));
     expect(rows.Size, `viewport ${width}`).toBe(rows.App);
     const rowActionsTop = await artifactRow.locator('.artifact-library-row-actions').evaluate((element) => element.getBoundingClientRect().top);
-    expect(rowActionsTop, `viewport ${width}`).toBeLessThan(rows.App + 35);
+    expect(rowActionsTop, `viewport ${width}`).toBeGreaterThanOrEqual(rows.App);
     const versionIsVisible = await artifactRow.locator('dd > span.truncate.font-semibold').evaluate((element) => element.scrollWidth <= element.clientWidth);
     expect(versionIsVisible, `viewport ${width}`).toBe(true);
     if (width === 1200) await expectVisualSnapshot(page, libraryCard, 'ipa-library-narrow-desktop.png');
@@ -539,6 +539,75 @@ test('IPA Library visual layout stays consistent on desktop and mobile', async (
   const mobileVersionIsVisible = await artifactRow.locator('dd > span.truncate.font-semibold').evaluate((element) => element.scrollWidth <= element.clientWidth);
   expect(mobileVersionIsVisible).toBe(true);
   await expectVisualSnapshot(page, libraryCard, 'ipa-library-mobile.png');
+});
+
+test('collapsed sidebar gives library and history content the released space', async ({ page }) => {
+  await mockVisualDashboardData(page);
+  await mockStableDashboardEvents(page);
+  await mockAuthenticatedDashboard(page, '1');
+  await page.route('**/v1/dashboard/artifacts**', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        artifacts: [
+          { id: 'layout-artifact', bundleId: 'com.example.layout', channel: 'appstore', versionLabel: '348.0', buildNumber: '113691', fileSizeBytes: 104857600, createdAt: '2026-09-25T12:00:00.000Z', fileUrl: '/v1/dashboard/artifacts/layout-artifact/file' },
+          { id: 'layout-artifact-long', bundleId: 'com.example.a.much.longer.bundle.identifier', channel: 'testflight', versionLabel: '1.2.3', buildNumber: '9', fileSizeBytes: 1234567, createdAt: '2026-09-24T12:00:00.000Z', fileUrl: '/v1/dashboard/artifacts/layout-artifact-long/file' },
+        ],
+        total: 2,
+        totalBytes: 104857600,
+        maxBytes: 1048576000,
+      }),
+    });
+  });
+  await page.route('**/v1/dashboard/jobs?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ history: [{ id: 'layout-job', bundleId: 'com.example.layout', status: 'done', source: 'manual', createdAt: Date.now() - 60_000, finishedAt: Date.now() - 30_000, fileAvailable: true, downloadUrl: '/download/layout-job' }], total: 1 }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/?tab=home');
+  const artifactRow = page.locator('[data-artifact-id="layout-artifact"]');
+  const historyRow = page.locator('.history-feed-row').first();
+  await expect(artifactRow).toBeVisible();
+  await expect(historyRow).toBeVisible();
+  await expect(artifactRow.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Bulk artifact actions' })).toHaveCount(0);
+  const detailsButton = artifactRow.getByRole('button', { name: 'Artifact details' });
+  const downloadButton = artifactRow.getByRole('link', { name: /Download/ });
+  const detailsBox = await detailsButton.boundingBox();
+  const downloadBox = await downloadButton.boundingBox();
+  expect(detailsBox).not.toBeNull();
+  expect(downloadBox).not.toBeNull();
+  expect(downloadBox?.width).toBe(detailsBox?.width);
+  expect(downloadBox?.height).toBe(detailsBox?.height);
+
+  const otherArtifactRow = page.locator('[data-artifact-id="layout-artifact-long"]');
+  await expect(otherArtifactRow).toBeVisible();
+  const columnStarts = async (row: typeof artifactRow) => row.locator('dt').evaluateAll((headings) => Object.fromEntries(headings.map((heading) => [heading.textContent?.trim(), Math.round(heading.getBoundingClientRect().left)])));
+  expect(await columnStarts(otherArtifactRow)).toEqual(await columnStarts(artifactRow));
+
+  const before = await historyRow.locator('.history-feed-summary').evaluate((element) => element.getBoundingClientRect().width);
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  const after = await historyRow.locator('.history-feed-summary').evaluate((element) => element.getBoundingClientRect().width);
+  expect(after).toBeGreaterThan(before + 100);
+  expect(await columnStarts(otherArtifactRow)).toEqual(await columnStarts(artifactRow));
+  const versionWidth = await artifactRow.locator('dt', { hasText: 'Version' }).locator('..').evaluate((element) => element.getBoundingClientRect().width);
+  expect(versionWidth).toBeLessThan(175);
+  const appWidth = await artifactRow.locator('dt', { hasText: 'App' }).locator('..').evaluate((element) => element.getBoundingClientRect().width);
+  expect(appWidth).toBeGreaterThan(versionWidth);
+
+  await page.getByRole('button', { name: 'Select items' }).click();
+  await expect(artifactRow.getByRole('checkbox')).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Bulk artifact actions' })).toBeVisible();
+
+  await page.setViewportSize({ width: 2048, height: 1000 });
+  await page.getByRole('button', { name: 'Expand sidebar' }).click();
+  const wideBefore = await artifactRow.evaluate((element) => element.getBoundingClientRect().width);
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  const wideAfter = await artifactRow.evaluate((element) => element.getBoundingClientRect().width);
+  expect(wideAfter).toBeGreaterThan(wideBefore + 100);
 });
 
 test('live updates suspend while hidden and refresh immediately when visible again', async ({ page }) => {
@@ -970,6 +1039,7 @@ test('IPA Library archive and restore keep archive state separate from eviction 
   await page.getByRole('option', { name: 'Active', exact: true }).click();
   const activeArtifact = page.locator('article').filter({ hasText: 'com.example.archive' });
   await expect(activeArtifact).toHaveCount(1);
+  await page.getByRole('button', { name: 'Select items' }).click();
   await activeArtifact.getByRole('checkbox', { name: 'Select com.example.archive 2.4.0 (240)' }).check();
   const listRequestsBeforeBulkArchive = artifactListRequestCount;
   await page.getByRole('button', { name: 'Archive selected', exact: true }).click();
@@ -2532,6 +2602,93 @@ test('personalization search, artifact column order, and touch targets sync to t
   expect((savedPrefs.artifactLibrary as { columns: string[] }).columns).toEqual(['app', 'version', 'bundleId', 'source', 'size']);
 });
 
+test('sidebar collapse and drag width persist while Home layout controls live in Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockAuthenticatedDashboard(page, '1');
+  await page.unroute('**/v1/dashboard/me/prefs');
+  const savedPrefs: Record<string, unknown> = { theme: 'dark', accent: 'blue', sound: true, sidebarWidth: 256, sidebarCollapsed: false };
+  await page.route('**/v1/dashboard/me/prefs', async (route) => {
+    if (route.request().method() === 'PUT') Object.assign(savedPrefs, route.request().postDataJSON());
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(savedPrefs) });
+  });
+
+  await page.goto('/');
+  const sidebar = page.locator('aside.app-sidebar');
+  await expect(sidebar).toHaveCSS('width', '256px');
+  await expect(page.getByRole('heading', { name: 'Home layout' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  await expect(sidebar).toHaveCSS('width', '64px');
+  await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeVisible();
+  await expect.poll(() => savedPrefs.sidebarCollapsed).toBe(true);
+
+  await page.reload();
+  await expect(sidebar).toHaveCSS('width', '64px');
+  await page.getByRole('button', { name: 'Expand sidebar' }).click();
+  await expect(sidebar).toHaveCSS('width', '256px');
+  const resizeHandle = page.getByRole('button', { name: /Resize sidebar/ });
+  await resizeHandle.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(sidebar).toHaveCSS('width', '272px');
+  await expect.poll(() => savedPrefs.sidebarWidth).toBe(272);
+  const handleBounds = await resizeHandle.boundingBox();
+  if (!handleBounds) throw new Error('sidebar resize handle is not visible');
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2 + 32, handleBounds.y + 40);
+  await page.mouse.up();
+  await expect(sidebar).toHaveCSS('width', '304px');
+  await expect.poll(() => savedPrefs.sidebarWidth).toBe(304);
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Personal', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Home layout' })).toBeVisible();
+  await page.reload();
+  await expect(sidebar).toHaveCSS('width', '304px');
+});
+
+test('account menu shows a stable username instead of an OAuth provider ID', async ({ page }) => {
+  await mockAuthenticatedDashboard(page, '1');
+  await page.unroute('**/v1/auth/session');
+  let displayName = 'Visual user';
+  let username = 'first-name';
+  const userId = 'discord:238058491548401664';
+  await page.route('**/v1/auth/session', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      loggedIn: true,
+      sub: userId,
+      username,
+      displayName,
+      permissions: '1',
+      identities: [],
+      linkedProviders: [],
+      githubOauthEnabled: false,
+      discordOauthEnabled: false,
+      deployment: { ref: 'abcdef0123456789' },
+      mfa: { enabled: false, recoveryCodesRemaining: 0, required: false },
+    }) });
+  });
+  await page.route('**/v1/auth/profile', async (route) => {
+    const body = route.request().postDataJSON() as { displayName: string; username: string };
+    displayName = body.displayName;
+    username = body.username;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ displayName, username, linkedProviders: [] }) });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  const menu = page.locator('.account-menu');
+  await expect(menu).toContainText('Visual user');
+  await expect(menu).toContainText('@first-name');
+  await expect(menu).not.toContainText(userId);
+  await page.getByRole('button', { name: 'Edit profile name' }).click();
+  await page.getByRole('textbox', { name: 'Profile name' }).fill('Chosen display name');
+  await page.getByRole('textbox', { name: 'Username' }).fill('chosen-name');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(menu).toContainText('Chosen display name');
+  await expect(menu).toContainText('@chosen-name');
+  await expect(menu).not.toContainText(userId);
+});
+
 test('diagnostic reports show a redacted preview and submit only after consent', async ({ page }) => {
   await mockAuthenticatedDashboard(page, '2');
   let submitted: Record<string, unknown> | undefined;
@@ -2595,7 +2752,7 @@ test('system forced-colors mode uses system surface and text colors', async ({ p
   const colors = await page.evaluate(() => {
     const style = getComputedStyle(document.documentElement);
     const card = document.querySelector<HTMLElement>('[data-slot="card"]');
-    const button = document.querySelector<HTMLElement>('button[data-slot="button"]');
+    const button = document.querySelector<HTMLElement>('button[data-slot="button"].bg-secondary');
     const systemPalette = document.createElement('div');
     systemPalette.style.backgroundColor = 'Canvas';
     systemPalette.style.color = 'CanvasText';
@@ -2936,6 +3093,7 @@ test('IPA Library bulk pinning sends one bounded update for the selected artifac
   const artifactResponse = page.waitForResponse((response) => response.url().includes('/v1/dashboard/artifacts?') && response.ok());
   await page.goto('/?tab=home');
   await artifactResponse;
+  await page.getByRole('button', { name: 'Select items' }).click();
   await page.getByRole('checkbox', { name: 'Select com.example.bulk 2.4.0 (240)' }).check();
   await page.getByRole('button', { name: 'Pin selected', exact: true }).click();
 

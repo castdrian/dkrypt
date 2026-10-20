@@ -14,6 +14,8 @@
 		Moon,
 		Pencil,
 		PanelRightOpen,
+		PanelLeftClose,
+		PanelLeftOpen,
 		Sun,
 		Trash2,
 		Volume2,
@@ -71,6 +73,7 @@
 		permissionsSummary,
 		pushAccentPref,
 		pushDensityPref,
+		pushSidebarPreferences,
 		pushHighContrastPref,
 		pushFormattingLocale,
 		pushInterfaceLanguage,
@@ -83,7 +86,7 @@
 		sessionHasPermission,
 		sessionPermissionKeys,
 		sessionState,
-		updateProfileDisplayName,
+		updateProfile,
 	} from "#lib/session.svelte";
 	import { accountExportUrl, deleteAccount, reauthenticate, reauthenticateWithPasskey } from "#lib/api";
 	import {
@@ -109,8 +112,10 @@
 		setSoundEnabled,
 		setTheme,
 		setScreenSharePrivacy,
+		setSidebarPreferences,
 		densityState,
 		navigationPreferencesState,
+		sidebarState,
 		screenSharePrivacyState,
 		screenReaderAnnouncementState,
 		artifactDetailJumpState,
@@ -186,20 +191,62 @@ initDensity();
 	let accountMenuOpen = $state(false);
 	let editingProfileName = $state(false);
 	let profileNameDraft = $state("");
+	let profileUsernameDraft = $state("");
 	let savingProfileName = $state(false);
 	let sessionChecked = $state(false);
 	let mobileStatusOpen = $state(false);
 	let mobileSwipeStartX = $state<number | null>(null);
+	let sidebarDrag = $state<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 	let passkeys = $state<Array<{ id: string; name?: string; createdAt: number; lastUsedAt?: number }>>([]);
 	let passkeyBusy = $state(false);
 	let appliedDeepLink = '';
 
 	const otherOnlineUsers = $derived(
-		liveState.onlineUsers.filter((u) => u !== sessionState.sub),
+		liveState.onlineUsers.filter((u) => u.userId !== sessionState.sub).map((u) => u.userId),
 	);
 
 	function initials(name: string): string {
 		return name.slice(0, 2).toUpperCase();
+	}
+
+	function saveSidebar(width: number, collapsed: boolean): void {
+		void pushSidebarPreferences(width, collapsed).catch(() => showToast("Could not save sidebar preferences.", "error"));
+	}
+
+	function onSidebarResizeStart(event: PointerEvent): void {
+		if (sidebarState.collapsed) return;
+		event.preventDefault();
+		event.currentTarget instanceof HTMLElement && event.currentTarget.setPointerCapture(event.pointerId);
+		sidebarDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarState.width };
+	}
+
+	function onSidebarResizeMove(event: PointerEvent): void {
+		if (!sidebarDrag || sidebarDrag.pointerId !== event.pointerId) return;
+		setSidebarPreferences(sidebarDrag.startWidth + event.clientX - sidebarDrag.startX, false);
+	}
+
+	function onSidebarResizeEnd(event: PointerEvent): void {
+		if (!sidebarDrag || sidebarDrag.pointerId !== event.pointerId) return;
+		const previousWidth = sidebarDrag.startWidth;
+		const nextWidth = sidebarState.width;
+		sidebarDrag = null;
+		setSidebarPreferences(previousWidth, false);
+		saveSidebar(nextWidth, false);
+	}
+
+	function onSidebarResizeCancel(event: PointerEvent): void {
+		if (!sidebarDrag || sidebarDrag.pointerId !== event.pointerId) return;
+		setSidebarPreferences(sidebarDrag.startWidth, false);
+		sidebarDrag = null;
+	}
+
+	function onSidebarResizeKeydown(event: KeyboardEvent): void {
+		const delta = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+		const next = event.key === "Home" ? 200 : event.key === "End" ? 360 : sidebarState.width + delta;
+		if (!delta && event.key !== "Home" && event.key !== "End") return;
+		event.preventDefault();
+		event.stopPropagation();
+		saveSidebar(next, false);
 	}
 
 	const myGrantedPermissions = $derived(sessionPermissionKeys());
@@ -378,6 +425,7 @@ initDensity();
 
 	function startEditingProfileName(): void {
 		profileNameDraft = sessionState.displayName ?? "";
+		profileUsernameDraft = sessionState.username ?? "";
 		editingProfileName = true;
 	}
 
@@ -435,7 +483,7 @@ initDensity();
 	async function saveProfileName(): Promise<void> {
 		savingProfileName = true;
 		try {
-			const result = await updateProfileDisplayName(profileNameDraft);
+			const result = await updateProfile(profileNameDraft, profileUsernameDraft);
 			if (!result.ok) {
 				showToast(
 					result.error ?? "Could not update profile name.",
@@ -444,7 +492,7 @@ initDensity();
 				return;
 			}
 			editingProfileName = false;
-			showToast("Profile name updated.", "success");
+			showToast("Profile updated.", "success");
 		} finally {
 			savingProfileName = false;
 		}
@@ -652,49 +700,59 @@ initDensity();
 	<div class="app-shell min-h-screen bg-background">
 		<MaintenanceBanner />
 		<div class="flex min-h-screen">
-			<aside class="app-sidebar hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-				<div class="border-b border-sidebar-border px-5 py-5">
-					<div class="flex items-center gap-3">
+			<aside class="app-sidebar relative hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex" style:width={`${sidebarState.collapsed ? 64 : sidebarState.width}px`}>
+				<div class={cn("border-b border-sidebar-border", sidebarState.collapsed ? "px-2 py-3" : "px-4 py-4")}>
+					<div class={cn("flex items-center gap-3", sidebarState.collapsed && "flex-col gap-1")}>
 						<div class="bg-sidebar-primary/15 flex size-9 items-center justify-center rounded-lg">
 							<Lock class="size-4 text-sidebar-primary" aria-hidden="true" />
 						</div>
-						<div class="min-w-0">
+						{#if !sidebarState.collapsed}<div class="min-w-0 flex-1">
 							<div class="text-sm font-semibold tracking-tight text-sidebar-foreground">dkrypt</div>
 							<div class="truncate text-xs text-sidebar-foreground/60" lang={interfaceLanguage}>{msg("brand.operationsConsole")}</div>
-						</div>
+						</div>{/if}
+						<Button variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={() => saveSidebar(sidebarState.width, !sidebarState.collapsed)} aria-label={sidebarState.collapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarState.collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!sidebarState.collapsed}>
+							{#if sidebarState.collapsed}<PanelLeftOpen class="h-4 w-4" />{:else}<PanelLeftClose class="h-4 w-4" />{/if}
+						</Button>
 					</div>
 				</div>
-				<nav class="flex flex-1 flex-col gap-1 p-4" aria-label={msg("nav.workspace")} lang={interfaceLanguage}>
-					<div class="mb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">{msg("nav.workspace")}</div>
+				<nav class={cn("flex flex-1 flex-col gap-1 overflow-y-auto", sidebarState.collapsed ? "p-2" : "p-4")} aria-label={msg("nav.workspace")} lang={interfaceLanguage}>
+					{#if !sidebarState.collapsed}<div class="mb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">{msg("nav.workspace")}</div>{/if}
 					{#if pinnedTabs.length > 0}
-						<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">Pinned</div>
+						{#if sidebarState.collapsed}<div class="my-2 border-t border-sidebar-border" role="separator" aria-label="Pinned"></div>{:else}<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">Pinned</div>{/if}
 					{/if}
 					{#each pinnedTabs as t (t.id)}
 						<Button
 							variant={tabState.active === t.id ? "secondary" : "ghost"}
-							class={cn("group w-full justify-start gap-3 px-3 text-sm", tabState.active === t.id ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground")}
+							class={cn("group w-full gap-3 text-sm", sidebarState.collapsed ? "justify-center px-2" : "justify-start px-3", tabState.active === t.id ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground")}
 							onclick={() => setActiveTab(t.id)}
+							title={sidebarState.collapsed ? msg(t.label) : undefined}
+							aria-label={sidebarState.collapsed ? msg(t.label) : undefined}
 							aria-current={tabState.active === t.id ? "page" : undefined}
 						>
 							<TabIcon id={t.id} class="size-4" />
-							<span>{msg(t.label)}</span>
+							{#if !sidebarState.collapsed}<span>{msg(t.label)}</span>{/if}
 						</Button>
 					{/each}
 					{#if unpinnedTabs.length > 0 && pinnedTabs.length > 0}
-						<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">Workspace</div>
+						{#if sidebarState.collapsed}<div class="my-2 border-t border-sidebar-border" role="separator" aria-label="Workspace"></div>{:else}<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">Workspace</div>{/if}
 					{/if}
 					{#each unpinnedTabs as t (t.id)}
 						<Button
 							variant={tabState.active === t.id ? "secondary" : "ghost"}
-							class={cn("group w-full justify-start gap-3 px-3 text-sm", tabState.active === t.id ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground")}
+							class={cn("group w-full gap-3 text-sm", sidebarState.collapsed ? "justify-center px-2" : "justify-start px-3", tabState.active === t.id ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground")}
 							onclick={() => setActiveTab(t.id)}
+							title={sidebarState.collapsed ? msg(t.label) : undefined}
+							aria-label={sidebarState.collapsed ? msg(t.label) : undefined}
 							aria-current={tabState.active === t.id ? "page" : undefined}
 						>
 							<TabIcon id={t.id} class="size-4" />
-							<span>{msg(t.label)}</span>
+							{#if !sidebarState.collapsed}<span>{msg(t.label)}</span>{/if}
 						</Button>
 					{/each}
 				</nav>
+				{#if !sidebarState.collapsed}
+					<button type="button" aria-label={`Resize sidebar, ${sidebarState.width} pixels wide. Use arrow keys to adjust.`} title="Drag to resize sidebar" class="absolute inset-y-0 right-0 w-2 cursor-col-resize touch-none bg-transparent hover:bg-sidebar-primary/40 focus-visible:bg-sidebar-primary/40 focus-visible:outline-none" onpointerdown={onSidebarResizeStart} onpointermove={onSidebarResizeMove} onpointerup={onSidebarResizeEnd} onpointercancel={onSidebarResizeCancel} onkeydown={onSidebarResizeKeydown}></button>
+				{/if}
 			</aside>
 			<div class="min-w-0 flex-1">
 		<header
@@ -823,7 +881,7 @@ initDensity();
 						>
 							{#if editingProfileName}
 								<form
-									class="mb-3 flex items-center gap-1.5"
+									class="mb-3 grid gap-2"
 									onsubmit={(event) => {
 										event.preventDefault();
 										void saveProfileName();
@@ -836,6 +894,13 @@ initDensity();
 										class="h-8"
 										autofocus
 									/>
+									<Input
+										aria-label="Username"
+										maxlength={40}
+										bind:value={profileUsernameDraft}
+										class="h-8"
+									/>
+									<div class="flex gap-2">
 									<Button
 										size="sm"
 										type="submit"
@@ -849,6 +914,7 @@ initDensity();
 											(editingProfileName = false)}
 										>{msg("account.cancel")}</Button
 									>
+									</div>
 								</form>
 							{:else}
 								<div class="mb-1 flex items-center gap-1.5">
@@ -870,11 +936,11 @@ initDensity();
 										</Button>
 									{/if}
 								</div>
-								{#if sessionState.displayName && sessionState.displayName !== sessionState.sub}
+								{#if sessionState.username}
 									<div
 										class="mb-1 truncate text-xs text-muted"
 									>
-						<span data-sensitive="true">{sessionState.sub}</span>
+						<span data-sensitive="true">@{sessionState.username}</span>
 									</div>
 								{/if}
 							{/if}
@@ -1154,7 +1220,7 @@ initDensity();
 			</div>
 		</header>
 		<main
-			class="mx-auto max-w-[1760px] px-3 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-5 sm:pt-5 lg:px-6 lg:pb-6"
+			class={cn("mx-auto px-3 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-5 sm:pt-5 lg:px-6 lg:pb-6", sidebarState.collapsed ? "max-w-[2200px]" : "max-w-[1760px]")}
 		>
 			<SessionExpiryBanner />
 			<ConnectionBanner />

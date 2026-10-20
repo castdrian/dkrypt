@@ -40,6 +40,7 @@ export function isAuthProfileRecord(value: unknown): value is AuthProfile {
     && typeof profile.providerId === 'string'
     && typeof profile.username === 'string'
     && typeof profile.displayName === 'string'
+    && (profile.customUsername === undefined || typeof profile.customUsername === 'string')
     && typeof profile.updatedAt === 'string'
     && (profile.identities === undefined || (Array.isArray(profile.identities) && profile.identities.every(isAuthIdentityRecord)))
     && (profile.aliases === undefined || (Array.isArray(profile.aliases) && profile.aliases.every((alias) => typeof alias === 'string')));

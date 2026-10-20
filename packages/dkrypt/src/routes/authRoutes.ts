@@ -24,6 +24,7 @@ import {
   getLinkedAuthProviders,
   removeAuthIdentity,
   setAuthDisplayName,
+  setAuthUsername,
 } from '#identity.js';
 import { log } from '#logger.js';
 import { beginMfaEnrollment, confirmMfaEnrollment, disableMfa, mfaStatus, regenerateRecoveryCodes, verifyMfa } from '#mfa.js';
@@ -135,6 +136,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
     return reply.send({
       loggedIn: !!session,
       sub: session?.sub,
+      username: profile?.username,
       displayName: profile?.displayName,
       avatarUrl: profile?.avatarUrl,
       identities: session ? getLinkedAuthIdentities(session.sub) : [],
@@ -321,13 +323,22 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.patch<AuthProfileRoute>('/v1/auth/profile', { schema: getRouteContract('PATCH', '/v1/auth/profile'), preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     if (userId === 'root') return sendValidationError(request, reply, 400, 'the root account does not have an OAuth profile');
-    const displayName = request.body.displayName.trim();
-    if (!displayName || displayName.length > 64 || /[\u0000-\u001f\u007f]/.test(displayName)) {
+    const displayName = request.body.displayName?.trim();
+    const username = request.body.username?.trim();
+    if (displayName !== undefined && (!displayName || displayName.length > 64 || /[\u0000-\u001f\u007f]/.test(displayName))) {
       return sendValidationError(request, reply, 400, 'displayName must be between 1 and 64 characters');
     }
-    const profile = setAuthDisplayName(userId, displayName);
+    if (displayName === undefined && username === undefined) return sendValidationError(request, reply, 400, 'provide a displayName or username');
+    let profile;
+    try {
+      profile = username === undefined ? getAuthProfile(userId) : setAuthUsername(userId, username);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid username';
+      return sendValidationError(request, reply, message === 'username is already taken' || message === 'username is unavailable' ? 409 : 400, message);
+    }
+    if (displayName !== undefined) profile = setAuthDisplayName(userId, displayName);
     if (!profile) return sendValidationError(request, reply, 404, 'profile not found');
-    return reply.send({ displayName: profile.displayName, linkedProviders: getLinkedAuthProviders(userId) });
+    return reply.send({ username: profile.username, displayName: profile.displayName, linkedProviders: getLinkedAuthProviders(userId) });
   });
 
   server.delete<AuthConnectionRoute>('/v1/auth/connections/:provider', {

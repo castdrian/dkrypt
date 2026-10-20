@@ -10,6 +10,7 @@ import type {
 import { canGrantBits } from '#dashboardAdminRules.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { ErrorEnvelope, getRouteContract } from '#contracts.js';
+import { getAuthProfile } from '#identity.js';
 import { hasPermission, PermissionFlag, parseBits } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { createRole, DEFAULT_ROLE_ID, deleteRole, listRoles, previewRoleImpact, reorderRoles, updateRole } from '#store/state.js';
@@ -49,7 +50,9 @@ export const dashboardRoleRoutes: FastifyPluginAsyncTypebox = async (server) => 
       return createHttpErrorEnvelope(request.id, 404, 'role not found');
     }
     const canViewMembers = hasPermission(getFastifySession(request)!.permissions, PermissionFlag.viewUsers | PermissionFlag.manageUsers);
-    return canViewMembers ? preview : { ...preview, members: [], memberDetailsHidden: preview.affectedCount > 0 };
+    return canViewMembers
+      ? { ...preview, members: preview.members.map((member) => ({ ...member, displayName: getAuthProfile(member.username)?.displayName })) }
+      : { ...preview, members: [], memberDetailsHidden: preview.affectedCount > 0 };
   });
 
   server.post<DashboardRoleCreateRoute>('/v1/dashboard/roles', {

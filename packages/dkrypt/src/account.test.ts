@@ -9,9 +9,13 @@ import {
 } from '#billing.js';
 import {
   type AuthIdentity,
+  exportIdentitySnapshot,
+  getAuthProfile,
   getLinkedAuthProviders,
   removeAuthIdentity,
+  replaceIdentitySnapshot,
   setAuthDisplayName,
+  setAuthUsername,
 } from '#identity.js';
 import { PermissionFlag, serializeBits } from '#permissions.js';
 import {
@@ -249,5 +253,88 @@ describe('resolveOauthAccount', () => {
     });
 
     expect(refreshed.displayName).toBe('Custom name');
+  });
+
+  test('keeps the account name from its first OAuth login after linking another provider', () => {
+    const discordId = randomUUID();
+    const githubId = randomUUID();
+    const userId = `discord:${discordId}`;
+    const discordIdentity = { ...identity('discord', discordId), username: 'first-name', displayName: 'First Name' };
+    const githubIdentity = { ...identity('github', githubId), username: 'second-name', displayName: 'Second Name' };
+
+    resolveOauthAccount({ fallbackUserId: userId, identity: discordIdentity });
+    const linked = linkOauthAccount(userId, githubIdentity);
+    expect(linked.username).toBe('first-name');
+    expect(linked.displayName).toBe('First Name');
+    const viaGithub = resolveOauthAccount({ fallbackUserId: `github:${githubId}`, identity: githubIdentity });
+    expect(viaGithub.username).toBe('first-name');
+    expect(viaGithub.displayName).toBe('First Name');
+    const viaDiscord = resolveOauthAccount({ fallbackUserId: userId, identity: discordIdentity });
+    expect(viaDiscord.username).toBe('first-name');
+    expect(viaDiscord.displayName).toBe('First Name');
+  });
+
+  test('allocates unique account usernames and preserves a chosen username across OAuth refreshes', () => {
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    const firstUserId = `discord:${firstId}`;
+    const secondUserId = `github:${secondId}`;
+    const sharedUsername = `shared-${randomUUID().slice(0, 8)}`;
+    resolveOauthAccount({ fallbackUserId: firstUserId, identity: { ...identity('discord', firstId), username: sharedUsername } });
+    const second = resolveOauthAccount({ fallbackUserId: secondUserId, identity: { ...identity('github', secondId), username: sharedUsername } });
+    expect(second.username).toBe(`${sharedUsername}-2`);
+    expect(() => setAuthUsername(secondUserId, sharedUsername.toUpperCase())).toThrow('username is already taken');
+    setAuthUsername(secondUserId, 'ChosenAccountName');
+    const refreshed = resolveOauthAccount({ fallbackUserId: secondUserId, identity: { ...identity('github', secondId), username: 'renamed-on-github' } });
+    expect(refreshed.username).toBe('ChosenAccountName');
+    expect(() => setAuthUsername(secondUserId, 'root')).toThrow('username is unavailable');
+  });
+
+  test('migrates a merged account to its original OAuth name and keeps it across reloads', () => {
+    const original = exportIdentitySnapshot();
+    const discordId = randomUUID();
+    const githubId = randomUUID();
+    const userId = `discord:${discordId}`;
+    const discordIdentity = { ...identity('discord', discordId), username: 'original-account-name', displayName: 'Original account name' };
+    const githubIdentity = { ...identity('github', githubId), username: 'other-provider-name', displayName: 'Other provider name' };
+    try {
+      replaceIdentitySnapshot({ profiles: [...original.profiles, {
+        userId,
+        provider: 'github',
+        providerId: githubId,
+        username: githubIdentity.username,
+        displayName: githubIdentity.displayName,
+        identities: [discordIdentity, githubIdentity],
+        updatedAt: new Date().toISOString(),
+      }] }, { persist: false });
+      expect(getAuthProfile(userId)).toMatchObject({ username: 'original-account-name', displayName: 'Original account name', customUsername: 'original-account-name' });
+      replaceIdentitySnapshot(exportIdentitySnapshot(), { persist: false });
+      expect(getAuthProfile(userId)).toMatchObject({ username: 'original-account-name', displayName: 'Original account name' });
+    } finally {
+      replaceIdentitySnapshot(original);
+    }
+  });
+
+  test('uses the first linked OAuth identity for legacy username-based account IDs', () => {
+    const original = exportIdentitySnapshot();
+    const discordId = randomUUID();
+    const githubId = randomUUID();
+    const userId = `legacy-${randomUUID()}`;
+    const firstIdentity = { ...identity('discord', discordId), username: 'first-linked-name', displayName: 'First linked name' };
+    const latestIdentity = { ...identity('github', githubId), username: 'latest-login-name', displayName: 'Latest login name' };
+    try {
+      replaceIdentitySnapshot({ profiles: [...original.profiles, {
+        userId,
+        provider: 'github',
+        providerId: githubId,
+        username: latestIdentity.username,
+        displayName: latestIdentity.displayName,
+        identities: [firstIdentity, latestIdentity],
+        updatedAt: new Date().toISOString(),
+      }] }, { persist: false });
+      expect(getAuthProfile(userId)).toMatchObject({ username: 'first-linked-name', displayName: 'First linked name' });
+    } finally {
+      replaceIdentitySnapshot(original);
+    }
   });
 });

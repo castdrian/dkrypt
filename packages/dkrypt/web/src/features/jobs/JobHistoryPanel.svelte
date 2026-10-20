@@ -1167,7 +1167,7 @@
 										</div>
 									</div>
 									<div
-										class="history-feed-status w-full shrink-0 self-start sm:w-[11.5rem]"
+										class="history-feed-status min-w-0 self-start"
 									>
 										<div class="flex items-center gap-2">
 											<Badge
@@ -1189,7 +1189,7 @@
 										</div>
 									</div>
 									<div
-										class="history-feed-actions flex w-full shrink-0 items-center justify-start gap-1.5 self-start sm:w-[15rem] sm:justify-end"
+										class="history-feed-actions flex min-w-0 flex-wrap items-center justify-end gap-1.5 self-start"
 									>
 										{#if j.status === "failed"}
 											<Button data-list-primary-action size="sm" variant="secondary" onclick={() => openJobDetails(j)} title="Inspect job"><Eye class="h-3.5 w-3.5" /></Button>

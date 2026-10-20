@@ -20,6 +20,9 @@ let postInstallStatusSuccesses = 0;
 let foregroundRequests = 0;
 let listingPrice = 0;
 let listingBundleId = '';
+let deviceLocale = 'en_US';
+let localizedListingPrice = 0;
+let localizedListingBundleId = '';
 const originalSetTimeout = globalThis.setTimeout;
 const originalDateNow = Date.now;
 
@@ -31,7 +34,8 @@ mock.module('#idevice.js', () => ({
   ...idevice,
   armAppStoreAutoConfirm: async () => calls.push('arm'),
   clearAppStoreAutoConfirm: async () => calls.push('clear'),
-  execCommand: async () => {
+  execCommand: async (_conn: object, command: string) => {
+    if (command.includes('AppleLocale')) return { stdout: deviceLocale, stderr: '', code: 0 };
     calls.push('restart');
     return { stdout: '', stderr: '', code: 0 };
   },
@@ -61,7 +65,7 @@ mock.module('#idevice.js', () => ({
         throw new Error('status request timed out');
       }
       if (installRequest && installStatusSequence.length > 0) installStatus = installStatusSequence.shift()!;
-      return { capabilities: ['install', 'status', 'diagnostics', 'foreground_status', 'protocol_v1', 'authenticated_requests', 'operation_responses', 'heartbeats', 'stale_artifact_cleanup'], foreground: foregroundStatuses.shift() ?? true, install: installStatus };
+      return { capabilities: ['install', 'status', 'diagnostics', 'foreground_status', 'localized_install_titles', 'protocol_v1', 'authenticated_requests', 'operation_responses', 'heartbeats', 'stale_artifact_cleanup'], foreground: foregroundStatuses.shift() ?? true, install: installStatus };
     }
     installRequest = request;
     calls.push('request');
@@ -89,7 +93,7 @@ mock.module('#scheduler/itunes.js', () => ({
     listingBundleId = bundleId;
     return { trackId: 123, version: '338.0' };
   },
-  lookupAppMetadataByTrackId: async () => ({ trackId: 123, bundleId: listingBundleId, trackName: 'Example App', price: listingPrice }),
+  lookupAppMetadataByTrackId: async (_trackId: number, country?: string) => ({ trackId: 123, bundleId: country === 'AU' && localizedListingBundleId ? localizedListingBundleId : listingBundleId, trackName: country === 'AU' ? 'Localized Example App' : 'Example App', price: country === 'AU' ? localizedListingPrice : listingPrice }),
 }));
 
 mock.module('#store/state.js', () => ({
@@ -132,6 +136,9 @@ describe('installFromAppStore', () => {
     foregroundRequests = 0;
     listingPrice = 0;
     listingBundleId = '';
+    deviceLocale = 'en_US';
+    localizedListingPrice = 0;
+    localizedListingBundleId = '';
   });
 
   test('uses a distinct bridge operation id for each job retry', () => {
@@ -154,6 +161,24 @@ describe('installFromAppStore', () => {
   test('refuses a paid listing before changing the device', async () => {
     listingPrice = 1.99;
     await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free listing');
+    expect(calls).toEqual([]);
+  });
+
+  test('sends only verified local and US names for a device with a localized App Store title', async () => {
+    deviceLocale = 'en_AU@rg=uszzzz';
+    await installFromAppStore('com.example.app');
+    expect(installRequest).toMatchObject({ appName: 'Example App', appNames: ['Example App', 'Localized Example App'], verifiedPrice: 0 });
+  });
+
+  test('rejects a paid or mismatched localized listing before changing the device', async () => {
+    deviceLocale = 'en_AU';
+    localizedListingPrice = 1.99;
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free AU listing');
+    expect(calls).toEqual([]);
+
+    localizedListingPrice = 0;
+    localizedListingBundleId = 'com.example.other';
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free AU listing');
     expect(calls).toEqual([]);
   });
 

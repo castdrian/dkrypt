@@ -86,6 +86,16 @@ export function sendMailToUser(userId: string, payload: MailPayload): Promise<vo
   return trackBackgroundWork('mail-notification', () => deliverMailToUser(userId, payload));
 }
 
+export function canSendDirectMailToUser(userId: string): boolean {
+  return isEmailEnabled() && Boolean(resolveNotifyEmail(userId));
+}
+
+export function sendDirectMailToUser(userId: string, payload: MailPayload): Promise<void> {
+  const email = resolveNotifyEmail(userId);
+  if (!isEmailEnabled() || !email) throw new Error('email delivery is unavailable');
+  return trackBackgroundWork('direct-mail-notification', () => sendMail({ from: config.smtpFrom, to: email, subject: payload.subject, text: payload.text }, userId));
+}
+
 async function deliverMailToUser(userId: string, payload: MailPayload): Promise<void> {
   if (!isEmailEnabled()) return;
 

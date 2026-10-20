@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { DiagnosticReportInboxRoute, DiagnosticReportListRoute, DiagnosticReportPreviewRoute, DiagnosticReportSubmitRoute } from '#dashboardDiagnosticReportContracts.js';
 import { diagnosticReportListResponseSchema, diagnosticReportPreviewBodySchema, diagnosticReportPreviewResponseSchema, diagnosticReportRecordSchema, diagnosticReportSubmitBodySchema } from '#dashboardDiagnosticReportContracts.js';
+import { getAuthProfile } from '#identity.js';
 import { config } from '#config.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
@@ -148,7 +149,7 @@ export function createDashboardDiagnosticReportRoutes(overrides: Partial<Omit<Di
       preHandler: fastifyRequirePermission(PermissionFlag.viewDiagnosticReports),
     }, () => {
       prune();
-      return { reports: repository.listRecent(300) };
+      return { reports: repository.listRecent(300).map((report) => ({ ...report, userDisplayName: getAuthProfile(report.userId)?.displayName })) };
     });
   };
 }

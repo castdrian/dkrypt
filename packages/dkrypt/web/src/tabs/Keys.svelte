@@ -493,7 +493,7 @@
     <div class="mt-1 text-xs text-muted">Blank = no limit. Over-limit requests get a 429 until the next day.</div>
     <div class="mt-3 rounded-lg border border-border/70 p-3">
       <h3 class="text-xs font-semibold">Preview access before creating or changing a key</h3>
-      <label class="mt-2 block text-xs"><span class="mb-1 block text-muted">Key to preview</span><Select items={[{ value: '', label: 'Proposed new key' }, ...[...new Map([...(mine ?? []), ...(all ?? [])].map((key) => [key.id, key])).values()].map((key) => ({ value: key.id, label: `${key.name} · ${key.ownerId}` }))]} bind:value={simulateKeyId} /></label>
+      <label class="mt-2 block text-xs"><span class="mb-1 block text-muted">Key to preview</span><Select items={[{ value: '', label: 'Proposed new key' }, ...[...new Map([...(mine ?? []), ...(all ?? [])].map((key) => [key.id, key])).values()].map((key) => ({ value: key.id, label: `${key.name} · ${key.ownerDisplayName ?? key.ownerUsername ?? key.ownerId}` }))]} bind:value={simulateKeyId} /></label>
       <div class="mt-2 flex flex-wrap gap-2">
         <label class="min-w-40 flex-1 text-xs"><span class="mb-1 block text-muted">Bundle ID</span><Input id="scope-simulator-bundle" placeholder="com.example.app" bind:value={simulateBundleId} class="w-full" /></label>
         <label class="text-xs"><span class="mb-1 block text-muted">Source</span><Select id="scope-simulator-source" items={[{ value: 'appstore', label: 'App Store' }, { value: 'testflight', label: 'TestFlight' }]} bind:value={simulateSource} /></label>
@@ -629,7 +629,7 @@
                       <Badge variant="secondary" class="ml-1.5">expires {fmtUntil(k.expiresAt)}</Badge>
                     {/if}
                   </td>
-                  <td data-label="Requested by">{k.ownerId}</td>
+                  <td data-label="Requested by">{k.ownerDisplayName ?? k.ownerUsername ?? k.ownerId}</td>
                   <td data-label="Requested" class="text-muted"><RelativeTime ms={k.createdAt} /></td>
                   <td>
                     <div class="flex justify-end gap-1.5">
@@ -715,7 +715,7 @@
                     </div>
                   </td>
                   <td data-label="Name">{k.name}</td>
-                  <td data-label="Owner">{k.ownerId}</td>
+                  <td data-label="Owner">{k.ownerDisplayName ?? k.ownerUsername ?? k.ownerId}</td>
                   <td data-label="Status">
                     <div class="flex flex-wrap items-center justify-end gap-1.5">
                       <Badge variant={statusToBadgeVariant(k.status)}>{k.status}</Badge>
