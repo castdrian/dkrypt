@@ -46,7 +46,7 @@
   });
   const gridColumns = $derived(columns.map((column) => {
     if (column === 'app' || column === 'bundleId') return 'minmax(0, 1fr)';
-    if (column === 'version') return 'minmax(8.5rem, 10rem)';
+    if (column === 'version') return 'minmax(8rem, 8.5rem)';
     if (column === 'source') return 'minmax(6.5rem, 7rem)';
     if (column === 'size') return 'minmax(5.5rem, 6rem)';
     return 'minmax(8rem, 9rem)';
