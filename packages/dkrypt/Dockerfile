@@ -34,7 +34,7 @@ RUN set -eu; \
   tar --extract --file /tmp/netmuxd.tar.gz --directory /usr/local/bin; \
   chmod 0755 /usr/local/bin/netmuxd
 
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS web
+FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288 AS web
 WORKDIR /web
 COPY packages/dkrypt/web/package.json packages/dkrypt/web/bun.lock ./
 RUN bun install --frozen-lockfile
@@ -43,7 +43,7 @@ ARG BUILD_REF=development
 ENV VITE_BUILD_REF=$BUILD_REF
 RUN bun run build
 
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
+FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288
 WORKDIR /app
 ARG BUILD_REF=development
 ARG DEPLOYMENT_ID=local
