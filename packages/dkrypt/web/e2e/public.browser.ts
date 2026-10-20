@@ -595,6 +595,8 @@ test('collapsed sidebar gives library and history content the released space', a
   expect(await columnStarts(otherArtifactRow)).toEqual(await columnStarts(artifactRow));
   const versionWidth = await artifactRow.locator('dt', { hasText: 'Version' }).locator('..').evaluate((element) => element.getBoundingClientRect().width);
   expect(versionWidth).toBeLessThan(175);
+  const versionIsVisible = await artifactRow.locator('dt', { hasText: 'Version' }).locator('..').locator('dd > span').evaluate((element) => element.scrollWidth <= element.clientWidth);
+  expect(versionIsVisible).toBe(true);
   const appWidth = await artifactRow.locator('dt', { hasText: 'App' }).locator('..').evaluate((element) => element.getBoundingClientRect().width);
   expect(appWidth).toBeGreaterThan(versionWidth);
 
