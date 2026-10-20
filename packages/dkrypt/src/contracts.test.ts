@@ -19,8 +19,16 @@ test('every registered versioned route has an explicit TypeBox contract', async 
         .map((method) => `${method.toUpperCase()} ${path.replace(/\{([^}]+)\}/g, ':$1')}`),
     ).filter((route) => route.includes('/v1/'));
     const contracts = getRouteContracts();
-    expect(routes.length).toBe(contracts.size);
+    const hiddenRoutes = [
+      ['GET', '/v1/dashboard/jobs/:id/resolution-notice'],
+      ['POST', '/v1/dashboard/jobs/:id/resolution-notice'],
+    ] as const;
+    expect(routes.length + hiddenRoutes.length).toBe(contracts.size);
     for (const route of routes) expect(contracts.has(route)).toBe(true);
+    for (const [method, url] of hiddenRoutes) {
+      expect(contracts.has(`${method} ${url}`)).toBe(true);
+      expect(server.hasRoute({ method, url })).toBe(true);
+    }
   } finally {
     await server.close();
   }
