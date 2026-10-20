@@ -107,6 +107,18 @@ describe('iTunes storefront selection', () => {
     }
   });
 
+  test('looks up a verified app title in a requested storefront', async () => {
+    const requests: URL[] = [];
+    mockFetch(requests);
+    try {
+      await lookupAppMetadataByTrackId(1510944943, 'AU');
+      expect(requests[0]?.searchParams.get('country')).toBe('AU');
+      expect(() => lookupAppMetadataByTrackId(1510944943, 'AUS')).toThrow();
+    } finally {
+      restoreFetch();
+    }
+  });
+
   test('cancels the current version lookup when the job deadline expires', async () => {
     await expect(runAbortableVersionLookupInIsolatedProcess()).resolves.toBe('job deadline exceeded');
   });

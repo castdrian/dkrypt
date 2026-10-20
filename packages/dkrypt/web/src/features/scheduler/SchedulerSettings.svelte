@@ -2016,7 +2016,7 @@ import { clearFormDraft, readFormDraft, setFormUnsaved, writeFormDraft } from "#
 		{#each revisions as revision (revision.id)}
 			<div class="rounded-lg border border-border p-3 text-xs">
 				<div class="flex items-center justify-between gap-2"><span class="font-medium">{revision.action} · {new Date(revision.at).toLocaleString()}</span><Button size="sm" variant="secondary" onclick={() => void restoreRevision(revision)}>Restore</Button></div>
-				<div class="mt-1 text-muted">By {revision.actor}</div>
+				<div class="mt-1 text-muted">By {revision.actorDisplayName ?? revision.actor}</div>
 				{#if revision.changes?.length}
 					<dl class="mt-2 space-y-1">
 						{#each revision.changes as change (change.field)}

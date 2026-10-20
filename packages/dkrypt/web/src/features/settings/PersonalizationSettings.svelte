@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowDown, ArrowUp, Pin, PinOff } from 'lucide-svelte';
   import Button from '#lib/components/ui/Button.svelte';
+  import HomeLayoutSettings from '#features/settings/HomeLayoutSettings.svelte';
   import { artifactFilenameTemplateState, artifactLibraryPreferencesState, displayTimeZoneState, largeTargetsState, navigationPreferencesState, type ArtifactColumnId, type TabId } from '#lib/ui.svelte';
   import { pushArtifactFilenameTemplate, pushArtifactLibraryPreferences, pushDisplayTimeZonePref, pushLargeTargetsPref, pushNavigationPreferences, pushShortcutBindings } from '#lib/session.svelte';
   import { DEFAULT_SHORTCUT_BINDINGS, shortcutBindingsState, type ShortcutAction, type ShortcutBindings } from '#lib/shortcuts.svelte';
@@ -101,6 +102,7 @@
 </script>
 
 <div class="grid gap-5 xl:grid-cols-2">
+  <HomeLayoutSettings />
   <section class="rounded-xl border border-border/70 bg-panel/40 p-4">
     <h2 class="text-sm font-semibold">Display</h2>
     <label for="display-time-zone" class="mt-4 block text-xs font-medium">Dashboard time zone</label>

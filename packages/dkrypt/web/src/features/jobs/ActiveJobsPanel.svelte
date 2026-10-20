@@ -354,7 +354,7 @@
 							</td>
 							<td data-label="Source">{j.source}</td>
 							<td data-label="Queued by" class="text-muted">
-								{j.queuedBy ?? "-"}
+								{j.queuedByDisplayName ?? j.queuedBy ?? "-"}
 								{#if j.priority}
 									<Badge
 										variant="secondary"

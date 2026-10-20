@@ -15,6 +15,8 @@ import {
   setSoundEnabled,
   setTheme,
   setDensity,
+  setSidebarPreferences,
+  sidebarState,
   setSettingsMode,
   setHomeLayoutPreferences,
   setHomeViewModes,
@@ -56,6 +58,7 @@ export function permissionsSummary(bits: bigint): string {
 export interface SessionInfo {
   loggedIn: boolean;
   sub?: string;
+  username?: string;
   displayName?: string;
   avatarUrl?: string;
   identities?: { provider: 'github' | 'discord'; username: string; displayName: string; avatarUrl?: string }[];
@@ -69,6 +72,9 @@ export interface SessionInfo {
   publicBaseUrl?: string;
   mfa?: { enabled: boolean; recoveryCodesRemaining: number; required: boolean };
 }
+
+let confirmedSidebar = { width: 256, collapsed: false };
+let sidebarPreferenceWrite: Promise<void> = Promise.resolve();
 
 export const sessionState = $state<SessionInfo>({ loggedIn: false, githubOauthEnabled: false, discordOauthEnabled: false });
 
@@ -106,6 +112,7 @@ export async function refreshSession(): Promise<SessionInfo> {
   const identitySwitched = previousSub && data.loggedIn && previousSub.toLowerCase() !== data.sub?.trim().toLowerCase();
   if (identitySwitched) {
     resetUserInterfacePreferences();
+    confirmedSidebar = { width: 256, collapsed: false };
     resetShortcutBindings();
     replaceStarredApps([]);
   }
@@ -125,23 +132,24 @@ export async function refreshSession(): Promise<SessionInfo> {
   return data;
 }
 
-export async function updateProfileDisplayName(displayName: string): Promise<{ ok: boolean; error?: string }> {
+export async function updateProfile(displayName: string, username: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch('/v1/auth/profile', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ displayName }),
+    body: JSON.stringify({ displayName, username }),
   });
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    return { ok: false, error: data.error ?? 'Could not update profile name.' };
+    const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    return { ok: false, error: data.message ?? data.error ?? 'Could not update profile.' };
   }
   await refreshSession();
   return { ok: true };
 }
 
 async function syncThemeFromServer(): Promise<void> {
+  const accountId = sessionState.sub;
   const res = await fetch('/v1/dashboard/me/prefs');
-  if (!res.ok) return;
+  if (!res.ok || sessionState.sub !== accountId) return;
   const prefs = (await res.json()) as {
     formattingLocale?: FormattingLocalePreference;
     interfaceLanguage?: InterfaceLanguagePreference;
@@ -150,6 +158,8 @@ async function syncThemeFromServer(): Promise<void> {
     sound?: boolean;
     highContrast?: boolean;
     density?: DisplayDensity;
+    sidebarWidth?: number;
+    sidebarCollapsed?: boolean;
     homeLayouts?: HomeLayout[];
     activeHomeLayoutId?: string;
     viewModes?: Partial<HomeViewModes>;
@@ -163,6 +173,7 @@ async function syncThemeFromServer(): Promise<void> {
     largeTargets?: boolean;
     shortcutBindings?: ShortcutBindings;
   };
+  if (sessionState.sub !== accountId) return;
   const formattingLocale = prefs.formattingLocale ?? 'system';
   if (formattingLocale !== formattingLocaleState.value) setFormattingLocale(formattingLocale);
   const interfaceLanguage = prefs.interfaceLanguage ?? 'system';
@@ -172,6 +183,8 @@ async function syncThemeFromServer(): Promise<void> {
   if (prefs.highContrast !== undefined && prefs.highContrast !== highContrastState.value) setHighContrast(prefs.highContrast);
   if (prefs.sound !== undefined && prefs.sound !== soundEnabledState.value) setSoundEnabled(prefs.sound);
   if (prefs.density) setDensity(prefs.density);
+  setSidebarPreferences(prefs.sidebarWidth ?? 256, prefs.sidebarCollapsed ?? false);
+  confirmedSidebar = { width: sidebarState.width, collapsed: sidebarState.collapsed };
   if (prefs.homeLayouts?.length) setHomeLayoutPreferences(prefs.homeLayouts, prefs.activeHomeLayoutId ?? prefs.homeLayouts[0]!.id);
   if (prefs.viewModes) setHomeViewModes(prefs.viewModes);
   if (prefs.settingsMode) setSettingsMode(prefs.settingsMode);
@@ -221,6 +234,24 @@ async function pushDashboardPreference(patch: Record<string, unknown>): Promise<
 export function pushDensityPref(density: DisplayDensity): Promise<void> {
   setDensity(density);
   return pushDashboardPreference({ density });
+}
+
+export function pushSidebarPreferences(width: number, collapsed: boolean): Promise<void> {
+  const accountId = sessionState.sub;
+  setSidebarPreferences(width, collapsed);
+  const requested = { width: sidebarState.width, collapsed: sidebarState.collapsed };
+  const save = sidebarPreferenceWrite.then(async () => {
+    if (sessionState.sub !== accountId) return;
+    await pushDashboardPreference({ sidebarWidth: requested.width, sidebarCollapsed: requested.collapsed });
+    if (sessionState.sub === accountId) confirmedSidebar = requested;
+  }).catch((error: unknown) => {
+    if (sessionState.sub === accountId && sidebarState.width === requested.width && sidebarState.collapsed === requested.collapsed) {
+      setSidebarPreferences(confirmedSidebar.width, confirmedSidebar.collapsed);
+    }
+    throw error;
+  });
+  sidebarPreferenceWrite = save.catch(() => undefined);
+  return save;
 }
 
 export function pushDisplayTimeZonePref(displayTimeZone: string): Promise<void> {

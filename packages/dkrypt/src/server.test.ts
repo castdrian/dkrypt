@@ -76,6 +76,37 @@ function createSessionCookie(userId: string, permissions: bigint): string {
   return cookieHeader.split(';', 1)[0];
 }
 
+test('OAuth account usernames are editable, unique, and included in the session', async () => {
+  const server = await buildTestServer({ includePublicRoutes: false });
+  const providerId = crypto.randomUUID();
+  const userId = `discord:${providerId}`;
+  const otherProviderId = crypto.randomUUID();
+  const otherUserId = `github:${otherProviderId}`;
+  const updatedAt = new Date().toISOString();
+  upsertAuthProfile({ userId, provider: 'discord', providerId, username: 'FirstAccount', displayName: 'First account', updatedAt });
+  upsertAuthProfile({ userId: otherUserId, provider: 'github', providerId: otherProviderId, username: 'SecondAccount', displayName: 'Second account', updatedAt });
+  try {
+    const cookie = createSessionCookie(userId, 0n);
+    const before = await server.inject({ method: 'GET', url: '/v1/auth/session', headers: { cookie } });
+    expect(before.json()).toMatchObject({ username: 'FirstAccount', displayName: 'First account' });
+
+    const updated = await server.inject({ method: 'PATCH', url: '/v1/auth/profile', headers: { cookie }, payload: { username: 'ChosenName', displayName: 'Chosen display name' } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ username: 'ChosenName', displayName: 'Chosen display name' });
+
+    const duplicate = await server.inject({ method: 'PATCH', url: '/v1/auth/profile', headers: { cookie: createSessionCookie(otherUserId, 0n) }, payload: { username: 'chosenname' } });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toMatchObject({ message: 'username is already taken' });
+
+    const after = await server.inject({ method: 'GET', url: '/v1/auth/session', headers: { cookie } });
+    expect(after.json()).toMatchObject({ username: 'ChosenName', displayName: 'Chosen display name' });
+  } finally {
+    deleteAuthProfile(userId);
+    deleteAuthProfile(otherUserId);
+    await server.close();
+  }
+});
+
 test('cookie-authenticated mutations reject non-same-origin Fetch Metadata values', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
 
@@ -621,6 +652,7 @@ test('native user routes enforce permissions and return normalized management ch
   const username = `user-${crypto.randomUUID()}`;
   const lastManagerUsername = `manager-${crypto.randomUUID()}`;
   const profileUserId = `github:user-directory-${crypto.randomUUID()}`;
+  const profileAccountUsername = `user-directory-${crypto.randomUUID().slice(0, 16)}`;
 
   try {
     replaceBillingSnapshot({ customers: [], subscriptions: [] });
@@ -629,12 +661,21 @@ test('native user routes enforce permissions and return normalized management ch
       userId: profileUserId,
       provider: 'github',
       providerId: crypto.randomUUID(),
-      username: `user-directory-${crypto.randomUUID()}`,
+      username: profileAccountUsername,
       displayName: 'Directory Profile User',
       avatarUrl: 'https://example.com/directory-profile.png',
       updatedAt: new Date().toISOString(),
     });
     addAllowedUser(profileUserId, [privilegedRole.id], 'test setup');
+
+    const assignByAccountUsername = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/users',
+      headers: { cookie: administratorCookie },
+      payload: { username: profileAccountUsername, roleIds: [privilegedRole.id] },
+    });
+    expect(assignByAccountUsername.statusCode).toBe(201);
+    expect(assignByAccountUsername.json()).toMatchObject({ username: profileUserId });
     upsertBillingSubscription({
       provider: 'stripe',
       subscriptionId: `sub_${crypto.randomUUID()}`,
@@ -1749,6 +1790,8 @@ test('dashboard account and notification routes validate requests and preserve s
     const initialPrefs = await server.inject({ method: 'GET', url: '/v1/dashboard/me/prefs', headers: { cookie } });
     expect(initialPrefs.json()).toMatchObject({
       density: 'comfortable',
+      sidebarWidth: 256,
+      sidebarCollapsed: false,
       activeHomeLayoutId: 'default',
       homeLayouts: [{ id: 'default', name: 'Default', order: ['artifacts', 'activeJobs', 'jobHistory'], hidden: [], collapsed: [] }],
       viewModes: { artifacts: 'list', jobHistory: 'cards', devices: 'cards' },
@@ -1775,6 +1818,9 @@ test('dashboard account and notification routes validate requests and preserve s
 
     const invalidInterfaceLanguage = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { interfaceLanguage: 'fr' } });
     expect(invalidInterfaceLanguage.statusCode).toBe(400);
+
+    const invalidSidebarWidth = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { sidebarWidth: 500 } });
+    expect(invalidSidebarWidth.statusCode).toBe(400);
     expect(invalidInterfaceLanguage.json()).toMatchObject({ code: 'request_error' });
 
     const updatedPrefs = await server.inject({
@@ -1786,6 +1832,8 @@ test('dashboard account and notification routes validate requests and preserve s
         interfaceLanguage: 'de',
         theme: 'dark',
         density: 'compact',
+        sidebarWidth: 312,
+        sidebarCollapsed: true,
         accent: 'slate',
         highContrast: true,
         pushOnSuccess: false,
@@ -1808,6 +1856,8 @@ test('dashboard account and notification routes validate requests and preserve s
       interfaceLanguage: 'de',
       theme: 'dark',
       density: 'compact',
+      sidebarWidth: 312,
+      sidebarCollapsed: true,
       accent: 'slate',
       highContrast: true,
       pushOnSuccess: false,
@@ -1829,6 +1879,8 @@ test('dashboard account and notification routes validate requests and preserve s
       interfaceLanguage: 'de',
       theme: 'dark',
       density: 'compact',
+      sidebarWidth: 312,
+      sidebarCollapsed: true,
       accent: 'slate',
       highContrast: true,
       pushOnSuccess: false,
@@ -1862,6 +1914,8 @@ test('dashboard account and notification routes validate requests and preserve s
       activeHomeLayoutId: 'default',
       settingsMode: 'basic',
       density: 'comfortable',
+      sidebarWidth: 256,
+      sidebarCollapsed: false,
       displayTimeZone: 'system',
       appFavorites: [],
       navigationOrder: ['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'],
@@ -3114,11 +3168,12 @@ test('Fastify resolves job requester identities for history', async () => {
   const userId = `github:${suffix}`;
   const manualId = `manual-requester-${suffix}`;
   const schedulerId = `scheduler-requester-${suffix}`;
+  const accountUsername = `requester-${suffix.slice(0, 16)}`;
   upsertAuthProfile({
     userId,
     provider: 'github',
     providerId: suffix,
-    username: `requester-${suffix}`,
+    username: accountUsername,
     displayName: 'Visual User',
     avatarUrl: 'https://example.com/avatar.png',
     updatedAt: new Date().toISOString(),
@@ -3150,7 +3205,7 @@ test('Fastify resolves job requester identities for history', async () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { history: Array<{ id: string; requester?: { username?: string; displayName: string; avatarUrl?: string } }> };
     expect(body.history.find((entry) => entry.id === manualId)?.requester).toEqual({
-      username: `requester-${suffix}`,
+      username: accountUsername,
       displayName: 'Visual User',
       avatarUrl: 'https://example.com/avatar.png',
     });

@@ -81,7 +81,7 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 	let queryJobs = $state<RecentJob[]>([]);
 	let quickResults = $state<DashboardQuickSearchResult[]>([]);
 	let myKeys = $state<{ id: string; name: string }[]>([]);
-	let users = $state<{ username: string; displayName?: string }[]>([]);
+	let users = $state<{ username: string; accountUsername?: string; displayName?: string }[]>([]);
 	let recentIds = $state<string[]>([]);
 	let historyQueryToken = 0;
 	let quickSearchToken = 0;
@@ -492,7 +492,7 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 				id: `user-${u.username}`,
 				label: `Jump to user "${u.displayName || u.username}"`,
 				category: "Navigation",
-				keywords: `${u.username} ${u.displayName ?? ""}`,
+				keywords: `${u.username} ${u.accountUsername ?? ""} ${u.displayName ?? ""}`,
 				sensitive: true,
 				run: () => jumpToUser(u.username),
 			});

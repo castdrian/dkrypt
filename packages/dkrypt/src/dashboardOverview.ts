@@ -1,4 +1,5 @@
 import { getBillingEntitlements } from '#billing.js';
+import { getAuthProfile } from '#identity.js';
 import { config } from '#config.js';
 import { getMaintenanceStatus } from '#maintenance.js';
 import { getActiveJobs, getJobQueueSummaries, getQueueReason } from '#jobs/store.js';
@@ -74,6 +75,7 @@ export function buildDashboardOverview(permissions: bigint, userId: string, proj
         ? { appId: job.testflight.appId, buildId: job.testflight.build.id, version: job.testflight.build.cfBundleShortVersion, buildNumber: job.testflight.build.cfBundleVersion }
         : undefined,
       queuedBy: job.queuedBy,
+      queuedByDisplayName: job.queuedBy ? getAuthProfile(job.queuedBy)?.displayName : undefined,
       priority: job.priority,
       createdAt: job.createdAt,
       queue: queueSummaries.get(job.id),

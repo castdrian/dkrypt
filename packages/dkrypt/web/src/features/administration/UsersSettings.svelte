@@ -93,7 +93,7 @@
   }
 
   const filteredUsers = $derived(
-    (users ?? []).filter((u) => `${u.username} ${u.displayName ?? ''}`.toLowerCase().includes(userSearch.trim().toLowerCase())),
+    (users ?? []).filter((u) => `${u.username} ${u.accountUsername ?? ''} ${u.displayName ?? ''}`.toLowerCase().includes(userSearch.trim().toLowerCase())),
   );
 
   let selectedUsers = $state<Set<string>>(new Set());
@@ -282,7 +282,7 @@
     if (!manageUser) return;
     const username = manageUser.username;
     manageOpen = false;
-    if (!(await confirmDialog(`Remove every dashboard role from ${username}? They can still sign in but will only retain the default permissions.`))) return;
+    if (!(await confirmDialog(`Remove every dashboard role from ${manageUser.displayName ?? manageUser.accountUsername ?? username}? They can still sign in but will only retain the default permissions.`))) return;
     removing = true;
     try {
       await removeUser(username);
@@ -353,7 +353,7 @@
                     {#if u.avatarUrl}<img src={u.avatarUrl} alt="" class="h-6 w-6 shrink-0 rounded-full object-cover" />{/if}
                     <div class="min-w-0">
                       <div class="truncate" data-sensitive="true">{u.displayName ?? u.username}{#if isSelf}<span class="ml-1.5 text-xs text-muted">(you)</span>{/if}</div>
-                      {#if u.displayName}<div class="truncate text-xs text-muted" data-sensitive="true">{u.username}</div>{/if}
+                      {#if u.accountUsername}<div class="truncate text-xs text-muted" data-sensitive="true">@{u.accountUsername}</div>{/if}
                     </div>
                   </div>
                 </td>
@@ -456,7 +456,7 @@
         {#snippet children(entry: AuditLogEntry)}
           <article class="grid gap-x-3 gap-y-2 border-b border-border/70 px-3 py-2.5 text-xs sm:grid-cols-[minmax(8rem,0.8fr)_minmax(7rem,0.8fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_minmax(12rem,1.6fr)] sm:items-center">
             <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">When</div><div class="text-muted"><RelativeTime ms={entry.ts} /></div></div>
-            <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">Actor</div><div class="truncate" data-sensitive="true">{entry.actor}</div></div>
+            <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">Actor</div><div class="truncate" data-sensitive="true">{entry.actorDisplayName ?? entry.actor}</div></div>
             <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">Action</div><Badge variant="secondary">{AUDIT_ACTION_LABEL[entry.action]}</Badge></div>
             <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">Target</div><div class="truncate" data-sensitive="true">{entry.target}</div></div>
             <div class="min-w-0"><div class="text-[10px] font-semibold tracking-[0.08em] text-muted uppercase sm:hidden">Detail</div><div class="truncate font-mono text-muted" data-sensitive="true">{entry.detail ?? ''}</div>{#if entry.changes?.length}<ul class="mt-1 grid gap-0.5 text-[10px] text-muted">{#each entry.changes as change (change.field)}<li><span class="font-medium">{change.field}</span>: {String(change.before)} → {String(change.after)}</li>{/each}</ul>{/if}</div>
@@ -480,7 +480,7 @@
 {#if canManage}
   <Dialog open={addOpen} onOpenChange={(v) => (addOpen = v)} class="max-w-md">
     <div class="mb-3 text-sm font-medium">Assign roles to a member</div>
-    <label for="user-username" class="mb-1 block text-xs text-muted">GitHub username</label>
+    <label for="user-username" class="mb-1 block text-xs text-muted">Account username or OAuth ID</label>
     <Input id="user-username" placeholder="e.g. octocat" bind:value={username} />
     <div class="mt-3 max-h-[46vh] overflow-y-auto pr-0.5">
       <div class="mb-1 text-xs text-muted">Roles (everyone also holds @everyone)</div>
@@ -503,7 +503,7 @@
 
   <Dialog open={manageOpen} onOpenChange={(v) => (manageOpen = v)} class="max-w-md">
     {#if manageUser}
-      <div class="mb-3 text-sm font-medium">Manage {manageUser.username}</div>
+      <div class="mb-3 text-sm font-medium">Manage {manageUser.displayName ?? manageUser.accountUsername ?? manageUser.username}</div>
       <div class="max-h-[50vh] overflow-y-auto pr-0.5">
         {#if manageUser.billingEntitlements}
           <div class="border-border bg-panel-muted/50 mb-3 rounded-lg border p-3 text-xs" role="note">

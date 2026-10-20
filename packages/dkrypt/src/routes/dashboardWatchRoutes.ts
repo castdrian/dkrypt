@@ -26,6 +26,7 @@ import { projectIdentifierPattern } from '#apiCommonContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
+import { getAuthProfile } from '#identity.js';
 import { emitJobsChanged } from '#events.js';
 import { config } from '#config.js';
 import { PermissionFlag } from '#permissions.js';
@@ -296,7 +297,7 @@ export const dashboardWatchRoutes: FastifyPluginAsyncTypebox = async (server) =>
     if (!getProject(projectId) || !canAccessProject(session.sub, session.permissions, projectId) || (watch && request.query.projectId && request.query.projectId !== projectId)) return sendError(request, reply, 404, 'watch not found');
     const revisions = listWatchRevisions(request.params.id, projectId);
     if (!watch && revisions.length === 0) return sendError(request, reply, 404, 'watch revisions not found');
-    return { revisions };
+    return { revisions: revisions.map((revision) => ({ ...revision, actorDisplayName: getAuthProfile(revision.actor)?.displayName })) };
   });
 
   server.post('/v1/dashboard/watches/:id/revisions/:revisionId/restore', {

@@ -62,6 +62,7 @@
   let loadingMore = $state(false);
   let updatingArtifactIds = $state<string[]>([]);
   let selectedArtifactIds = $state<Set<string>>(new Set());
+  let selectingArtifacts = $state(false);
   let selectAllMatching = $state(false);
   let zipBusy = $state(false);
   let comparisonOpen = $state(false);
@@ -361,6 +362,11 @@
     selectAllMatching = false;
   }
 
+  function toggleArtifactSelectionMode(): void {
+    if (selectingArtifacts) clearArtifactSelection();
+    selectingArtifacts = !selectingArtifacts;
+  }
+
   function currentSelectionFilter() {
     return {
       projectId: projectSelectionState.id,
@@ -484,6 +490,9 @@
             <div class="text-muted mt-0.5 text-xs">{fmtBytesGB(totalBytes)} / {fmtBytesGB(maxBytes)} used</div>
           </div>
           <div class="flex shrink-0 items-center gap-1">
+            {#if artifacts.length > 0}
+              <Button variant={selectingArtifacts ? 'secondary' : 'ghost'} size="sm" aria-pressed={selectingArtifacts} onclick={toggleArtifactSelectionMode}>{selectingArtifacts ? 'Done selecting' : 'Select items'}</Button>
+            {/if}
             <div class="inline-flex rounded-md border border-border/70 p-0.5" role="group" aria-label={viewMessage('viewMode.label')}>
               <Button variant={homeViewModesState.value.artifacts === 'list' ? 'secondary' : 'ghost'} size="icon" class="h-7 w-7" aria-label={viewMessage('viewMode.list')} aria-pressed={homeViewModesState.value.artifacts === 'list'} onclick={() => void pushHomeViewMode('artifacts', 'list')}><List class="h-3.5 w-3.5" /></Button>
               <Button variant={homeViewModesState.value.artifacts === 'cards' ? 'secondary' : 'ghost'} size="icon" class="h-7 w-7" aria-label={viewMessage('viewMode.cards')} aria-pressed={homeViewModesState.value.artifacts === 'cards'} onclick={() => void pushHomeViewMode('artifacts', 'cards')}><Grid2X2 class="h-3.5 w-3.5" /></Button>
@@ -552,7 +561,7 @@
         {#if archiveFilter === 'archived'}
           <div class="mb-3 text-muted text-xs" role="note">Archived items still use library storage and may be removed automatically unless pinned.</div>
         {/if}
-        {#if canDecrypt && artifacts.length > 0}
+        {#if selectingArtifacts && canDecrypt && artifacts.length > 0}
           <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Bulk artifact actions">
             {#if canManageStorage}
               <Button variant="ghost" size="sm" onclick={toggleAllLoadedArtifacts}>
@@ -613,7 +622,7 @@
                   </summary>
                   <VirtualizedList items={group.artifacts} itemKey={(artifact) => artifact.id} estimateSize={estimateArtifactRowHeight} overscan={4} scrollMode="window" label="Versions for {appDisplayName(group.bundleId)}" class={homeViewModesState.value.artifacts === 'list' ? 'divide-y divide-border' : 'space-y-2 p-2'}>
                     {#snippet children(artifact: ArtifactRecord)}
-                      <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={canDecrypt} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
+                      <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
                     {/snippet}
                   </VirtualizedList>
                 </details>
@@ -622,7 +631,7 @@
           {:else}
             <VirtualizedList items={artifacts} itemKey={(artifact) => artifact.id} estimateSize={estimateArtifactRowHeight} overscan={4} scrollMode="window" label="IPA library artifacts" class={homeViewModesState.value.artifacts === 'list' ? 'rounded-xl border border-border/70 divide-y divide-border' : 'space-y-2'}>
               {#snippet children(artifact: ArtifactRecord)}
-                <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={canDecrypt} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
+                <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
               {/snippet}
             </VirtualizedList>
           {/if}

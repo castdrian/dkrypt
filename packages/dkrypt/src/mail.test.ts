@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { config } from '#config.js';
 import { deleteAuthProfile, upsertAuthProfile } from '#identity.js';
-import { sendMailToAllSubscribed, sendMailToUser } from '#mail.js';
+import { canSendDirectMailToUser, sendDirectMailToUser, sendMailToAllSubscribed, sendMailToUser } from '#mail.js';
 
 async function startSmtpServer(acceptedPassword: string, rejectedAuthCode = 535): Promise<{
   port: number;
@@ -140,6 +140,15 @@ describe('mail', () => {
       await sendMailToUser(userId, { subject: 'Rotation test', text: 'Local test message' });
 
       expect(smtp.credentials).toEqual([currentPassword, previousPassword]);
+      expect(smtp.deliveredMessages).toBe(1);
+    });
+  });
+
+  test('direct mail reports delivery through the configured SMTP transport', async () => {
+    const smtp = await startSmtpServer('working-password');
+    await withSmtpRotationProfile(smtp, 'working-password', '', async (userId) => {
+      expect(canSendDirectMailToUser(userId)).toBe(true);
+      await sendDirectMailToUser(userId, { subject: 'Retry available', text: 'You can retry the job.' });
       expect(smtp.deliveredMessages).toBe(1);
     });
   });

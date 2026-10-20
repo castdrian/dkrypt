@@ -52,6 +52,8 @@ const userPrefsProperties = {
   interfaceLanguage: Type.Optional(Type.Union([Type.Literal('system'), Type.Literal('en'), Type.Literal('de')])),
   theme: Type.Optional(Type.Union([Type.Literal('dark'), Type.Literal('light'), Type.Literal('auto')])),
   density: Type.Optional(Type.Union([Type.Literal('comfortable'), Type.Literal('compact')])),
+  sidebarWidth: Type.Optional(Type.Integer({ minimum: 200, maximum: 360 })),
+  sidebarCollapsed: Type.Optional(Type.Boolean()),
   homeLayouts: Type.Optional(Type.Array(homeLayoutSchema, { minItems: 1, maxItems: 10 })),
   activeHomeLayoutId: Type.Optional(Type.String({ minLength: 1, maxLength: 40, pattern: '^[a-zA-Z0-9_-]+$' })),
   viewModes: Type.Optional(homeViewModesSchema),

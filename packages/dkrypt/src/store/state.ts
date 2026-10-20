@@ -416,6 +416,7 @@ export interface JobHistoryEntry {
   deadlineAt?: number;
   deadlineExceeded?: boolean;
   failureClass?: JobFailureClass;
+  resolutionNotice?: { sentAt: number; sentBy: string; emailStatus: 'pending' | 'sent' | 'unavailable' | 'failed' };
 }
 
 export interface AppCatalogEntry {
@@ -502,6 +503,8 @@ export interface UserPrefs {
   interfaceLanguage?: 'system' | 'en' | 'de';
   theme?: 'dark' | 'light' | 'auto';
   density?: 'comfortable' | 'compact';
+  sidebarWidth?: number;
+  sidebarCollapsed?: boolean;
   homeLayouts?: HomeLayoutPreference[];
   activeHomeLayoutId?: string;
   viewModes?: HomeViewModes;
@@ -595,6 +598,7 @@ export type AuditAction =
   | 'artifact.archive'
   | 'artifact.restore'
   | 'incident.update'
+  | 'job.resolution-notice'
   | 'integration.create'
   | 'integration.rotate'
   | 'integration.revoke'
@@ -3558,6 +3562,39 @@ export function getUserActivityStats(): Map<string, UserActivityStats> {
 
 export function getJobHistoryEntryById(id: string): JobHistoryEntry | undefined {
   return state.jobHistory.find((e) => e.id === id);
+}
+
+export function jobResolutionMessage(entry: JobHistoryEntry): string {
+  return `The issue affecting ${entry.bundleId} has been resolved. You can try the job again.`;
+}
+
+export function recordJobResolutionNotice(id: string, actor: string, recipientId: string, emailAvailable: boolean): JobHistoryEntry['resolutionNotice'] | undefined {
+  const entry = getJobHistoryEntryById(id);
+  if (!entry || entry.status !== 'failed' || entry.source !== 'manual' || !entry.queuedBy || entry.resolutionNotice) return undefined;
+  const sentAt = Date.now();
+  const notice = { sentAt, sentBy: actor, emailStatus: emailAvailable ? 'pending' as const : 'unavailable' as const };
+  entry.resolutionNotice = notice;
+  state.notifications.unshift({
+    id: randomUUID(),
+    userId: recipientId.toLowerCase(),
+    title: 'Your failed job can be retried',
+    message: jobResolutionMessage(entry),
+    severity: 'info',
+    createdAt: sentAt,
+    jobId: id,
+    href: `/?tab=home&projectId=${encodeURIComponent(entry.projectId ?? DEFAULT_PROJECT_ID)}&job=${encodeURIComponent(id)}`,
+  });
+  if (state.notifications.length > MAX_NOTIFICATIONS) state.notifications.length = MAX_NOTIFICATIONS;
+  persistNow();
+  recordAudit(actor, 'job.resolution-notice', id, `notified requester of ${entry.bundleId}`);
+  return notice;
+}
+
+export function setJobResolutionEmailStatus(id: string, status: 'sent' | 'failed'): void {
+  const notice = getJobHistoryEntryById(id)?.resolutionNotice;
+  if (!notice || notice.emailStatus !== 'pending') return;
+  notice.emailStatus = status;
+  persistNow();
 }
 
 export function getAverageJobDurationMs(bundleId: string, projectId?: string): number | undefined {

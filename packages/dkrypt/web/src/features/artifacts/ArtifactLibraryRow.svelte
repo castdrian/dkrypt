@@ -44,6 +44,13 @@
     const version = artifact.channel === 'testflight' ? value.split('_', 1)[0] : value;
     return artifact.buildNumber ? `${version} (${artifact.buildNumber})` : version;
   });
+  const gridColumns = $derived(columns.map((column) => {
+    if (column === 'app' || column === 'bundleId') return 'minmax(0, 1fr)';
+    if (column === 'version') return 'minmax(8.5rem, 10rem)';
+    if (column === 'source') return 'minmax(6.5rem, 7rem)';
+    if (column === 'size') return 'minmax(5.5rem, 6rem)';
+    return 'minmax(8rem, 9rem)';
+  }).join(' '));
 </script>
 
 <article data-artifact-id={artifact.id} class="artifact-library-row {listView ? 'grid gap-y-2.5 px-3.5 py-3 first:pt-3 last:pb-3 sm:px-4' : 'grid gap-3 rounded-xl border border-border/70 bg-background/50 p-4'}">
@@ -52,9 +59,9 @@
       <input type="checkbox" class="accent-accent col-start-1 row-start-1 mt-1 size-4 shrink-0 rounded border-border" checked={selected} disabled={selectionDisabled} onchange={(event) => onSelection(event.currentTarget.checked)} aria-label="Select {appDisplayName(artifact.bundleId)} {artifactVersion}" />
     {/if}
     <div class={canSelect ? 'col-start-2 row-start-1 min-w-0' : 'col-start-1 row-start-1 min-w-0'}>
-      <dl class="artifact-library-row-metadata grid min-w-0 gap-x-2 gap-y-2 text-xs" class:five-columns={columns.length === 5}>
+      <dl class="artifact-library-row-metadata grid min-w-0 items-start gap-x-3 gap-y-2 text-xs" style:--artifact-grid-columns={gridColumns}>
         {#each columns as column (column)}
-          <div class="min-w-0">
+          <div class="artifact-library-field min-w-0" class:artifact-primary={column === 'app' || column === 'bundleId'}>
             <dt class="text-muted text-[10px] font-semibold tracking-[0.08em] uppercase">{column === 'app' ? 'App' : column === 'bundleId' ? 'Bundle ID' : column === 'version' ? 'Version' : column === 'source' ? 'Source' : column === 'size' ? 'Size' : 'Added'}</dt>
             <dd class="mt-1 flex min-h-6 min-w-0 items-center gap-2 text-[13px]">
               {#if column === 'app'}
@@ -87,7 +94,7 @@
         </Button>
       {/if}
       <Button data-list-primary-action variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={onDetails} aria-label="Artifact details" title="Artifact details"><FileSearch class="h-4 w-4" /></Button>
-      <a href={artifact.fileUrl} download class="{buttonVariants('secondary', 'sm')} justify-center"><Download class="h-3.5 w-3.5" />Download</a>
+      <a href={artifact.fileUrl} download class="{buttonVariants('secondary', 'sm')} w-8 shrink-0 !px-0" aria-label="Download {appDisplayName(artifact.bundleId)} {artifactVersion}" title="Download IPA"><Download class="h-4 w-4" /></a>
     </div>
   </div>
 </article>
@@ -98,10 +105,14 @@
   }
 
   .artifact-library-row-metadata {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr));
+    grid-template-columns: var(--artifact-grid-columns);
   }
 
-  @container (max-width: 679px) {
+  .artifact-library-field {
+    min-width: 0;
+  }
+
+  @container (max-width: 850px) {
     .artifact-library-row-content.has-selection {
       grid-template-columns: auto minmax(0, 1fr);
     }
@@ -116,38 +127,14 @@
     }
   }
 
-  @container (min-width: 680px) and (max-width: 800px) {
-    .artifact-library-row-metadata.five-columns {
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 0.8fr);
+  @container (max-width: 520px) {
+    .artifact-library-row-metadata {
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.8fr);
+    }
+
+    .artifact-library-field.artifact-primary {
+      grid-column: 1 / -1;
     }
   }
 
-  @container (min-width: 430px) and (max-width: 580px) {
-    .artifact-library-row-metadata.five-columns {
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 0.8fr);
-    }
-  }
-
-  @container (max-width: 429px) {
-    .artifact-library-row-metadata.five-columns {
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      column-gap: 0;
-    }
-
-    .artifact-library-row-metadata.five-columns > :nth-child(-n + 2) {
-      grid-column: span 6;
-    }
-
-    .artifact-library-row-metadata.five-columns > :nth-child(3) {
-      grid-column: span 5;
-    }
-
-    .artifact-library-row-metadata.five-columns > :nth-child(4) {
-      grid-column: span 4;
-    }
-
-    .artifact-library-row-metadata.five-columns > :nth-child(5) {
-      grid-column: span 3;
-    }
-  }
 </style>

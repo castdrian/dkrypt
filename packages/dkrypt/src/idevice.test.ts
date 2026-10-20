@@ -370,7 +370,13 @@ test('createBridgeEnvelope matches the shared bridge fixture', async () => {
 
   expect(envelope).toEqual(fixture.envelope);
   expect(createBridgeEnvelope(fixture.secret, 'appstore', fixture.request, fixture.requestId, fixture.issuedAt).signature).not.toBe(envelope.signature);
-  expect(fixture.contract).toEqual({ version: BRIDGE_PROTOCOL_VERSION, ...BRIDGE_CAPABILITIES, testflightLifecycle: TESTFLIGHT_LIFECYCLE_CAPABILITIES });
+  expect(fixture.contract).toEqual({
+    version: BRIDGE_PROTOCOL_VERSION,
+    ...BRIDGE_CAPABILITIES,
+    appstore: BRIDGE_CAPABILITIES.appstore.filter((capability) => capability !== 'localized_install_titles'),
+    testflightLifecycle: TESTFLIGHT_LIFECYCLE_CAPABILITIES,
+  });
+  expect(BRIDGE_CAPABILITIES.appstore).toContain('localized_install_titles');
 });
 
 test('createDeviceAgentEnvelope matches the shared bridge fixture', async () => {

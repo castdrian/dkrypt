@@ -197,9 +197,9 @@ export function createDashboardQuickSearchRoutes(overrides: Partial<QuickSearchS
         const allowedUsers = new Set(services.listAllowedUsers().map((user) => user.username.toLowerCase()));
         append(services.listAuthProfiles()
           .filter((profile) => allowedUsers.has(profile.userId.toLowerCase()))
-          .filter((profile) => matches(query, [profile.userId, profile.displayName]))
+          .filter((profile) => matches(query, [profile.userId, profile.username, profile.displayName]))
           .slice(0, MAX_RESULTS_PER_KIND)
-          .map((profile) => ({ kind: 'user' as const, id: profile.userId, title: profile.displayName || profile.userId, subtitle: profile.userId })));
+          .map((profile) => ({ kind: 'user' as const, id: profile.userId, title: profile.displayName || profile.username, subtitle: `@${profile.username}` })));
       }
 
       const settings = visibleSettings(session.permissions)

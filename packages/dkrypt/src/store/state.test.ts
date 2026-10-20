@@ -43,6 +43,7 @@ import {
   getAllJobHistory,
   getBackupSchedule,
   getJobHistoryPage,
+  getJobHistoryEntryById,
   getDeviceHealthHourlyBuckets,
   getConsecutiveDeviceHealthFailures,
   getDeviceUptimePercent,
@@ -79,7 +80,9 @@ import {
   recordAudit,
   recordApiKeyBundleUsage,
   recordJobHistory,
+  recordJobResolutionNotice,
   recordNotification,
+  setJobResolutionEmailStatus,
   recordSchedulerRunOutcome,
   revokeSessionRecord,
   revokeApiKey,
@@ -135,6 +138,21 @@ test('app catalog search updates preserve richer App Store metadata', () => {
 });
 
 describe('dashboard notifications', () => {
+  test('records a failed-job resolution notice once with its in-app destination and delivery outcome', () => {
+    const jobId = randomUUID();
+    const requester = `discord:${randomUUID()}`;
+    recordJobHistory({ id: jobId, bundleId: 'com.example.retry', queuedBy: requester, status: 'failed', source: 'manual', createdAt: 1, finishedAt: 2 });
+
+    const first = recordJobResolutionNotice(jobId, 'operator', requester, true);
+    expect(first?.emailStatus).toBe('pending');
+    expect(recordJobResolutionNotice(jobId, 'operator', requester, true)).toBeUndefined();
+    setJobResolutionEmailStatus(jobId, 'sent');
+    expect(getJobHistoryEntryById(jobId)?.resolutionNotice?.emailStatus).toBe('sent');
+    const messages = listNotifications(requester).notifications.filter((notification) => notification.jobId === jobId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.href).toContain(`job=${jobId}`);
+    expect(messages[0]?.message).toContain('try the job again');
+  });
   test('stores notifications per user and marks selected entries read', () => {
     const userId = `notifications-${randomUUID()}`;
     const first = recordNotification({ userId, title: 'Finished', message: 'Ready', severity: 'success' });

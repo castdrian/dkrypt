@@ -68,6 +68,15 @@ test('workflow grants supply-chain permissions only to the image publisher', () 
   expect(permissionsFor(workflowJob('deploy'), 4)).toEqual({ packages: 'read' });
 });
 
+test('CI and image publishing use the Bun version pinned by the Dockerfile', () => {
+  for (const name of ['ci', 'image']) {
+    const job = workflowJob(name).join('\n');
+    expect(job).toContain('id: bun_version');
+    expect(job).toContain('bun-version: ${{ steps.bun_version.outputs.version }}');
+    expect(job).toContain("packages/dkrypt/Dockerfile | sort -u");
+  }
+});
+
 test('deployment smoke syntax validation detects duplicate declarations', () => {
   const invalidScript = 'const status = 1;\nconst status = 2;';
   expect(() => new Bun.Transpiler({ loader: 'js' }).transformSync(invalidScript)).toThrow('already been declared');

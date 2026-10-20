@@ -236,6 +236,16 @@ export const dashboardJobSloResponseSchema = Type.Object({
   }, { additionalProperties: true })),
 }, { additionalProperties: true });
 export const dashboardJobActionResponseSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: true });
+export const dashboardJobResolutionNoticeResponseSchema = Type.Object({
+  requester: Type.String(),
+  emailAvailable: Type.Boolean(),
+  message: Type.String(),
+  notice: Type.Optional(Type.Object({
+    sentAt: Type.Number(),
+    sentBy: Type.String(),
+    emailStatus: Type.Union([Type.Literal('pending'), Type.Literal('sent'), Type.Literal('unavailable'), Type.Literal('failed')]),
+  })),
+});
 export const dashboardManualDecryptBodySchema = Type.Object({
   bundleId: BundleId,
   externalVersionId: Type.Optional(identifierSchema),
@@ -436,4 +446,9 @@ export type DashboardJobRetryRoute = {
 export type DashboardJobDiagnosticRoute = {
   Params: Static<typeof dashboardJobParamsSchema>;
   Reply: { 200: Static<typeof dashboardJobDiagnosticResponseSchema>; 404: ApiErrorEnvelope } & Pick<ActionErrors, 400 | 401 | 403 | 429 | 500>;
+};
+
+export type DashboardJobResolutionNoticeRoute = {
+  Params: Static<typeof dashboardJobParamsSchema>;
+  Reply: { 200: Static<typeof dashboardJobResolutionNoticeResponseSchema>; 409: ApiErrorEnvelope } & ActionErrors;
 };
