@@ -130,6 +130,7 @@ import {
   dashboardJobParamsSchema,
   dashboardJobProjectQuerySchema,
   dashboardJobReorderBodySchema,
+  dashboardJobResolutionNoticeResponseSchema,
   dashboardJobRetryBodySchema,
   dashboardJobSloResponseSchema,
   dashboardJobTimelineEventSchema,
@@ -444,6 +445,7 @@ const AuthMfaResponse = object({ enabled: Type.Boolean(), recoveryCodesRemaining
 const AuthSessionResponse = object({
   loggedIn: Type.Boolean(),
   sub: Type.Optional(Identifier),
+  username: Type.Optional(Type.String()),
   displayName: Type.Optional(Type.String()),
   avatarUrl: Type.Optional(Type.String()),
   identities: Type.Array(JsonObject),
@@ -611,7 +613,7 @@ const PasskeyOptionsResponse = object({
   authenticatorSelection: Type.Optional(JsonObject),
 });
 const PasskeyMutationResponse = object({ passkey: Type.Optional(PasskeySummaryResponse) });
-const AuthProfileResponse = object({ displayName: Type.String(), linkedProviders: Type.Array(Type.String()) });
+const AuthProfileResponse = object({ username: Type.String(), displayName: Type.String(), linkedProviders: Type.Array(Type.String()) });
 const AuthConnectionResponse = object({ identities: Type.Array(JsonObject), linkedProviders: Type.Array(Type.String()) });
 const InsightsAppResponse = Type.Object({
   bundleId: BundleId,
@@ -1573,6 +1575,14 @@ register('POST', '/v1/dashboard/jobs/:id/retry', {
   params: dashboardJobParamsSchema,
   body: dashboardJobRetryBodySchema,
   response: { 202: JobSummaryResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 500: ErrorEnvelope, 503: ErrorEnvelope },
+});
+register('GET', '/v1/dashboard/jobs/:id/resolution-notice', {
+  params: dashboardJobParamsSchema,
+  response: { 200: dashboardJobResolutionNoticeResponseSchema, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope },
+});
+register('POST', '/v1/dashboard/jobs/:id/resolution-notice', {
+  params: dashboardJobParamsSchema,
+  response: { 200: dashboardJobResolutionNoticeResponseSchema, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 500: ErrorEnvelope },
 });
 register('POST', '/v1/dashboard/jobs/reorder', {
   body: dashboardJobReorderBodySchema,

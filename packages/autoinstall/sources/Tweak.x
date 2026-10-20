@@ -213,9 +213,10 @@ static NSDictionary *autoinstallActiveFreeAppStoreAuthorization(void) {
     NSDictionary *status = readJSONFile(kASInstallStatusPath);
     NSString *operationId = [authorization[@"operationId"] isKindOfClass:[NSString class]] ? authorization[@"operationId"] : nil;
     NSString *appName = [authorization[@"appName"] isKindOfClass:[NSString class]] ? authorization[@"appName"] : nil;
+    NSArray *appNames = [authorization[@"appNames"] isKindOfClass:[NSArray class]] ? authorization[@"appNames"] : nil;
     NSNumber *verifiedPrice = [authorization[@"verifiedPrice"] isKindOfClass:[NSNumber class]] ? authorization[@"verifiedPrice"] : nil;
     NSNumber *issuedAt = [authorization[@"issuedAt"] isKindOfClass:[NSNumber class]] ? authorization[@"issuedAt"] : nil;
-    if (!operationId.length || !appName.length || !verifiedPrice || !issuedAt) return nil;
+    if (!operationId.length || (!appName.length && !appNames.count) || !verifiedPrice || !issuedAt) return nil;
     if (![status[@"operationId"] isEqual:operationId]) return nil;
     if (![status[@"state"] isEqual:@"requested"] && ![status[@"state"] isEqual:@"authorizing"]) return nil;
     NSTimeInterval age = [NSDate date].timeIntervalSince1970 - issuedAt.doubleValue;
@@ -1532,19 +1533,23 @@ static void autoinstallTryConfirmFreeAppStoreAuthorization(void) {
         });
     }
     NSTimeInterval age = [NSDate date].timeIntervalSince1970 - [authorization[@"issuedAt"] doubleValue];
-    BOOL canConfirm = autoinstallCanConfirmFreeInstall(authorization[@"appName"], labels, buttons, authorization[@"verifiedPrice"], age);
+    NSArray<NSString *> *appNames = [authorization[@"appNames"] isKindOfClass:[NSArray class]] ? authorization[@"appNames"] : @[authorization[@"appName"] ?: @""];
+    BOOL canConfirm = appNames.count > 1
+        ? autoinstallCanConfirmFreeInstallForNames(appNames, labels, buttons, authorization[@"verifiedPrice"], age)
+        : autoinstallCanConfirmFreeInstall(appNames.firstObject, labels, buttons, authorization[@"verifiedPrice"], age);
     BOOL newDiagnosticOperation = ![gFreeInstallDiagnosticOperationId isEqualToString:authorization[@"operationId"]];
     if (newDiagnosticOperation) gFreeInstallDiagnosticHasLabels = NO;
     if (newDiagnosticOperation || (labels.count > 0 && !gFreeInstallDiagnosticHasLabels)) {
         gFreeInstallDiagnosticOperationId = authorization[@"operationId"];
         gFreeInstallDiagnosticHasLabels = labels.count > 0;
-        NSString *expectedName = autoinstallCanonicalAppName(authorization[@"appName"]);
         BOOL headingFound = NO;
         BOOL appNameFound = NO;
         BOOL installLabelFound = NO;
         for (NSString *label in labels) {
-            if ([label caseInsensitiveCompare:@"App Store"] == NSOrderedSame) headingFound = YES;
-            if ([autoinstallCanonicalAppName(label) isEqualToString:expectedName]) appNameFound = YES;
+            if (autoinstallLabelContainsCanonicalPhrase(label, @"app store")) headingFound = YES;
+            for (NSString *appName in appNames) {
+                if ([appName isKindOfClass:[NSString class]] && autoinstallLabelContainsCanonicalPhrase(label, autoinstallCanonicalAppName(appName))) appNameFound = YES;
+            }
             if ([label caseInsensitiveCompare:@"Install"] == NSOrderedSame || [label caseInsensitiveCompare:@"Installieren"] == NSOrderedSame) installLabelFound = YES;
         }
         autoinstallLog([NSString stringWithFormat:@"free App Store confirmation scan roots=%lu labels=%lu buttons=%lu heading=%@ app=%@ installLabel=%@ eligible=%@ operationId=%@", (unsigned long)roots.count, (unsigned long)labels.count, (unsigned long)buttons.count, headingFound ? @"yes" : @"no", appNameFound ? @"yes" : @"no", installLabelFound ? @"yes" : @"no", canConfirm ? @"yes" : @"no", authorization[@"operationId"]]);
@@ -2205,7 +2210,7 @@ static BOOL appStoreIsForeground(void) {
 static NSDictionary *appStoreBridgeStatus(void) {
     return @{
         @"bridgeVersion": BRIDGE_VERSION,
-        @"capabilities": @[@"install", @"status", @"diagnostics", @"foreground_status", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"],
+        @"capabilities": @[@"install", @"status", @"diagnostics", @"foreground_status", @"localized_install_titles", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"],
         @"foreground": @(appStoreIsForeground()),
         @"install": readJSONFile(kASInstallStatusPath) ?: @{},
     };
@@ -2236,6 +2241,12 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
     NSNumber *adamId = req[@"adamId"];
     NSNumber *versionId = req[@"versionId"];
     NSString *appName = [req[@"appName"] isKindOfClass:[NSString class]] ? req[@"appName"] : nil;
+    NSArray *requestedNames = [req[@"appNames"] isKindOfClass:[NSArray class]] ? req[@"appNames"] : nil;
+    NSMutableArray<NSString *> *appNames = [NSMutableArray array];
+    for (id name in requestedNames) {
+        if ([name isKindOfClass:[NSString class]] && [name length] && [name length] <= 200 && ![appNames containsObject:name]) [appNames addObject:name];
+    }
+    if (!appNames.count && appName.length) [appNames addObject:appName];
     NSNumber *verifiedPrice = [req[@"verifiedPrice"] isKindOfClass:[NSNumber class]] ? req[@"verifiedPrice"] : nil;
     NSString *operationId = [req[@"operationId"] isKindOfClass:[NSString class]] ? req[@"operationId"] : [[NSUUID UUID] UUIDString];
     if (!adamId) {
@@ -2311,8 +2322,8 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
 
             writeBridgeTransaction(@"appstore", operationId, @"requested", @{@"ok": @YES, @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
             writeJSONFile(kASInstallStatusPath, @{@"ok": @YES, @"operationId": operationId, @"state": @"requested", @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
-            if (appName.length && verifiedPrice && verifiedPrice.doubleValue == 0) {
-                writeJSONFile(kFreeAppStoreAuthorizationPath, @{@"operationId": operationId, @"appName": appName, @"verifiedPrice": verifiedPrice, @"issuedAt": @([NSDate date].timeIntervalSince1970)});
+            if (appNames.count && verifiedPrice && verifiedPrice.doubleValue == 0) {
+                writeJSONFile(kFreeAppStoreAuthorizationPath, @{@"operationId": operationId, @"appNames": appNames, @"verifiedPrice": verifiedPrice, @"issuedAt": @([NSDate date].timeIntervalSince1970)});
             } else {
                 [[NSFileManager defaultManager] removeItemAtPath:kFreeAppStoreAuthorizationPath error:nil];
             }

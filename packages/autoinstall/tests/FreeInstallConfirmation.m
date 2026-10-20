@@ -22,6 +22,8 @@ int main(void) {
         expect(!autoinstallCanConfirmFreeInstall(@"Discord - Talk, Play, Hang Out", @[@"App Store", @"Other App"], buttons, @0, 2), @"sheet identity must match");
         expect(!autoinstallCanConfirmFreeInstall(@"Discord - Talk, Play, Hang Out", @[@"App Store", @"Discord – Talk, Play, Hang Out", @"€4.99"], buttons, @0, 2), @"priced sheet must remain blocked");
         expect(!autoinstallCanConfirmFreeInstall(@"Discord - Talk, Play, Hang Out", labels, @[@"Buy"], @0, 2), @"buy control must remain blocked");
+        expect(autoinstallCanConfirmFreeInstallForNames(@[@"Cleanup: Phone Storage Cleaner", @"Cleanup: Clean Storage Space"], @[@"App Store", @"Cleanup: Clean Storage Space"], buttons, @0, 2), @"verified localized title should be confirmed");
+        expect(!autoinstallCanConfirmFreeInstallForNames(@[@"Cleanup: Phone Storage Cleaner", @"Cleanup: Clean Storage Space"], @[@"App Store", @"Unrelated Cleaner"], buttons, @0, 2), @"different localized app must remain blocked");
     }
     return 0;
 }

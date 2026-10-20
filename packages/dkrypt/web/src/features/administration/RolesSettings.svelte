@@ -81,7 +81,7 @@
   let formBits = $state(0n);
   let saving = $state(false);
   let deletingId = $state<string | null>(null);
-  let roleImpact = $state<{ permissions: string; affectedCount: number; members: Array<{ username: string; beforePermissions: string; afterPermissions: string }>; truncated: boolean; memberDetailsHidden?: boolean } | null>(null);
+  let roleImpact = $state<{ permissions: string; affectedCount: number; members: Array<{ username: string; displayName?: string; beforePermissions: string; afterPermissions: string }>; truncated: boolean; memberDetailsHidden?: boolean } | null>(null);
   let draftStorageKey = $state('');
   const roleFormId = 'role-editor';
   const formIsDirty = $derived(Boolean(editingRole
@@ -538,7 +538,7 @@
               {@const after = permissionLabels(parseBits(member.afterPermissions))}
               {@const added = after.filter((label) => !before.includes(label))}
               {@const removed = before.filter((label) => !after.includes(label))}
-              <li class="border-t border-border/60 py-2"><span class="font-medium">{member.username}</span><span class="ml-2 text-ok">{added.length ? `+ ${added.join(', ')}` : ''}</span><span class="ml-2 text-err">{removed.length ? `− ${removed.join(', ')}` : ''}</span></li>
+              <li class="border-t border-border/60 py-2"><span class="font-medium">{member.displayName ?? member.username}</span><span class="ml-2 text-ok">{added.length ? `+ ${added.join(', ')}` : ''}</span><span class="ml-2 text-err">{removed.length ? `− ${removed.join(', ')}` : ''}</span></li>
             {/each}
           </ul>
         {/if}

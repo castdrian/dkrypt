@@ -17,7 +17,7 @@ function clientsForConfiguredKeys() {
 }
 
 function createStripe(secretKey: string): Stripe {
-  return new Stripe(secretKey, { apiVersion: '2026-08-26.dahlia' });
+  return new Stripe(secretKey, { apiVersion: '2026-08-26.dahlia' as Stripe.LatestApiVersion });
 }
 
 export function getStripe(): Stripe {

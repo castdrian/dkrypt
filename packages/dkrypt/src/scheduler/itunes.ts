@@ -108,9 +108,10 @@ export function lookupAppMetadata(bundleId: string): Promise<ItunesAppMetadata> 
   return lookupMetadata({ bundleId });
 }
 
-export function lookupAppMetadataByTrackId(trackId: number): Promise<ItunesAppMetadata> {
+export function lookupAppMetadataByTrackId(trackId: number, country = DEFAULT_ITUNES_COUNTRY): Promise<ItunesAppMetadata> {
   if (!Number.isSafeInteger(trackId) || trackId < 1) throw new Error('trackId must be a positive integer');
-  return lookupMetadata({ id: String(trackId), entity: 'software' });
+  if (!/^[A-Z]{2}$/.test(country)) throw new Error('country must be a two-letter uppercase storefront code');
+  return lookupMetadata({ id: String(trackId), entity: 'software', country });
 }
 
 export interface ItunesSearchResult {

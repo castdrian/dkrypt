@@ -10,6 +10,7 @@ import type {
 } from '#dashboardTestFlightContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
+import { getAuthProfile } from '#identity.js';
 import { PermissionFlag, hasPermission } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import {
@@ -141,7 +142,14 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
         keyOf: (subscription) => [subscription.createdAt, subscription.id],
         order: 'desc',
       });
-      return { subscriptions: page.items, total: allSubscriptions.length, nextCursor: page.nextCursor };
+      return {
+        subscriptions: page.items.map((subscription) => ({
+          ...subscription,
+          requestedByDisplayName: getAuthProfile(subscription.requestedBy)?.displayName,
+        })),
+        total: allSubscriptions.length,
+        nextCursor: page.nextCursor,
+      };
     });
 
     server.post<DashboardTestFlightSubscriptionCreateRoute>('/v1/dashboard/testflight/subscriptions', {

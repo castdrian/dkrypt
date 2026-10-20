@@ -30,6 +30,7 @@ const APP_STORE_BRIDGE_READY_TIMEOUT_MS = 20_000;
 const APP_STORE_BRIDGE_STATUS_TIMEOUT_MS = 3_000;
 const APP_STORE_BRIDGE_POLL_INTERVAL_MS = 500;
 const APP_STORE_INSTALL_STATUS_POLL_INTERVAL_MS = 5_000;
+const APP_STORE_LOCALE_RE = /^[a-z]{2,3}[_-]([A-Za-z]{2})(?:@.*)?$/;
 
 class AppStoreInstallTimeoutError extends Error {
   readonly retryable = true;
@@ -178,6 +179,32 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
 
   return withSSH(options.device ?? primaryDevice(), async (conn) => {
     ensureNotCancelled();
+    const appNames = [listing.trackName];
+    let country: string | undefined;
+    try {
+      const locale = await execCommand(conn, 'defaults read /var/mobile/Library/Preferences/.GlobalPreferences AppleLocale 2>/dev/null', 5_000, options.signal);
+      ensureNotCancelled();
+      country = APP_STORE_LOCALE_RE.exec(locale.stdout.trim())?.[1]?.toUpperCase();
+    } catch (error) {
+      ensureNotCancelled();
+      log.warn('device App Store locale could not be read; using the verified US title', { bundleId, error: error instanceof Error ? error.message : String(error) });
+    }
+    if (country && country !== 'US') {
+      let localizedListing: Awaited<ReturnType<typeof lookupAppMetadataByTrackId>> | undefined;
+      try {
+        localizedListing = await lookupAppMetadataByTrackId(trackId, country);
+        ensureNotCancelled();
+      } catch (error) {
+        ensureNotCancelled();
+        log.warn('localized App Store title lookup unavailable; using the verified US title', { bundleId, country, error: error instanceof Error ? error.message : String(error) });
+      }
+      if (localizedListing) {
+        if (localizedListing.trackId !== trackId || localizedListing.bundleId !== bundleId || localizedListing.price !== 0) {
+          throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
+        }
+        if (!appNames.includes(localizedListing.trackName)) appNames.push(localizedListing.trackName);
+      }
+    }
     const existing = await findInstalledAppStoreBundle(conn, bundleId);
     ensureNotCancelled();
     if (existing) {
@@ -204,7 +231,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       ensureNotCancelled();
 
       const operationId = options.operationId ?? randomUUID();
-      const request: Record<string, unknown> = { action: 'install', adamId: trackId, appName: listing.trackName, verifiedPrice: listing.price, contextMode: 'fallback', operationId };
+      const request: Record<string, unknown> = { action: 'install', adamId: trackId, appName: listing.trackName, appNames, verifiedPrice: listing.price, contextMode: 'fallback', operationId };
       if (versionId !== undefined) request.versionId = versionId;
       const installResponse = await sendAppStoreBridgeRequest(conn, request, 20_000, options.signal);
       ensureNotCancelled();

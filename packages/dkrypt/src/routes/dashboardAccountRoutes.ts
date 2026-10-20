@@ -27,6 +27,8 @@ function normalizedPrefs(prefs: UserPrefs): UserPrefs {
   const defaults: UserPrefs = {
     shortcutBindings: { ...defaultShortcutBindings },
     density: 'comfortable',
+    sidebarWidth: 256,
+    sidebarCollapsed: false,
     homeLayouts: [defaultHomeLayout],
     activeHomeLayoutId: defaultHomeLayout.id,
     viewModes: { artifacts: 'list', jobHistory: 'cards', devices: 'cards' },
@@ -149,6 +151,8 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
     if (body.interfaceLanguage) patch.interfaceLanguage = body.interfaceLanguage;
     if (body.theme) patch.theme = body.theme;
     if (body.density) patch.density = body.density;
+    if (body.sidebarWidth !== undefined) patch.sidebarWidth = body.sidebarWidth;
+    if (body.sidebarCollapsed !== undefined) patch.sidebarCollapsed = body.sidebarCollapsed;
     if (body.homeLayouts) patch.homeLayouts = body.homeLayouts.map((layout) => ({ ...layout, name: layout.name.trim() }));
     if (body.activeHomeLayoutId) patch.activeHomeLayoutId = body.activeHomeLayoutId;
     if (body.viewModes) patch.viewModes = { ...normalizedPrefs(getUserPrefs(getFastifySession(request)!.sub)).viewModes, ...body.viewModes };

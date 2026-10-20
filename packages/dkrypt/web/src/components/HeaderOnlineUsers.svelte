@@ -17,8 +17,8 @@
       </Badge>
     {/snippet}
     <div class="flex flex-col gap-1 whitespace-nowrap">
-      {#each users as u (u)}
-        <div data-sensitive="true">{u}{u === sessionState.sub ? ' (you)' : ''}</div>
+      {#each users as u (u.userId)}
+        <div data-sensitive="true">{u.displayName}{u.userId === sessionState.sub ? ' (you)' : ''}</div>
       {/each}
     </div>
   </Popover>

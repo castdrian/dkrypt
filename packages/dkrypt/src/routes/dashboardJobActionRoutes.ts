@@ -4,6 +4,7 @@ import type {
   DashboardJobDiagnosticRoute,
   DashboardJobPrioritizeRoute,
   DashboardJobReorderRoute,
+  DashboardJobResolutionNoticeRoute,
   DashboardJobRetryRoute,
   DashboardManualDecryptRoute,
 } from '#dashboardJobContracts.js';
@@ -22,6 +23,8 @@ import {
 } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
 import { PermissionFlag } from '#permissions.js';
+import { getAuthProfile } from '#identity.js';
+import { canSendDirectMailToUser, sendDirectMailToUser } from '#mail.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { scopedLogger } from '#logger.js';
 import { resolveDecryptTarget } from '#decryptTarget.js';
@@ -31,6 +34,9 @@ import {
   getPrimaryDevice,
   getProject,
   getUserPriority,
+  jobResolutionMessage,
+  recordJobResolutionNotice,
+  setJobResolutionEmailStatus,
   type JobHistoryEntry,
 } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
@@ -47,6 +53,11 @@ export interface DashboardJobActionServices {
   getUserPriority: typeof getUserPriority;
   canAccessProject: typeof canAccessProject;
   resolveDecryptTarget: typeof resolveDecryptTarget;
+  getAuthProfile: typeof getAuthProfile;
+  canSendDirectMailToUser: typeof canSendDirectMailToUser;
+  sendDirectMailToUser: typeof sendDirectMailToUser;
+  recordJobResolutionNotice: typeof recordJobResolutionNotice;
+  setJobResolutionEmailStatus: typeof setJobResolutionEmailStatus;
 }
 
 const defaultServices: DashboardJobActionServices = {
@@ -61,9 +72,15 @@ const defaultServices: DashboardJobActionServices = {
   getUserPriority,
   canAccessProject,
   resolveDecryptTarget,
+  getAuthProfile,
+  canSendDirectMailToUser,
+  sendDirectMailToUser,
+  recordJobResolutionNotice,
+  setJobResolutionEmailStatus,
 };
 
 const canRequestDecrypt = fastifyRequirePermission(PermissionFlag.requestDecrypt);
+const canNotifyFailedJobOwners = fastifyRequirePermission(PermissionFlag.notifyFailedJobOwners);
 const externalVersionIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const log = scopedLogger('jobs');
 
@@ -253,6 +270,61 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       );
       reply.code(202);
       return jobSummary(job);
+    });
+
+    const resolutionNoticePreview = (id: string, userId: string, permissions: bigint) => {
+      const entry = services.getJobHistoryEntryById(id);
+      if (!entry || !hasProjectAccess(services, userId, permissions, entry.projectId ?? DEFAULT_PROJECT_ID)) return undefined;
+      if (entry.status !== 'failed' || entry.source !== 'manual' || !entry.queuedBy) return null;
+      const recipient = services.getAuthProfile(entry.queuedBy);
+      if (!recipient) return null;
+      return {
+        entry,
+        recipient,
+        response: {
+          requester: recipient.displayName,
+          emailAvailable: services.canSendDirectMailToUser(recipient.userId),
+          message: jobResolutionMessage(entry),
+          notice: entry.resolutionNotice,
+        },
+      };
+    };
+
+    server.get<DashboardJobResolutionNoticeRoute>('/v1/dashboard/jobs/:id/resolution-notice', {
+      schema: { ...getRouteContract('GET', '/v1/dashboard/jobs/:id/resolution-notice'), hide: true },
+      preHandler: canNotifyFailedJobOwners,
+    }, async (request, reply) => {
+      const session = getFastifySession(request)!;
+      const preview = resolutionNoticePreview(request.params.id, session.sub, session.permissions);
+      if (preview === undefined) return reply.code(404).send(sendJobError(request.id, 404, 'job not found'));
+      if (preview === null) return reply.code(409).send(sendJobError(request.id, 409, 'job has no requester to notify'));
+      return preview.response;
+    });
+
+    server.post<DashboardJobResolutionNoticeRoute>('/v1/dashboard/jobs/:id/resolution-notice', {
+      schema: { ...getRouteContract('POST', '/v1/dashboard/jobs/:id/resolution-notice'), hide: true },
+      preHandler: canNotifyFailedJobOwners,
+    }, async (request, reply) => {
+      const session = getFastifySession(request)!;
+      const preview = resolutionNoticePreview(request.params.id, session.sub, session.permissions);
+      if (preview === undefined) return reply.code(404).send(sendJobError(request.id, 404, 'job not found'));
+      if (preview === null) return reply.code(409).send(sendJobError(request.id, 409, 'job has no requester to notify'));
+      if (preview.entry.resolutionNotice) return preview.response;
+      const notice = services.recordJobResolutionNotice(request.params.id, session.sub, preview.recipient.userId, preview.response.emailAvailable);
+      if (!notice) return reply.code(409).send(sendJobError(request.id, 409, 'job notice could not be created'));
+      if (notice.emailStatus === 'pending') {
+        try {
+          await services.sendDirectMailToUser(preview.recipient.userId, {
+            subject: `You can retry ${preview.entry.bundleId} on dkrypt`,
+            text: `${preview.response.message}\n\nOpen dkrypt and retry this job from your history.`,
+          });
+          services.setJobResolutionEmailStatus(request.params.id, 'sent');
+        } catch (error) {
+          services.setJobResolutionEmailStatus(request.params.id, 'failed');
+          log.warn('failed-job resolution email could not be delivered', { jobId: request.params.id, error: String(error) });
+        }
+      }
+      return resolutionNoticePreview(request.params.id, session.sub, session.permissions)!.response;
     });
 
     server.get<DashboardJobDiagnosticRoute>('/v1/dashboard/jobs/:id/diagnostic', {

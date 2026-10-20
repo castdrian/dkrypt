@@ -134,7 +134,7 @@
               <div class="min-w-0"><span class="text-sm font-medium">{incident.title}</span><span class="ml-2 text-xs text-muted">{incident.kind} · {incident.status}{incident.recoveredAt ? ' · source recovered' : ''}</span></div>
               {#if canManageIncidents}
                 <div class="flex flex-wrap gap-1">
-                  <Button size="sm" variant="secondary" onclick={() => void assignIncident(incident)}>{incident.assignedTo ?? 'Assign'}</Button>
+                  <Button size="sm" variant="secondary" onclick={() => void assignIncident(incident)}>{incident.assignedToDisplayName ?? incident.assignedTo ?? 'Assign'}</Button>
                   {#if incident.status !== 'in_progress'}<Button size="sm" variant="secondary" onclick={() => void changeIncident(incident, 'in_progress')}>In progress</Button>{/if}
                   {#if incident.status !== 'snoozed'}<Button size="sm" variant="secondary" onclick={() => void changeIncident(incident, 'snoozed')}>Snooze 1h</Button>{/if}
                   {#if incident.status !== 'resolved'}<Button size="sm" variant="secondary" onclick={() => void changeIncident(incident, 'resolved')}>Resolve</Button>{/if}

@@ -6,6 +6,8 @@ export const dashboardApiKeyResponseSchema = Type.Object({
   id: identifierSchema,
   name: Type.String(),
   ownerId: identifierSchema,
+  ownerDisplayName: Type.Optional(Type.String()),
+  ownerUsername: Type.Optional(Type.String()),
   status: Type.Union([Type.Literal('pending'), Type.Literal('approved'), Type.Literal('denied')]),
   createdAt: Type.Number(),
   approvedAt: Type.Optional(Type.Number()),

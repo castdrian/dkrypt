@@ -208,7 +208,7 @@ test('core operational responses publish their required fields', async () => {
       ['/v1/auth/passkeys', 'get', ['passkeys']],
       ['/v1/auth/passkeys/options', 'post', ['challenge']],
       ['/v1/auth/passkeys/reauth/options', 'post', ['challenge']],
-      ['/v1/auth/profile', 'patch', ['displayName', 'linkedProviders']],
+      ['/v1/auth/profile', 'patch', ['username', 'displayName', 'linkedProviders']],
       ['/v1/auth/connections/{provider}', 'delete', ['identities', 'linkedProviders']],
       ['/v1/billing/provider-status', 'get', ['stripe', 'crypto']],
       ['/v1/billing/webhooks/inbox', 'get', ['inbox', 'total', 'nextCursor']],

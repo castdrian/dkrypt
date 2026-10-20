@@ -5,6 +5,7 @@ import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
 import { logBelongsToProject } from '#dashboardLogPresentation.js';
 import { getRouteContract } from '#contracts.js';
+import { getAuthProfile } from '#identity.js';
 import { getRecentLogs } from '#logger.js';
 import { PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
@@ -57,13 +58,14 @@ export const dashboardObservabilityRoutes: FastifyPluginAsyncTypebox = async (se
     preHandler: canViewAuditLog,
   }, (request) => {
     const { cursor, limit, offset } = request.query;
-    return getAuditLogPage(cursor ? 0 : offset ?? 0, Math.min(limit ?? 100, 200), cursor);
+    const page = getAuditLogPage(cursor ? 0 : offset ?? 0, Math.min(limit ?? 100, 200), cursor);
+    return { ...page, entries: page.entries.map((entry) => ({ ...entry, actorDisplayName: getAuthProfile(entry.actor)?.displayName })) };
   });
 
   server.get('/v1/dashboard/audit-log/target/:target', {
     schema: { hide: true, params: Type.Object({ target: Type.String({ minLength: 1, maxLength: 200 }) }) },
     preHandler: canViewAuditLog,
-  }, (request) => ({ entries: getAuditLogByTarget(request.params.target, 5) }));
+  }, (request) => ({ entries: getAuditLogByTarget(request.params.target, 5).map((entry) => ({ ...entry, actorDisplayName: getAuthProfile(entry.actor)?.displayName })) }));
 
   server.get<DashboardAuditLogExportRoute>('/v1/dashboard/audit-log/export', {
     schema: getRouteContract('GET', '/v1/dashboard/audit-log/export'),

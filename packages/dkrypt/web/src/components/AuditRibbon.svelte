@@ -33,7 +33,7 @@
     {:else}
       <ol class="mt-2 space-y-2">
         {#each entries as entry (entry.id)}
-          <li class="flex flex-wrap gap-x-2"><span class="font-medium" data-sensitive="true">{entry.actor}</span><span>{entry.action.replaceAll('.', ' ')}</span><time class="text-muted" datetime={new Date(entry.ts).toISOString()}>{fmtDateTime(entry.ts)}</time>{#if entry.changes?.length}<span class="basis-full text-muted">{entry.changes.map((change) => `${change.field}: ${String(change.before)} → ${String(change.after)}`).join(' · ')}</span>{/if}</li>
+          <li class="flex flex-wrap gap-x-2"><span class="font-medium" data-sensitive="true">{entry.actorDisplayName ?? entry.actor}</span><span>{entry.action.replaceAll('.', ' ')}</span><time class="text-muted" datetime={new Date(entry.ts).toISOString()}>{fmtDateTime(entry.ts)}</time>{#if entry.changes?.length}<span class="basis-full text-muted">{entry.changes.map((change) => `${change.field}: ${String(change.before)} → ${String(change.after)}`).join(' · ')}</span>{/if}</li>
         {/each}
       </ol>
     {/if}

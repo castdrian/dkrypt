@@ -25,16 +25,18 @@ static BOOL autoinstallLabelContainsCanonicalPhrase(NSString *label, NSString *p
     return [boundedLabel rangeOfString:boundedPhrase].location != NSNotFound;
 }
 
-static BOOL autoinstallCanConfirmFreeInstall(NSString *appName, NSArray<NSString *> *labels, NSArray<NSString *> *buttons, NSNumber *price, NSTimeInterval ageSeconds) {
-    if (!appName.length || ![price isKindOfClass:[NSNumber class]] || price.doubleValue != 0 || ageSeconds < 0 || ageSeconds > 120) return NO;
-    NSString *expectedName = autoinstallCanonicalAppName(appName);
-    if (!expectedName.length) return NO;
+static BOOL autoinstallCanConfirmFreeInstallForNames(NSArray<NSString *> *appNames, NSArray<NSString *> *labels, NSArray<NSString *> *buttons, NSNumber *price, NSTimeInterval ageSeconds) {
+    if (!appNames.count || ![price isKindOfClass:[NSNumber class]] || price.doubleValue != 0 || ageSeconds < 0 || ageSeconds > 120) return NO;
     BOOL appStoreHeadingFound = NO;
     BOOL appNameFound = NO;
     for (NSString *label in labels) {
         if (![label isKindOfClass:[NSString class]]) continue;
         if (autoinstallLabelContainsCanonicalPhrase(label, @"app store")) appStoreHeadingFound = YES;
-        if (autoinstallLabelContainsCanonicalPhrase(label, expectedName)) appNameFound = YES;
+        for (NSString *appName in appNames) {
+            if (![appName isKindOfClass:[NSString class]]) continue;
+            NSString *expectedName = autoinstallCanonicalAppName(appName);
+            if (autoinstallLabelContainsCanonicalPhrase(label, expectedName)) appNameFound = YES;
+        }
         if ([label rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"€$£¥₹₩"]].location != NSNotFound) return NO;
     }
     BOOL installButtonFound = NO;
@@ -44,4 +46,8 @@ static BOOL autoinstallCanConfirmFreeInstall(NSString *appName, NSArray<NSString
         if ([title caseInsensitiveCompare:@"Install"] == NSOrderedSame || [title caseInsensitiveCompare:@"Installieren"] == NSOrderedSame) installButtonFound = YES;
     }
     return appStoreHeadingFound && appNameFound && installButtonFound;
+}
+
+static BOOL autoinstallCanConfirmFreeInstall(NSString *appName, NSArray<NSString *> *labels, NSArray<NSString *> *buttons, NSNumber *price, NSTimeInterval ageSeconds) {
+    return autoinstallCanConfirmFreeInstallForNames(appName.length ? @[appName] : @[], labels, buttons, price, ageSeconds);
 }
