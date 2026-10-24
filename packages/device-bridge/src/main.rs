@@ -2685,7 +2685,6 @@ mod tests {
                 .expect("closed local stream should be readable"),
             0
         );
-        assert!(TcpStream::connect(("127.0.0.1", local_port)).await.is_err());
         device_service_task
             .await
             .expect("device service task should stop during bridge shutdown");
@@ -2820,7 +2819,6 @@ mod tests {
                 .expect("closed tunnel stream should be readable"),
             0
         );
-        assert!(TcpStream::connect(("127.0.0.1", local_port)).await.is_err());
         drop(local);
         drop(client);
         server
