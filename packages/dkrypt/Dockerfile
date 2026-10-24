@@ -19,7 +19,7 @@ ARG CARGO_AUDITABLE_VERSION=0.7.4
 RUN cargo install cargo-auditable --version ${CARGO_AUDITABLE_VERSION} --locked \
   && cargo auditable build --release --locked
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS netmuxd
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS netmuxd
 ARG NETMUXD_VERSION=v0.4.3
 ARG TARGETARCH=amd64
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tar && rm -rf /var/lib/apt/lists/*
@@ -48,7 +48,7 @@ RUN set -eu; \
   go test ./... -skip '^TestSignerIntegration$'; \
   go build -trimpath -ldflags "-X github.com/majd/ipatool/v2/cmd.version=v${IPTATOOL_VERSION}" -o /usr/local/bin/ipatool .
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS fairplay-decrypt
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS fairplay-decrypt
 ARG FAIRPLAY_DECRYPT_REV=1bad106ee1698c6d9c483f67d898183ffa4c6eb3
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev make python3 python3-venv tar && rm -rf /var/lib/apt/lists/*
 RUN set -eu; \
