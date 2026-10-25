@@ -49,6 +49,8 @@ mod serde_bytes {
     }
 }
 const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
+const CATALOG_VERSION_LOOKUP_ATTEMPTS: usize = 3;
+const CATALOG_VERSION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 const ENT_DOWNLOAD_PATH: &str = "/WebObjects/DownloadDispatch.woa/wa/ent/download";
 pub async fn get_download_info(
     client: &AppleClient,
@@ -742,28 +744,107 @@ async fn lookup_latest_external_version_id(
         .unwrap_or("US")
         .to_ascii_lowercase();
     let app_id_string = app_id.to_string();
-    let response = client
-        .http()
-        .get(format!(
-            "https://apps.apple.com/api/apps/v1/catalog/{country}/apps/{app_id_string}"
-        ))
-        .query(&[("platform", "iphone")])
-        .send()
-        .await?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(ClientError::UnexpectedResponse(
-            "redownload_version_lookup_app_missing".into(),
-        ));
+    let url = format!("https://apps.apple.com/api/apps/v1/catalog/{country}/apps/{app_id_string}");
+    for attempt in 0..CATALOG_VERSION_LOOKUP_ATTEMPTS {
+        let response = match client
+            .http()
+            .get(&url)
+            .query(&[("platform", "iphone")])
+            .timeout(CATALOG_VERSION_LOOKUP_TIMEOUT)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error)
+                if attempt + 1 < CATALOG_VERSION_LOOKUP_ATTEMPTS
+                    && (error.is_timeout() || error.is_connect()) =>
+            {
+                tokio::time::sleep(catalog_lookup_backoff(attempt)).await;
+                continue;
+            }
+            Err(error) => return Err(map_catalog_lookup_request_error(error)),
+        };
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::UnexpectedResponse(
+                "redownload_version_lookup_app_missing".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            if should_retry_catalog_lookup(response.status())
+                && attempt + 1 < CATALOG_VERSION_LOOKUP_ATTEMPTS
+            {
+                let Some(delay) = catalog_lookup_retry_delay(
+                    response.headers().get(reqwest::header::RETRY_AFTER),
+                    attempt,
+                ) else {
+                    return Err(ClientError::UnexpectedResponse(format!(
+                        "redownload_version_lookup_http_failed;http_status={}",
+                        response.status().as_u16()
+                    )));
+                };
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(ClientError::UnexpectedResponse(format!(
+                "redownload_version_lookup_http_failed;http_status={}",
+                response.status().as_u16()
+            )));
+        }
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error)
+                if attempt + 1 < CATALOG_VERSION_LOOKUP_ATTEMPTS
+                    && (error.is_timeout() || error.is_connect()) =>
+            {
+                tokio::time::sleep(catalog_lookup_backoff(attempt)).await;
+                continue;
+            }
+            Err(error) => return Err(map_catalog_lookup_request_error(error)),
+        };
+        let lookup: IosCatalogVersionLookup = match serde_json::from_slice(&body) {
+            Ok(lookup) => lookup,
+            Err(_) if attempt + 1 < CATALOG_VERSION_LOOKUP_ATTEMPTS => {
+                tokio::time::sleep(catalog_lookup_backoff(attempt)).await;
+                continue;
+            }
+            Err(_) => {
+                return Err(ClientError::UnexpectedResponse(
+                    "redownload_version_lookup_invalid".into(),
+                ));
+            }
+        };
+        return lookup.latest_external_version_id(&app_id_string, bundle_id);
     }
-    if response.status() != reqwest::StatusCode::OK {
-        return Err(ClientError::UnexpectedResponse(
-            "redownload_version_lookup_http_failed".into(),
-        ));
+    Err(ClientError::UnexpectedResponse(
+        "redownload_version_lookup_request_failed".into(),
+    ))
+}
+fn map_catalog_lookup_request_error(error: reqwest::Error) -> ClientError {
+    let reason = if error.is_timeout() {
+        "timed_out"
+    } else if error.is_connect() {
+        "network_unavailable"
+    } else {
+        "request_failed"
+    };
+    ClientError::UnexpectedResponse(format!("redownload_version_lookup_{reason}"))
+}
+fn should_retry_catalog_lookup(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+fn catalog_lookup_retry_delay(
+    retry_after: Option<&reqwest::header::HeaderValue>,
+    attempt: usize,
+) -> Option<Duration> {
+    let retry_after = retry_after.and_then(|value| value.to_str().ok());
+    match retry_after.and_then(|value| value.parse::<u64>().ok()) {
+        Some(seconds) if seconds <= 30 => Some(Duration::from_secs(seconds)),
+        Some(_) => None,
+        None => Some(catalog_lookup_backoff(attempt)),
     }
-    let body = response.bytes().await?;
-    let lookup: IosCatalogVersionLookup = serde_json::from_slice(&body)
-        .map_err(|_| ClientError::UnexpectedResponse("redownload_version_lookup_invalid".into()))?;
-    lookup.latest_external_version_id(&app_id_string, bundle_id)
+}
+fn catalog_lookup_backoff(attempt: usize) -> Duration {
+    Duration::from_secs(attempt as u64 + 1)
 }
 fn is_empty_successful_download(dict: &HashMap<String, plist::Value>) -> bool {
     if StoreError::from_plist_dict(dict).is_some() {
@@ -1171,6 +1252,31 @@ mod tests {
             lookup
                 .latest_external_version_id("1234", "com.example.app")
                 .is_err()
+        );
+    }
+    #[test]
+    fn retries_catalog_lookup_rate_limits_and_server_errors_only() {
+        assert!(should_retry_catalog_lookup(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(should_retry_catalog_lookup(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(!should_retry_catalog_lookup(reqwest::StatusCode::FORBIDDEN));
+        assert!(!should_retry_catalog_lookup(reqwest::StatusCode::NOT_FOUND));
+    }
+    #[test]
+    fn catalog_lookup_retry_delay_respects_bounded_retry_after() {
+        let retry_after = reqwest::header::HeaderValue::from_static("7");
+        assert_eq!(
+            catalog_lookup_retry_delay(Some(&retry_after), 0),
+            Some(Duration::from_secs(7))
+        );
+        let retry_after = reqwest::header::HeaderValue::from_static("90");
+        assert_eq!(catalog_lookup_retry_delay(Some(&retry_after), 1), None);
+        assert_eq!(
+            catalog_lookup_retry_delay(None, 2),
+            Some(Duration::from_secs(3))
         );
     }
     #[test]

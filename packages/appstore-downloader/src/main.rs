@@ -667,6 +667,18 @@ fn map_download_error(error: &ClientError) -> &'static str {
             "redownload_product_empty_song_list" => {
                 "download_info_redownload_product_empty_song_list"
             }
+            reason if reason.starts_with("redownload_version_lookup_http_failed") => {
+                "download_info_redownload_version_lookup_http_failed"
+            }
+            reason if reason.starts_with("redownload_version_lookup_timed_out") => {
+                "download_info_redownload_version_lookup_timed_out"
+            }
+            reason if reason.starts_with("redownload_version_lookup_network_unavailable") => {
+                "download_info_redownload_version_lookup_network_unavailable"
+            }
+            reason if reason.starts_with("redownload_version_lookup_request_failed") => {
+                "download_info_redownload_version_lookup_request_failed"
+            }
             reason if reason.starts_with("redownload_version_lookup_") => {
                 "download_info_redownload_version_lookup_failed"
             }
@@ -702,6 +714,7 @@ fn map_download_diagnostic(error: &ClientError) -> Option<String> {
         ClientError::UnexpectedResponse(reason) => [
             "ent_download_response_invalid|",
             "redownload_product_response_invalid|",
+            "redownload_version_lookup_",
             "update_product_response_invalid|",
         ]
         .into_iter()
@@ -1093,6 +1106,12 @@ mod tests {
         );
         assert_eq!(
             map_download_error(&ClientError::UnexpectedResponse(
+                "redownload_version_lookup_http_failed;http_status=429".into()
+            )),
+            "download_info_redownload_version_lookup_http_failed"
+        );
+        assert_eq!(
+            map_download_error(&ClientError::UnexpectedResponse(
                 "redownload_product_response_invalid|http_status=403".into()
             )),
             "download_info_redownload_product_response_invalid"
@@ -1136,6 +1155,17 @@ mod tests {
         assert_eq!(
             map_download_error(&ClientError::UnexpectedResponse("private response".into())),
             "download_info_response_invalid"
+        );
+    }
+
+    #[test]
+    fn catalog_lookup_diagnostics_keep_only_safe_failure_metadata() {
+        let error = ClientError::UnexpectedResponse(
+            "redownload_version_lookup_http_failed;http_status=429".into(),
+        );
+        assert_eq!(
+            map_download_diagnostic(&error).as_deref(),
+            Some("http_failed;http_status=429")
         );
     }
 
