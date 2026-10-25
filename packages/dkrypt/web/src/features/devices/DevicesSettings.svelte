@@ -48,7 +48,7 @@
   import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#lib/session.svelte';
   import { announceScreenReader, confirmDialog, deviceDetailJumpState, homeViewModesState, interfaceLanguageState, showToast, systemLocalesState } from '#lib/ui.svelte';
   import { pushHomeViewMode } from '#lib/session.svelte';
-  import { clearFormDraft, readFormDraft, setFormUnsaved, writeFormDraft } from '#lib/formDrafts.svelte';
+  import { clearFormDraft, clearSyncedFormDraft, readFormDraft, readSyncedFormDraft, setFormUnsaved, writeFormDraft, writeSyncedFormDraft } from '#lib/formDrafts.svelte';
   import { startBackgroundTask, updateBackgroundTask } from '#lib/backgroundTasks.svelte';
   import { resolveInterfaceLanguage } from '#lib/locale';
   import { translateMessage, type MessageKey } from '#lib/messages';
@@ -425,7 +425,9 @@
   let formNotes = $state('');
   let saving = $state(false);
   let deviceDraftKey = $state('');
+  let deviceDraftOwnerAccountId = $state('');
   let initialDeviceDraft = $state('');
+  let loadingDeviceDraft = $state(false);
   const deviceFormId = 'device-editor';
 
   function deviceDraftValues(): { name: string; iosVersion: string; toolchain: string; notes: string } {
@@ -433,11 +435,23 @@
   }
 
   $effect(() => {
-    if (!editOpen || !deviceDraftKey) return;
+    if (editOpen && deviceDraftOwnerAccountId && sessionState.sub !== deviceDraftOwnerAccountId) {
+      editOpen = false;
+      editingId = null;
+      conflictDevice = null;
+      setFormUnsaved(deviceFormId, false);
+    }
+  });
+
+  $effect(() => {
+    if (!editOpen || !deviceDraftKey || loadingDeviceDraft) return;
     const values = deviceDraftValues();
     const serialized = JSON.stringify(values);
     const dirty = serialized !== initialDeviceDraft;
-    if (dirty) writeFormDraft(deviceDraftKey, values);
+    if (dirty) {
+      writeFormDraft(deviceDraftKey, values);
+      if (editingId) writeSyncedFormDraft(`device:${editingId}`, 'device', values, deviceDraftOwnerAccountId);
+    }
     setFormUnsaved(deviceFormId, dirty);
   });
 
@@ -452,10 +466,12 @@
 
   function openEdit(device: DeviceRecord): void {
     editingId = device.id;
+    deviceDraftOwnerAccountId = sessionState.sub ?? '';
     editingUpdatedAt = device.updatedAt;
     conflictDevice = null;
     formError = '';
     deviceDraftKey = `device:${sessionState.sub ?? 'account'}:${device.id}`;
+    loadingDeviceDraft = true;
     formName = device.name;
     formIosVersion = device.iosVersion ?? '';
     formToolchain = device.toolchain ?? '';
@@ -469,6 +485,18 @@
     }
     initialDeviceDraft = JSON.stringify(deviceDraftValues());
     editOpen = true;
+    const openedValues = JSON.stringify(deviceDraftValues());
+    void readSyncedFormDraft<ReturnType<typeof deviceDraftValues>>(`device:${device.id}`, 'device', deviceDraftKey).then((draft) => {
+      if (draft && sessionState.sub === deviceDraftOwnerAccountId && editOpen && editingId === device.id && JSON.stringify(deviceDraftValues()) === openedValues) {
+        formName = draft.values.name;
+        formIosVersion = draft.values.iosVersion;
+        formToolchain = draft.values.toolchain;
+        formNotes = draft.values.notes;
+        initialDeviceDraft = JSON.stringify(deviceDraftValues());
+      }
+    }).finally(() => {
+      if (editingId === device.id) loadingDeviceDraft = false;
+    });
   }
 
   async function save(): Promise<void> {
@@ -483,6 +511,7 @@
       const result = await updateDevice(editingId, { name: formName.trim(), iosVersion: formIosVersion.trim(), toolchain: formToolchain.trim(), notes: formNotes.trim(), expectedUpdatedAt: editingUpdatedAt });
       if (result.ok) {
         clearFormDraft(deviceDraftKey);
+        clearSyncedFormDraft(`device:${editingId}`, deviceDraftOwnerAccountId);
         initialDeviceDraft = JSON.stringify(deviceDraftValues());
         setFormUnsaved(deviceFormId, false);
         editOpen = false;
@@ -505,6 +534,7 @@
     editingUpdatedAt = conflictDevice.updatedAt;
     initialDeviceDraft = JSON.stringify(deviceDraftValues());
     clearFormDraft(deviceDraftKey);
+    if (editingId) clearSyncedFormDraft(`device:${editingId}`, deviceDraftOwnerAccountId);
     conflictDevice = null;
   }
 
@@ -520,6 +550,7 @@
     deletingId = new Set(deletingId).add(device.id);
     try {
       await deleteDevice(device.id);
+      clearSyncedFormDraft(`device:${device.id}`);
       await reloadDevices();
     } finally {
       const next = new Set(deletingId);

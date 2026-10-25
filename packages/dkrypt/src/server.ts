@@ -47,6 +47,8 @@ import { dashboardIncidentRoutes } from '#routes/dashboardIncidentRoutes.js';
 import { dashboardCoverageRoutes } from '#routes/dashboardCoverageRoutes.js';
 import { dashboardIntegrationRoutes } from '#routes/dashboardIntegrationRoutes.js';
 import { dashboardOfflineAppStoreRoutes } from '#routes/dashboardOfflineAppStoreRoutes.js';
+import { dashboardWorkerRoutes } from '#routes/dashboardWorkerRoutes.js';
+import { dashboardFormDraftRoutes } from '#routes/dashboardFormDraftRoutes.js';
 import { signedTriggerRoutes } from '#routes/signedTriggerRoutes.js';
 import { billingRoutes, billingWebhookRoutes } from '#routes/billing.js';
 import type { StripeWebhookHealth } from '#stripeWebhookHealth.js';
@@ -365,6 +367,8 @@ export async function buildServer(options: {
   await server.register(dashboardCoverageRoutes);
   await server.register(dashboardIntegrationRoutes);
   await server.register(dashboardOfflineAppStoreRoutes);
+  await server.register(dashboardWorkerRoutes);
+  await server.register(dashboardFormDraftRoutes);
   await server.register(signedTriggerRoutes);
   await server.register(dashboardDiscordRoutes);
   await server.register(dashboardEventsRoutes);

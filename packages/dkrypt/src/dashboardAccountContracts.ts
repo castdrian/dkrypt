@@ -52,6 +52,14 @@ const artifactLibraryPreferencesSchema = Type.Object({
   activeLayoutId: Type.Optional(Type.String({ minLength: 1, maxLength: 40, pattern: '^[a-zA-Z0-9_-]+$' })),
 });
 
+const appNotificationPreferenceSchema = Type.Object({
+  bundleId: Type.String({ minLength: 3, maxLength: 200 }),
+  pushOnSuccess: Type.Optional(Type.Boolean()),
+  pushOnFailure: Type.Optional(Type.Boolean()),
+  emailOnSuccess: Type.Optional(Type.Boolean()),
+  emailOnFailure: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
+
 const userPrefsProperties = {
   artifactFilenameTemplate: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
   shortcutBindings: Type.Optional(Type.Record(Type.String(), Type.String({ minLength: 1, maxLength: 8 }), { maxProperties: 12 })),
@@ -87,6 +95,7 @@ const userPrefsProperties = {
   emailOnFailure: Type.Optional(Type.Boolean()),
   emailOnAlerts: Type.Optional(Type.Boolean()),
   emailOnKeyExpiry: Type.Optional(Type.Boolean()),
+  appNotificationPreferences: Type.Optional(Type.Array(appNotificationPreferenceSchema, { maxItems: 50 })),
   notifyEmail: Type.Optional(Type.String()),
   preferPrimaryDevice: Type.Optional(Type.Boolean()),
 };

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { trackBackgroundWork } from '#backgroundWork.js';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { resolveJobNotificationChannels } from '#appNotificationPreferences.js';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '#config.js';
@@ -19,7 +20,7 @@ import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
 import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, type ArtifactRecord } from '#artifacts.js';
-import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, loadPersistedActiveJobs, loadPersistedJobs, mergeDecryptQuotaOwner, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, settleDecryptQuota, type JobBuildLookup, type JobWorkerLease } from '#jobs/repository.js';
+import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
@@ -58,10 +59,29 @@ let jobSyncTimer: ReturnType<typeof setInterval> | undefined;
 let lastJobSyncAt = 0;
 let syncingPersistedJobs = false;
 let jobStoreClosed = false;
+let workerRegistered = false;
 const JOB_SYNC_INTERVAL_MS = 1_000;
 const JOB_SYNC_THROTTLE_MS = 250;
 const WORKER_LEASE_MS = 60_000;
 const WORKER_LEASE_HEARTBEAT_MS = 15_000;
+function workerRuntimeConfiguration(): WorkerRuntimeConfiguration {
+  return {
+    runtimeVersion: process.version,
+    offlineConcurrency: config.appStoreOfflineMaxWorkers,
+    maxJobWaitSeconds: config.jobMaxWaitSeconds,
+    maxRetries: config.jobMaxRetries,
+    databaseBusyTimeoutMs: config.stateDbBusyTimeoutMs,
+  };
+}
+
+function refreshWorkerInstance(): void {
+  const runtimeConfiguration = workerRuntimeConfiguration();
+  if (!workerRegistered) {
+    registerPersistedWorker(workerInstanceId, runtimeConfiguration);
+    workerRegistered = true;
+  }
+  heartbeatPersistedWorker(workerInstanceId, runtimeConfiguration);
+}
 
 function serializableJob(job: Job): Omit<Job, 'childProcess' | 'waiters'> {
   const { childProcess: _childProcess, waiters: _waiters, ...rest } = job;
@@ -802,6 +822,37 @@ export function getActiveJobs(): Job[] {
   return [...jobs.values()].filter((j) => j.status === 'queued' || j.status === 'running');
 }
 
+export function getWorkerFleetStatus() {
+  refreshWorkerInstance();
+  const workers = listPersistedWorkers();
+  const enabledDeviceSlots = getEffectiveDevices().filter((device) => device.enabled && !device.draining).length;
+  const offlineSlots = sharedOfflineWorkerCapacity(workers);
+  const activeLeases = workers.reduce((total, worker) => total + worker.activeLeases, 0);
+  const activeJobs = loadPersistedActiveJobs();
+  const maxParallelJobs = enabledDeviceSlots + offlineSlots;
+  return {
+    currentWorkerId: workerInstanceId,
+    workers,
+    configurationConsistent: workerRuntimeConfigurationConsistent(workers),
+    capacity: {
+      enabledDeviceSlots,
+      offlineSlots,
+      maxParallelJobs,
+      activeLeases,
+      availableSlots: Math.max(0, maxParallelJobs - activeLeases),
+      queuedJobs: activeJobs.filter((job) => job.status === 'queued').length,
+      runningJobs: activeJobs.filter((job) => job.status === 'running').length,
+    },
+    checkedAt: Date.now(),
+  };
+}
+
+export function setWorkerDrainState(workerId: string, draining: boolean): boolean {
+  const changed = setPersistedWorkerDrain(workerId, draining);
+  if (changed && workerId === workerInstanceId) pumpWorkers();
+  return changed;
+}
+
 export function getArtifactBackedJobs(): Job[] {
   syncPersistedJobsFromRepository(true);
   return [...jobs.values()].filter((job) => job.status === 'done' && !!job.filePath);
@@ -1325,6 +1376,8 @@ function startJobWorker(job: Job, resourceId: string, device?: DeviceRecord): bo
 }
 
 function pumpWorkers(): void {
+  if (jobStoreClosed) return;
+  refreshWorkerInstance();
   syncPersistedJobsFromRepository();
   for (const device of getEffectiveDevices()) {
     if (device.draining && !busyDeviceIds.has(device.id) && !isPersistedWorkerResourceActive(`device:${device.id}`)) updateDevice(device.id, { enabled: false }, 'system');
@@ -1337,6 +1390,7 @@ function pumpWorkers(): void {
   }));
   queue.splice(0, queue.length, ...fairOrder.map((job) => job.id));
   if (!acceptingJobs) return;
+  if (listPersistedWorkers().find((worker) => worker.workerId === workerInstanceId)?.state !== 'active') return;
   for (let slot = 0; slot < config.appStoreOfflineMaxWorkers; slot += 1) {
     const resourceId = `offline:${slot}`;
     if (busyWorkerResourceIds.has(resourceId) || isPersistedWorkerResourceActive(resourceId)) continue;
@@ -1577,7 +1631,8 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       ? `${downloadUrl ? `${label} is ready to download.` : `${label} finished, but its artifact is unavailable.`}${hasWarnings ? ` Completed with warnings: ${job.warnings?.join(' ')}` : ''}`
       : `${label} failed: ${job.error ?? 'unknown error'}`;
 
-    const shouldPush = job.status === 'done' ? (prefs.pushOnSuccess ?? true) : (prefs.pushOnFailure ?? true);
+    const notificationChannels = resolveJobNotificationChannels(prefs, job.bundleId, job.status === 'done' ? 'success' : 'failure');
+    const shouldPush = notificationChannels.push;
     if (shouldPush) {
       void sendPushToUser(job.queuedBy, {
         title,
@@ -1589,7 +1644,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       });
     }
 
-    const shouldMail = job.status === 'done' ? (prefs.emailOnSuccess ?? false) : (prefs.emailOnFailure ?? false);
+    const shouldMail = notificationChannels.email;
     if (shouldMail) void sendMailToUser(job.queuedBy, {
       subject: title,
       text: downloadUrl ? `${body}\n\nDownload: ${downloadUrl}` : body,
@@ -1667,6 +1722,7 @@ async function monitorQueueSlo(): Promise<void> {
 }
 
 export function startJobSweeper(): void {
+  refreshWorkerInstance();
   syncPersistedJobsFromRepository(true);
   recoverExpiredWorkerJobs();
   pumpWorkers();
@@ -1716,6 +1772,7 @@ export function closeJobStore(): void {
   for (const jobId of workerLeases.keys()) stopWorkerLeaseHeartbeat(jobId);
   try {
     releasePersistedWorkersById(workerInstanceId);
+    if (workerRegistered) markPersistedWorkerOffline(workerInstanceId);
   } catch (error) {
     log.warn('could not release worker leases during shutdown', { error: String(error) });
   }

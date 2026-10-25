@@ -1892,6 +1892,9 @@ test('dashboard account and notification routes validate requests and preserve s
   try {
     const protectedRoutes = [
       { method: 'GET' as const, url: '/v1/dashboard/me/prefs' },
+      { method: 'GET' as const, url: '/v1/dashboard/me/form-drafts/api-key%3Anew' },
+      { method: 'PUT' as const, url: '/v1/dashboard/me/form-drafts/api-key%3Anew', payload: { kind: 'api-key', values: { name: 'ci' } } },
+      { method: 'DELETE' as const, url: '/v1/dashboard/me/form-drafts/api-key%3Anew' },
       { method: 'GET' as const, url: '/v1/dashboard/push/public-key' },
       { method: 'POST' as const, url: '/v1/dashboard/push/subscribe', payload: { endpoint, keys: { p256dh: 'public-key', auth: 'secret' } } },
       { method: 'POST' as const, url: '/v1/dashboard/push/unsubscribe', payload: { endpoint } },
@@ -1959,6 +1962,7 @@ test('dashboard account and notification routes validate requests and preserve s
         accent: 'slate',
         highContrast: true,
         pushOnSuccess: false,
+        appNotificationPreferences: [{ bundleId: 'Com.Example.App', pushOnSuccess: false, emailOnFailure: true }],
         notifyEmail: 'test@example.com',
         homeLayouts: [{ id: 'work', name: 'Work', order: ['activeJobs', 'artifacts', 'jobHistory'], hidden: ['jobHistory'], collapsed: [] }],
         activeHomeLayoutId: 'work',
@@ -1983,6 +1987,7 @@ test('dashboard account and notification routes validate requests and preserve s
       accent: 'slate',
       highContrast: true,
       pushOnSuccess: false,
+      appNotificationPreferences: [{ bundleId: 'com.example.app', pushOnSuccess: false, emailOnFailure: true }],
       homeLayouts: [{ id: 'work', name: 'Work', order: ['activeJobs', 'artifacts', 'jobHistory'], hidden: ['jobHistory'], collapsed: [] }],
       activeHomeLayoutId: 'work',
       viewModes: { artifacts: 'cards', jobHistory: 'cards', devices: 'cards' },
@@ -2006,6 +2011,7 @@ test('dashboard account and notification routes validate requests and preserve s
       accent: 'slate',
       highContrast: true,
       pushOnSuccess: false,
+      appNotificationPreferences: [{ bundleId: 'com.example.app', pushOnSuccess: false, emailOnFailure: true }],
       activeHomeLayoutId: 'work',
       viewModes: { artifacts: 'cards', devices: 'cards' },
       settingsMode: 'advanced',
@@ -2046,8 +2052,55 @@ test('dashboard account and notification routes validate requests and preserve s
       largeTargets: false,
     });
 
+    const draftId = 'api-key%3Anew';
+    const draftSave = await server.inject({
+      method: 'PUT',
+      url: `/v1/dashboard/me/form-drafts/${draftId}`,
+      headers: { cookie },
+      payload: { kind: 'api-key', values: { name: 'ci-runner', expiresInDays: '30', bundleScope: 'com.example.app', dailyLimit: '100' } },
+    });
+    expect(draftSave.statusCode).toBe(200);
+    expect(draftSave.json()).toMatchObject({ draft: { kind: 'api-key', values: { name: 'ci-runner', expiresInDays: '30', bundleScope: 'com.example.app', dailyLimit: '100' } } });
+
+    const draftGet = await server.inject({ method: 'GET', url: `/v1/dashboard/me/form-drafts/${draftId}`, headers: { cookie } });
+    expect(draftGet.json()).toMatchObject({ draft: { kind: 'api-key', values: { name: 'ci-runner' } } });
+
+    const otherUserDraft = await server.inject({
+      method: 'GET',
+      url: `/v1/dashboard/me/form-drafts/${draftId}`,
+      headers: { cookie: createSessionCookie(otherUserId, 0n) },
+    });
+    expect(otherUserDraft.json()).toEqual({});
+
+    const secretDraft = await server.inject({
+      method: 'PUT',
+      url: `/v1/dashboard/me/form-drafts/${draftId}`,
+      headers: { cookie },
+      payload: { kind: 'api-key', values: { revealedKey: 'secret-value' } },
+    });
+    expect(secretDraft.statusCode).toBe(400);
+
+    const wrongKindDraft = await server.inject({
+      method: 'PUT',
+      url: `/v1/dashboard/me/form-drafts/${draftId}`,
+      headers: { cookie },
+      payload: { kind: 'device', values: { name: 'iPad' } },
+    });
+    expect(wrongKindDraft.statusCode).toBe(400);
+
+    const draftDelete = await server.inject({ method: 'DELETE', url: `/v1/dashboard/me/form-drafts/${draftId}`, headers: { cookie } });
+    expect(draftDelete.statusCode).toBe(200);
+    const deletedDraft = await server.inject({ method: 'GET', url: `/v1/dashboard/me/form-drafts/${draftId}`, headers: { cookie } });
+    expect(deletedDraft.json()).toEqual({});
+
     const invalidTimeZone = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { displayTimeZone: 'Not/A_Time_Zone' } });
     expect(invalidTimeZone.statusCode).toBe(400);
+
+    const invalidAppNotification = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { appNotificationPreferences: [{ bundleId: 'not-a-bundle-id', pushOnFailure: false }] } });
+    expect(invalidAppNotification.statusCode).toBe(400);
+
+    const duplicateAppNotification = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { appNotificationPreferences: [{ bundleId: 'com.example.app' }, { bundleId: 'COM.EXAMPLE.APP' }] } });
+    expect(duplicateAppNotification.statusCode).toBe(400);
 
     const invalidNavigation = await server.inject({ method: 'PUT', url: '/v1/dashboard/me/prefs', headers: { cookie }, payload: { pinnedNavigation: ['not-a-tab'] } });
     expect(invalidNavigation.statusCode).toBe(400);

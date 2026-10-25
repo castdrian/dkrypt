@@ -15,6 +15,9 @@ export interface TrackedDecrypt {
   createdAt: number;
   artifactId?: string;
   artifactUrl?: string;
+  executionPath?: 'appstore_offline' | 'device' | 'device_fallback';
+  attempt?: number;
+  finishedAt?: string;
 }
 
 const MAX_TRACKED = 30;

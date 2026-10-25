@@ -1704,6 +1704,46 @@ export function fetchDashboardDoctor(): Promise<DashboardDoctorReport> {
   return apiJson('/v1/dashboard/doctor');
 }
 
+export interface WorkerInstanceStatus {
+  workerId: string;
+  startedAt: number;
+  heartbeatAt: number;
+  state: 'active' | 'draining' | 'drained' | 'offline';
+  configuration: {
+    runtimeVersion: string;
+    offlineConcurrency: number;
+    maxJobWaitSeconds: number;
+    maxRetries: number;
+    databaseBusyTimeoutMs: number;
+  };
+  activeLeases: number;
+  resources: string[];
+}
+
+export interface WorkerFleetStatus {
+  currentWorkerId: string;
+  workers: WorkerInstanceStatus[];
+  configurationConsistent: boolean;
+  capacity: {
+    enabledDeviceSlots: number;
+    offlineSlots: number;
+    maxParallelJobs: number;
+    activeLeases: number;
+    availableSlots: number;
+    queuedJobs: number;
+    runningJobs: number;
+  };
+  checkedAt: number;
+}
+
+export function fetchWorkerFleetStatus(): Promise<WorkerFleetStatus> {
+  return apiJson('/v1/dashboard/workers');
+}
+
+export function setWorkerDraining(workerId: string, draining: boolean): Promise<{ ok: boolean; workers: WorkerInstanceStatus[] }> {
+  return apiJson(`/v1/dashboard/workers/${encodeURIComponent(workerId)}/drain`, { method: 'POST', body: JSON.stringify({ draining }) });
+}
+
 export interface DashboardBrowserCheck {
   cookieSessionValid: boolean;
   expectedOrigin: string | null;

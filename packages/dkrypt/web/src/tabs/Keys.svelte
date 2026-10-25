@@ -40,6 +40,7 @@
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#lib/session.svelte';
   import { confirmDialog, keyUsageJumpState, showToast } from '#lib/ui.svelte';
+  import { clearFormDraft, clearSyncedFormDraft, readSyncedFormDraft, writeFormDraft, writeSyncedFormDraft } from '#lib/formDrafts.svelte';
 
   const PAGE_SIZE = 25;
 
@@ -47,6 +48,8 @@
   let keyExpiry = $state('never');
   let keyScope = $state('');
   let keyDailyLimit = $state('');
+  let keyDraftReady = $state(false);
+  let keyDraftAccount = '';
   let simulateBundleId = $state('');
   let simulateSource = $state<'appstore' | 'testflight'>('appstore');
   let simulateKeyId = $state('');
@@ -147,6 +150,41 @@
   const canManageConcurrency = $derived(canManage);
   const canManageTestFlight = $derived(canManage);
 
+  $effect(() => {
+    const accountId = sessionState.loggedIn ? sessionState.sub ?? '' : '';
+    if (!accountId || accountId === keyDraftAccount) return;
+    keyDraftAccount = accountId;
+    keyDraftReady = false;
+    keyName = '';
+    keyExpiry = 'never';
+    keyScope = '';
+    keyDailyLimit = '';
+    const localKey = `api-key:${accountId}:new`;
+    void readSyncedFormDraft<{ name: string; expiresInDays: string; bundleScope: string; dailyLimit: string }>('api-key:new', 'api-key', localKey).then((draft) => {
+      if (sessionState.sub !== accountId) return;
+      if (draft) {
+        keyName = draft.values.name ?? '';
+        keyExpiry = draft.values.expiresInDays ?? 'never';
+        keyScope = draft.values.bundleScope ?? '';
+        keyDailyLimit = draft.values.dailyLimit ?? '';
+      }
+      keyDraftReady = true;
+    });
+  });
+
+  $effect(() => {
+    if (!keyDraftReady || !keyDraftAccount || sessionState.sub !== keyDraftAccount) return;
+    const values = { name: keyName, expiresInDays: keyExpiry, bundleScope: keyScope, dailyLimit: keyDailyLimit };
+    const localKey = `api-key:${keyDraftAccount}:new`;
+    if (keyName.trim() || keyScope.trim() || keyDailyLimit.trim()) {
+      writeFormDraft(localKey, values);
+      writeSyncedFormDraft('api-key:new', 'api-key', values);
+    } else {
+      clearFormDraft(localKey);
+      clearSyncedFormDraft('api-key:new');
+    }
+  });
+
   async function loadAllKeysPage(): Promise<void> {
     const data = await fetchAllKeys(undefined, PAGE_SIZE, allSearch);
     all = data.keys;
@@ -233,8 +271,11 @@
         : await requestKey(name, expiresInDays, parseScope(keyScope), dailyLimit);
       if (!ok) return;
       keyName = '';
+      keyExpiry = 'never';
       keyScope = '';
       keyDailyLimit = '';
+      clearFormDraft(`api-key:${sessionState.sub}:new`);
+      clearSyncedFormDraft('api-key:new');
       if (canCreate && data.key) {
         revealedKey = data.key;
         showToast('Key created', 'success');
@@ -479,6 +520,7 @@
     <div class="mb-2.5 text-sm text-muted">
       {canCreate ? 'API keys can submit decrypts, check job status, and access the IPA library. Sessions, billing, and dashboard management stay in dkrypt. This key is created immediately and is ready to use.' : 'API keys can submit decrypts, check job status, and access the IPA library. Sessions, billing, and dashboard management stay in dkrypt. This request needs approval from someone with Manage API keys before it works.'}
     </div>
+    <p class="mb-3 text-[11px] text-muted">This form draft syncs to your account. The generated API key is never saved and is shown only once.</p>
     <label for="key-name" class="mb-1 block text-xs text-muted">Name</label>
     <Input id="key-name" placeholder="e.g. laptop, ci-runner" bind:value={keyName} />
     <label for="key-expiry" class="mt-3 mb-1 block text-xs text-muted">Expires</label>

@@ -527,8 +527,26 @@ export interface UserPrefs {
   emailOnFailure?: boolean;
   emailOnAlerts?: boolean;
   emailOnKeyExpiry?: boolean;
+  appNotificationPreferences?: AppNotificationPreference[];
+  formDrafts?: Record<string, AccountFormDraft>;
   notifyEmail?: string;
   preferPrimaryDevice?: boolean;
+}
+
+export interface AppNotificationPreference {
+  bundleId: string;
+  pushOnSuccess?: boolean;
+  pushOnFailure?: boolean;
+  emailOnSuccess?: boolean;
+  emailOnFailure?: boolean;
+}
+
+export type AccountFormDraftKind = 'api-key' | 'device' | 'role';
+
+export interface AccountFormDraft {
+  kind: AccountFormDraftKind;
+  values: Record<string, string>;
+  savedAt: number;
 }
 
 export type HomeModuleId = 'artifacts' | 'activeJobs' | 'jobHistory';

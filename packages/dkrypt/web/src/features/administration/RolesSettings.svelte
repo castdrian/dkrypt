@@ -33,7 +33,7 @@
   import { parseBits, permissionLabels, PermissionFlag, serializeBits } from '#lib/permissions';
   import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#lib/session.svelte';
   import { confirmDialog } from '#lib/ui.svelte';
-  import { clearFormDraft, readFormDraft, setFormUnsaved, writeFormDraft } from '#lib/formDrafts.svelte';
+  import { clearFormDraft, clearSyncedFormDraft, readFormDraft, readSyncedFormDraft, setFormUnsaved, writeFormDraft, writeSyncedFormDraft } from '#lib/formDrafts.svelte';
 
   interface RoleDraft {
     name: string;
@@ -83,23 +83,42 @@
   let deletingId = $state<string | null>(null);
   let roleImpact = $state<{ permissions: string; affectedCount: number; members: Array<{ username: string; displayName?: string; beforePermissions: string; afterPermissions: string }>; truncated: boolean; memberDetailsHidden?: boolean } | null>(null);
   let draftStorageKey = $state('');
+  let syncedDraftId = $state('');
+  let draftOwnerAccountId = $state('');
+  let loadingRoleDraft = $state(false);
   const roleFormId = 'role-editor';
   const formIsDirty = $derived(Boolean(editingRole
     ? formName !== editingRole.name || formColor !== editingRole.color || serializeBits(formBits) !== editingRole.permissions
     : formName.trim() || serializeBits(formBits) !== '0'));
 
   $effect(() => {
-    if (!dialogOpen || !draftStorageKey) return;
-    if (formIsDirty) writeFormDraft<RoleDraft>(draftStorageKey, { name: formName, color: formColor, permissions: serializeBits(formBits) });
+    if (dialogOpen && draftOwnerAccountId && sessionState.sub !== draftOwnerAccountId) {
+      dialogOpen = false;
+      editingRole = null;
+      roleImpact = null;
+      setFormUnsaved(roleFormId, false);
+    }
+  });
+
+  $effect(() => {
+    if (!dialogOpen || !draftStorageKey || loadingRoleDraft) return;
+    if (formIsDirty) {
+      const values = { name: formName, color: formColor, permissions: serializeBits(formBits) };
+      writeFormDraft<RoleDraft>(draftStorageKey, values);
+      if (syncedDraftId) writeSyncedFormDraft(syncedDraftId, 'role', values, draftOwnerAccountId);
+    }
     setFormUnsaved(roleFormId, formIsDirty);
   });
 
   function openAdd(): void {
+    draftOwnerAccountId = sessionState.sub ?? '';
     editingRole = null;
     formName = '';
     formColor = COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)];
     formBits = 0n;
     draftStorageKey = `role:${sessionState.sub ?? 'account'}:new`;
+    syncedDraftId = 'role:new';
+    loadingRoleDraft = true;
     roleImpact = null;
     const draft = readFormDraft<RoleDraft>(draftStorageKey)?.values;
     if (draft) {
@@ -108,14 +127,28 @@
       formBits = parseBits(draft.permissions);
     }
     dialogOpen = true;
+    const openedId = syncedDraftId;
+    const openedValues = JSON.stringify({ name: formName, color: formColor, permissions: serializeBits(formBits) });
+    void readSyncedFormDraft<RoleDraft>(openedId, 'role', draftStorageKey).then((draft) => {
+      if (draft && sessionState.sub === draftOwnerAccountId && dialogOpen && syncedDraftId === openedId && JSON.stringify({ name: formName, color: formColor, permissions: serializeBits(formBits) }) === openedValues) {
+        formName = draft.values.name;
+        formColor = draft.values.color;
+        formBits = parseBits(draft.values.permissions);
+      }
+    }).finally(() => {
+      if (syncedDraftId === openedId) loadingRoleDraft = false;
+    });
   }
 
   function openEdit(r: Role): void {
+    draftOwnerAccountId = sessionState.sub ?? '';
     editingRole = r;
     formName = r.name;
     formColor = r.color;
     formBits = parseBits(r.permissions);
     draftStorageKey = `role:${sessionState.sub ?? 'account'}:${r.id}`;
+    syncedDraftId = `role:${r.id}`;
+    loadingRoleDraft = true;
     roleImpact = null;
     const draft = readFormDraft<RoleDraft>(draftStorageKey)?.values;
     if (draft) {
@@ -124,6 +157,17 @@
       formBits = parseBits(draft.permissions);
     }
     dialogOpen = true;
+    const openedId = syncedDraftId;
+    const openedValues = JSON.stringify({ name: formName, color: formColor, permissions: serializeBits(formBits) });
+    void readSyncedFormDraft<RoleDraft>(openedId, 'role', draftStorageKey).then((draft) => {
+      if (draft && sessionState.sub === draftOwnerAccountId && dialogOpen && syncedDraftId === openedId && JSON.stringify({ name: formName, color: formColor, permissions: serializeBits(formBits) }) === openedValues) {
+        formName = draft.values.name;
+        formColor = draft.values.color;
+        formBits = parseBits(draft.values.permissions);
+      }
+    }).finally(() => {
+      if (syncedDraftId === openedId) loadingRoleDraft = false;
+    });
   }
 
   async function changeRoleDialogOpen(nextOpen: boolean): Promise<void> {
@@ -149,6 +193,7 @@
         dialogOpen = false;
         roleImpact = null;
         if (draftStorageKey) clearFormDraft(draftStorageKey);
+        if (syncedDraftId) clearSyncedFormDraft(syncedDraftId, draftOwnerAccountId);
         setFormUnsaved(roleFormId, false);
         void load();
       }
@@ -162,7 +207,10 @@
     deletingId = r.id;
     try {
       const { ok } = await deleteRole(r.id, r.name);
-      if (ok) void load();
+      if (ok) {
+        clearSyncedFormDraft(`role:${r.id}`);
+        void load();
+      }
     } finally {
       deletingId = null;
     }

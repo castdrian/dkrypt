@@ -340,6 +340,13 @@ export interface NotificationPrefs {
   emailOnFailure?: boolean;
   emailOnAlerts?: boolean;
   emailOnKeyExpiry?: boolean;
+  appNotificationPreferences?: Array<{
+    bundleId: string;
+    pushOnSuccess?: boolean;
+    pushOnFailure?: boolean;
+    emailOnSuccess?: boolean;
+    emailOnFailure?: boolean;
+  }>;
   notifyEmail?: string;
 }
 
@@ -352,11 +359,12 @@ export async function fetchNotificationPrefs(): Promise<NotificationPrefs & { ac
 
 export async function pushNotificationPrefs(patch: NotificationPrefs): Promise<void> {
   if (!sessionState.loggedIn) return;
-  await fetch('/v1/dashboard/me/prefs', {
+  const response = await fetch('/v1/dashboard/me/prefs', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
+  if (!response.ok) throw new Error('Could not save notification preferences');
 }
 
 export async function pushShortcutBindings(bindings: ShortcutBindings): Promise<void> {

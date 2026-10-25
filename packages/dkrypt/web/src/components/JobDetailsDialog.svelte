@@ -105,10 +105,11 @@
         </ul>
       </section>
     {/if}
-    {#if timeline.executionPath === 'appstore_offline' || timeline.executionPath === 'device_fallback'}
+    {#if timeline.executionPath}
       <section class="mb-4 rounded-xl border border-border/70 bg-muted/20 p-3" aria-label="Processing path">
         <div class="text-xs font-semibold">Processing path</div>
         <div class="mt-2 flex flex-wrap gap-2 text-xs">
+          {#if timeline.executionPath === 'appstore_offline'}<span class="rounded-full border border-border px-2 py-1">Server-side</span>{:else if timeline.executionPath === 'device_fallback'}<span class="rounded-full border border-border px-2 py-1">Device fallback</span>{:else}<span class="rounded-full border border-border px-2 py-1">On device</span>{/if}
           {#if timeline.offlineAttemptDurationMs !== undefined}<span class="rounded-full border border-border px-2 py-1">Server attempt · {fmtDurationApprox(timeline.offlineAttemptDurationMs)}</span>{/if}
           {#if timeline.executionPath === 'device_fallback' && timeline.offlineFailureReason}<span class="max-w-full rounded-full border border-border px-2 py-1">Fallback · {timeline.offlineFailureReason}</span>{/if}
           {#if timeline.deviceFallbackDurationMs !== undefined}<span class="rounded-full border border-border px-2 py-1">Device attempt · {fmtDurationApprox(timeline.deviceFallbackDurationMs)}</span>{/if}

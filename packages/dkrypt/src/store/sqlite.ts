@@ -834,6 +834,19 @@ const migrations = [
       );
     `,
   },
+  {
+    version: 33,
+    sql: `
+      CREATE TABLE IF NOT EXISTS worker_instances (
+        worker_id TEXT PRIMARY KEY NOT NULL,
+        started_at INTEGER NOT NULL,
+        heartbeat_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('active', 'draining', 'drained', 'offline')),
+        configuration TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS worker_instances_by_heartbeat ON worker_instances(heartbeat_at);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

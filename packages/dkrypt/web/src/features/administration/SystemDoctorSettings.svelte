@@ -14,6 +14,7 @@
   import GithubOidcSettings from '#features/administration/GithubOidcSettings.svelte';
   import AppStoreOfflineSettings from '#features/administration/AppStoreOfflineSettings.svelte';
   import BridgeDiagnostics from '#features/devices/BridgeDiagnostics.svelte';
+  import WorkerOperations from '#features/administration/WorkerOperations.svelte';
 
   const checkTitles: Record<string, string> = {
     'session-secret': 'Session signing secret',
@@ -283,3 +284,4 @@
   </section>
   </AdvancedSection>
 </Card>
+<WorkerOperations />

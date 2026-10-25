@@ -1,6 +1,7 @@
 <script lang="ts">
   import CopyButton from '#components/CopyButton.svelte';
   import Alert from '#lib/components/ui/Alert.svelte';
+  import Badge from '#lib/components/ui/Badge.svelte';
   import { dashboardArtifactDownloadUrl, fetchJobStatus } from '#lib/api';
   import { appDisplayName } from '#lib/appCatalog.svelte';
   import Button from '#lib/components/ui/Button.svelte';
@@ -10,11 +11,15 @@
   import { notifyJobFinished } from '#lib/notifications';
   import { playChime, vibrateCompletion } from '#lib/sound';
   import { showToast, soundEnabledState } from '#lib/ui.svelte';
+  import { fmtDurationApprox } from '#lib/format.svelte';
 
   interface CompletedDecrypt {
     label: string;
     url: string;
     warnings?: string[];
+    executionPath?: TrackedDecrypt['executionPath'];
+    durationMs?: number;
+    attempt?: number;
   }
 
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -38,7 +43,8 @@
     }
 
     const url = dashboardArtifactDownloadUrl(artifactId);
-    completed = [...completed, { label, url, warnings: d.warnings }];
+    const durationMs = d.finishedAt ? Math.max(0, Date.parse(d.finishedAt) - d.createdAt) : undefined;
+    completed = [...completed, { label, url, warnings: d.warnings, executionPath: d.executionPath, durationMs, attempt: d.attempt }];
     notifyJobFinished(d.warnings?.length ? 'Decrypt finished with warnings' : 'Decrypt finished', `${label} is ready to download.${warningText}`, url);
     showToast(`${label} is ready to download.${warningText}`, 'success', {
       track: true,
@@ -70,13 +76,16 @@
           error: data.error,
           artifactId: data.artifactId,
           artifactUrl: data.artifactUrl,
+          executionPath: data.executionPath,
+          attempt: data.attempt,
+          finishedAt: data.finishedAt,
         });
         if (!finished) continue;
         if (soundEnabledState.value) {
           playChime();
           vibrateCompletion(data.status === 'done');
         }
-        if (data.status === 'done') presentCompletion({ ...d, warnings: data.warnings }, data.artifactId);
+        if (data.status === 'done') presentCompletion({ ...d, warnings: data.warnings, executionPath: data.executionPath, attempt: data.attempt, finishedAt: data.finishedAt }, data.artifactId);
         else {
           const label = decryptLabel(d);
           const message = `${label} failed: ${data.error ?? 'unknown error'}`;
@@ -112,6 +121,11 @@
     <div class="mb-1 text-sm font-medium">Decrypt ready</div>
     <div class="mb-3 text-xs text-muted">
       {current.label} has an artifact ready for download.
+    </div>
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+      {#if current.executionPath === 'appstore_offline'}<Badge variant="secondary">Server-side</Badge>{:else if current.executionPath === 'device_fallback'}<Badge variant="secondary">Device fallback</Badge>{:else if current.executionPath === 'device'}<Badge variant="secondary">On device</Badge>{/if}
+      {#if current.durationMs !== undefined}<span>Total time {fmtDurationApprox(current.durationMs)}</span>{/if}
+      {#if current.attempt && current.attempt > 1}<span>· {current.attempt} attempts</span>{/if}
     </div>
     {#if current.warnings?.length}
       <Alert variant="warning" class="mb-4">

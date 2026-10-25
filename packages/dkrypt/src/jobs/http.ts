@@ -10,7 +10,7 @@ import { artifactDownloadName, artifactFileAvailable, getArtifactForJob, touchAr
 
 interface CloseAwareRequest {
   headers: { range?: string | string[] };
-  on(event: 'close', listener: () => void): unknown;
+  on(event: 'aborted', listener: () => void): unknown;
 }
 
 interface ByteRange {
@@ -137,9 +137,14 @@ export async function streamFilePath(
       finish();
     });
 
+    stream.on('end', finish);
     stream.on('close', finish);
-    req.on('close', () => {
+    req.on('aborted', () => {
       stream.destroy();
+      finish();
+    });
+    res.reply.raw.on('close', () => {
+      if (!res.reply.raw.writableFinished) stream.destroy();
       finish();
     });
 

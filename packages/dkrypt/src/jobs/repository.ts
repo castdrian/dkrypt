@@ -44,6 +44,34 @@ export interface JobWorkerLease {
   leaseUntil: number;
 }
 
+export interface WorkerRuntimeConfiguration {
+  runtimeVersion: string;
+  offlineConcurrency: number;
+  maxJobWaitSeconds: number;
+  maxRetries: number;
+  databaseBusyTimeoutMs: number;
+}
+
+export interface PersistedWorkerInstance {
+  workerId: string;
+  startedAt: number;
+  heartbeatAt: number;
+  state: 'active' | 'draining' | 'drained' | 'offline';
+  configuration: WorkerRuntimeConfiguration;
+  activeLeases: number;
+  resources: string[];
+}
+
+export function sharedOfflineWorkerCapacity(workers: readonly PersistedWorkerInstance[]): number {
+  return workers.reduce((capacity, worker) =>
+    worker.state === 'active' ? Math.max(capacity, worker.configuration.offlineConcurrency) : capacity, 0);
+}
+
+export function workerRuntimeConfigurationConsistent(workers: readonly PersistedWorkerInstance[]): boolean {
+  const liveWorkers = workers.filter((worker) => worker.state === 'active' || worker.state === 'draining');
+  return new Set(liveWorkers.map((worker) => JSON.stringify(worker.configuration))).size <= 1;
+}
+
 export interface JobRepository {
   load(): StoredJob[];
   loadActive(): StoredJob[];
@@ -61,6 +89,11 @@ export interface JobRepository {
   listExpiredRunning(now?: number): StoredJob[];
   requeueExpiredRunning(job: Job, now?: number): boolean;
   countActiveWorkers(resourcePrefix: string, now?: number): number;
+  registerWorker(workerId: string, configuration: WorkerRuntimeConfiguration, now?: number): void;
+  heartbeatWorker(workerId: string, configuration: WorkerRuntimeConfiguration, now?: number): void;
+  listWorkers(now?: number, staleAfterMs?: number): PersistedWorkerInstance[];
+  setWorkerDrain(workerId: string, draining: boolean, now?: number, staleAfterMs?: number): boolean;
+  markWorkerOffline(workerId: string): void;
   countRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number;
   quotaUsage(ownerId: string, limit: number | undefined, now?: number): DecryptQuotaUsage;
   quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
@@ -351,6 +384,11 @@ export function createJobRepository(database: Database): JobRepository {
     claimWorker(jobId, workerId, resourceId, leaseMs, now = Date.now()) {
       database.exec('BEGIN IMMEDIATE;');
       try {
+        const worker = database.query('SELECT state, heartbeat_at FROM worker_instances WHERE worker_id = ?;').get(workerId) as { state: string; heartbeat_at: number } | null;
+        if (!worker || worker.state !== 'active' || worker.heartbeat_at <= now - 20_000) {
+          database.exec('COMMIT;');
+          return undefined;
+        }
         const job = database.query('SELECT payload, status FROM jobs WHERE id = ?;').get(jobId) as { payload: string; status: string } | null;
         const expectedPayload = knownPayloads.get(jobId);
         if (!job || job.status !== 'queued' || expectedPayload === undefined || job.payload !== expectedPayload) {
@@ -467,6 +505,68 @@ export function createJobRepository(database: Database): JobRepository {
       const row = database.query('SELECT COUNT(*) AS count FROM job_worker_leases WHERE resource_id LIKE ? AND lease_until > ?;').get(`${resourcePrefix}%`, now) as { count?: number } | null;
       return row?.count ?? 0;
     },
+    registerWorker(workerId, configuration, now = Date.now()) {
+      database.query(`
+        INSERT INTO worker_instances (worker_id, started_at, heartbeat_at, state, configuration)
+        VALUES (?, ?, ?, 'active', ?)
+        ON CONFLICT(worker_id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at, configuration = excluded.configuration;
+      `).run(workerId, now, now, JSON.stringify(configuration));
+    },
+    heartbeatWorker(workerId, configuration, now = Date.now()) {
+      database.query(`
+        UPDATE worker_instances
+        SET heartbeat_at = ?, configuration = ?,
+          state = CASE
+            WHEN state = 'draining' AND NOT EXISTS (
+              SELECT 1 FROM job_worker_leases WHERE worker_id = ? AND lease_until > ?
+            ) THEN 'drained'
+            ELSE state
+          END
+        WHERE worker_id = ?;
+      `).run(now, JSON.stringify(configuration), workerId, now, workerId);
+    },
+    listWorkers(now = Date.now(), staleAfterMs = 20_000) {
+      const rows = database.query(`
+        SELECT worker_instances.worker_id, worker_instances.started_at, worker_instances.heartbeat_at,
+          worker_instances.state, worker_instances.configuration,
+          COUNT(job_worker_leases.job_id) AS active_leases,
+          GROUP_CONCAT(job_worker_leases.resource_id, char(10)) AS resources
+        FROM worker_instances
+        LEFT JOIN job_worker_leases ON job_worker_leases.worker_id = worker_instances.worker_id AND job_worker_leases.lease_until > ?
+        GROUP BY worker_instances.worker_id
+        ORDER BY worker_instances.started_at DESC;
+      `).all(now) as Array<{ worker_id: string; started_at: number; heartbeat_at: number; state: string; configuration: string; active_leases: number; resources: string | null }>;
+      return rows.map((row) => ({
+        workerId: row.worker_id,
+        startedAt: row.started_at,
+        heartbeatAt: row.heartbeat_at,
+        state: now - row.heartbeat_at > staleAfterMs ? 'offline' as const : row.state as PersistedWorkerInstance['state'],
+        configuration: JSON.parse(row.configuration) as WorkerRuntimeConfiguration,
+        activeLeases: row.active_leases,
+        resources: row.resources ? row.resources.split('\n').filter(Boolean) : [],
+      }));
+    },
+    setWorkerDrain(workerId, draining, now = Date.now(), staleAfterMs = 20_000) {
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const worker = database.query('SELECT heartbeat_at FROM worker_instances WHERE worker_id = ?;').get(workerId) as { heartbeat_at: number } | null;
+        if (!worker || now - worker.heartbeat_at > staleAfterMs) {
+          database.exec('COMMIT;');
+          return false;
+        }
+        const hasActiveLease = database.query('SELECT 1 AS active FROM job_worker_leases WHERE worker_id = ? AND lease_until > ? LIMIT 1;').get(workerId, now);
+        const state = draining ? hasActiveLease ? 'draining' : 'drained' : 'active';
+        database.query('UPDATE worker_instances SET state = ? WHERE worker_id = ?;').run(state, workerId);
+        database.exec('COMMIT;');
+        return true;
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
+    markWorkerOffline(workerId) {
+      database.query("UPDATE worker_instances SET state = 'offline' WHERE worker_id = ?;").run(workerId);
+    },
     countRunningJobs(filter) {
       if (filter.queuedBy !== undefined) {
         const row = database.query("SELECT COUNT(*) AS count FROM jobs WHERE status = 'running' AND json_extract(payload, '$.queuedBy') = ? COLLATE NOCASE;").get(filter.queuedBy) as { count?: number } | null;
@@ -582,6 +682,26 @@ export function requeuePersistedExpiredRunningJob(job: Job): boolean {
 
 export function countPersistedActiveWorkers(resourcePrefix: string): number {
   return repository.countActiveWorkers(resourcePrefix);
+}
+
+export function registerPersistedWorker(workerId: string, configuration: WorkerRuntimeConfiguration): void {
+  repository.registerWorker(workerId, configuration);
+}
+
+export function heartbeatPersistedWorker(workerId: string, configuration: WorkerRuntimeConfiguration): void {
+  repository.heartbeatWorker(workerId, configuration);
+}
+
+export function listPersistedWorkers(): PersistedWorkerInstance[] {
+  return repository.listWorkers();
+}
+
+export function setPersistedWorkerDrain(workerId: string, draining: boolean): boolean {
+  return repository.setWorkerDrain(workerId, draining);
+}
+
+export function markPersistedWorkerOffline(workerId: string): void {
+  repository.markWorkerOffline(workerId);
 }
 
 export function countPersistedRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number {

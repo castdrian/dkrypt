@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { createJobRepository } from '#jobs/repository.js';
+import { createJobRepository, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type PersistedWorkerInstance } from '#jobs/repository.js';
 import type { Job } from '#jobs/types.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
 
@@ -22,6 +22,28 @@ function createJob(overrides: Partial<Job> = {}): Job {
     ...overrides,
   };
 }
+
+test('worker fleet estimates shared offline slots once and checks draining runtime settings', () => {
+  const base: PersistedWorkerInstance = {
+    workerId: 'worker-a',
+    startedAt: 1,
+    heartbeatAt: 1,
+    state: 'active',
+    configuration: { runtimeVersion: 'v1.2.3', offlineConcurrency: 2, maxJobWaitSeconds: 1800, maxRetries: 1, databaseBusyTimeoutMs: 5000 },
+    activeLeases: 0,
+    resources: [],
+  };
+  const second: PersistedWorkerInstance = {
+    ...base,
+    workerId: 'worker-b',
+    configuration: { ...base.configuration },
+  };
+
+  expect(sharedOfflineWorkerCapacity([base, second])).toBe(2);
+  expect(workerRuntimeConfigurationConsistent([base, second])).toBeTrue();
+  expect(workerRuntimeConfigurationConsistent([base, { ...second, state: 'draining', configuration: { ...second.configuration, maxRetries: 2 }, activeLeases: 1 }])).toBeFalse();
+  expect(sharedOfflineWorkerCapacity([{ ...base, state: 'draining' }])).toBe(0);
+});
 
 test('job repository indexes existing JSON jobs after SQLite migration', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-repository-migration-'));
@@ -126,6 +148,63 @@ test('job repository persists exact-build lookups and timelines across restart',
       bundleId: 'com.example.app',
       externalVersionId: 'build-7',
     })).toEqual(['other-project-build']);
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('worker drains preserve active leases and stop new job claims', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-worker-drain-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const configuration = { runtimeVersion: 'v1.2.3', offlineConcurrency: 2, maxJobWaitSeconds: 1800, maxRetries: 1, databaseBusyTimeoutMs: 5000 };
+    repository.registerWorker('worker-a', configuration, 1_000);
+    const first = createJob({ id: 'job-running' });
+    const second = createJob({ id: 'job-queued' });
+    repository.replace([first, second]);
+    const lease = repository.claimWorker(first.id, 'worker-a', 'device:one', 60_000, 1_000);
+
+    expect(lease).toBeDefined();
+    expect(repository.setWorkerDrain('worker-a', true, 1_001)).toBeTrue();
+    expect(repository.listWorkers(1_002)).toMatchObject([{ state: 'draining', activeLeases: 1 }]);
+    expect(repository.claimWorker(second.id, 'worker-a', 'device:two', 60_000, 1_002)).toBeUndefined();
+
+    repository.releaseWorker(lease!);
+    repository.heartbeatWorker('worker-a', configuration, 1_003);
+    expect(repository.listWorkers(1_004)).toMatchObject([{ state: 'drained', activeLeases: 0 }]);
+    expect(repository.claimWorker(second.id, 'worker-a', 'device:two', 60_000, 1_004)).toBeUndefined();
+
+    expect(repository.setWorkerDrain('worker-a', false, 1_005)).toBeTrue();
+    expect(repository.claimWorker(second.id, 'worker-a', 'device:two', 60_000, 1_006)).toBeDefined();
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('worker configuration snapshots expose stale workers and runtime differences', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-worker-configuration-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const first = { runtimeVersion: 'v1.2.3', offlineConcurrency: 1, maxJobWaitSeconds: 1800, maxRetries: 1, databaseBusyTimeoutMs: 5000 };
+    const second = { ...first, maxRetries: 2 };
+    repository.registerWorker('worker-a', first, 1_000);
+    repository.registerWorker('worker-b', second, 1_000);
+    repository.heartbeatWorker('worker-a', first, 1_100);
+
+    expect(repository.listWorkers(1_101)).toMatchObject([
+      { workerId: 'worker-a', state: 'active', configuration: first },
+      { workerId: 'worker-b', state: 'active', configuration: second },
+    ]);
+    expect(repository.listWorkers(22_000)).toMatchObject([
+      { workerId: 'worker-a', state: 'offline' },
+      { workerId: 'worker-b', state: 'offline' },
+    ]);
   } finally {
     repository?.close();
     await rm(stateDir, { recursive: true, force: true });

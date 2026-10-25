@@ -24,6 +24,7 @@ const defaultHomeLayout: HomeLayoutPreference = {
 };
 
 function normalizedPrefs(prefs: UserPrefs): UserPrefs {
+  const { formDrafts: _formDrafts, ...preferenceValues } = prefs;
   const defaults: UserPrefs = {
     shortcutBindings: { ...defaultShortcutBindings },
     density: 'comfortable',
@@ -49,7 +50,7 @@ function normalizedPrefs(prefs: UserPrefs): UserPrefs {
     : homeLayouts[0]?.id ?? defaultHomeLayout.id;
   return {
     ...defaults,
-    ...prefs,
+    ...preferenceValues,
     shortcutBindings: prefs.shortcutBindings && validateShortcutBindings(prefs.shortcutBindings) ? prefs.shortcutBindings : { ...defaultShortcutBindings },
     homeLayouts,
     activeHomeLayoutId,
@@ -213,6 +214,22 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
     if (typeof body.emailOnFailure === 'boolean') patch.emailOnFailure = body.emailOnFailure;
     if (typeof body.emailOnAlerts === 'boolean') patch.emailOnAlerts = body.emailOnAlerts;
     if (typeof body.emailOnKeyExpiry === 'boolean') patch.emailOnKeyExpiry = body.emailOnKeyExpiry;
+    if (body.appNotificationPreferences) {
+      const seenBundleIds = new Set<string>();
+      const preferences = [];
+      for (const preference of body.appNotificationPreferences) {
+        const bundleId = preference.bundleId.trim().toLowerCase();
+        if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(bundleId)) {
+          return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'app notification bundle IDs must be valid reverse-domain identifiers'));
+        }
+        if (seenBundleIds.has(bundleId)) {
+          return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'app notification bundle IDs must be unique'));
+        }
+        seenBundleIds.add(bundleId);
+        preferences.push({ ...preference, bundleId });
+      }
+      patch.appNotificationPreferences = preferences;
+    }
     if (typeof body.notifyEmail === 'string') {
       const trimmed = body.notifyEmail.trim();
       if (trimmed === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) patch.notifyEmail = trimmed;
