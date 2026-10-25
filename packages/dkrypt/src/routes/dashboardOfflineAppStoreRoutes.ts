@@ -1,6 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from '@sinclair/typebox';
-import { getAppleAccountAuthenticationStatus, getOfflineAppStoreReadiness, resetAppleAccountAuthentication, startAppleAccountAuthentication } from '#offlineAppStore.js';
+import { getAppleAccountAuthenticationStatus, getOfflineAppStoreReadiness, refreshAppleAccountStorefrontCountry, resetAppleAccountAuthentication, startAppleAccountAuthentication } from '#offlineAppStore.js';
 import { clearAppleAccountCredentials, saveAppleAccountCredentials, saveAppleAccountFairPlayCredential } from '#appleAccountVault.js';
 import type { AppleAccountAuthenticationStatus } from '#offlineAppStoreAuthOperation.js';
 import { PermissionFlag } from '#permissions.js';
@@ -12,6 +12,7 @@ import type { CredentialRetrievalStatus } from '#offlineAppStoreCredential.js';
 
 interface DashboardOfflineAppStoreServices {
   readiness: typeof getOfflineAppStoreReadiness;
+  refreshStorefrontCountry: typeof refreshAppleAccountStorefrontCountry;
   saveAccount: typeof saveAppleAccountCredentials;
   saveCredential: typeof saveAppleAccountFairPlayCredential;
   getAuthenticationStatus: () => AppleAccountAuthenticationStatus;
@@ -24,6 +25,7 @@ interface DashboardOfflineAppStoreServices {
 
 const defaultServices: DashboardOfflineAppStoreServices = {
   readiness: getOfflineAppStoreReadiness,
+  refreshStorefrontCountry: refreshAppleAccountStorefrontCountry,
   saveAccount: saveAppleAccountCredentials,
   saveCredential: saveAppleAccountFairPlayCredential,
   getAuthenticationStatus: getAppleAccountAuthenticationStatus,
@@ -46,7 +48,10 @@ export function createDashboardOfflineAppStoreRoutes(
     server.get('/v1/dashboard/appstore-offline/status', {
       schema: { hide: true },
       preHandler: administrator,
-    }, () => ({ ...services.readiness(), authentication: services.getAuthenticationStatus(), credentialRetrieval: services.getCredentialRetrievalStatus() }));
+    }, () => {
+      void services.refreshStorefrontCountry().catch(() => {});
+      return { ...services.readiness(), authentication: services.getAuthenticationStatus(), credentialRetrieval: services.getCredentialRetrievalStatus() };
+    });
 
     server.post('/v1/dashboard/appstore-offline/credential/retrieve', {
       schema: { hide: true, body: Type.Object({ deviceId: Type.String({ minLength: 1, maxLength: 128 }) }, { additionalProperties: false }) },

@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { config } from '#config.js';
 import { createAppleAccountAuthenticationOperation } from '#offlineAppStoreAuthOperation.js';
-import { clearAppleAccountSessionSnapshot, markAppleAccountAuthenticated, markAppleAccountAuthenticationError, readAppleAccountSecrets, readAppleAccountSessionSnapshot, saveAppleAccountSessionSnapshot, getAppleAccountVaultStatus } from '#appleAccountVault.js';
+import { clearAppleAccountSessionSnapshot, markAppleAccountAuthenticated, markAppleAccountAuthenticationError, readAppleAccountSecrets, readAppleAccountSessionSnapshot, saveAppleAccountSessionSnapshot, saveAppleAccountStorefrontCountry, getAppleAccountVaultStatus } from '#appleAccountVault.js';
 import type { AppleAccountSecrets, AppleAccountVaultStatus } from '#appleAccountVault.js';
 import type { FairPlayVerificationResult } from '#util/ipaFairPlay.js';
 import type { ExtractedIpaMetadata } from '#util/ipaMetadata.js';
@@ -340,6 +340,30 @@ async function restoreSessionWorkspace(root: string): Promise<void> {
   }
 }
 
+async function restoreSessionAccountForStatus(root: string): Promise<boolean> {
+  const snapshot = readAppleAccountSessionSnapshot();
+  if (!snapshot) return false;
+  try {
+    const accountFile = parseSessionSnapshot(snapshot).find((entry) => entry.path === '.dkrypt-appstore/account.json');
+    if (!accountFile) return false;
+    const contents = Buffer.from(accountFile.data, 'base64');
+    if (contents.toString('base64') !== accountFile.data || contents.length > SESSION_FILE_LIMIT_BYTES) {
+      contents.fill(0);
+      throw new Error('stored App Store account session file is invalid');
+    }
+    const accountDirectory = path.join(root, '.dkrypt-appstore');
+    await mkdir(accountDirectory, { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(path.join(accountDirectory, 'account.json'), contents, { mode: 0o600 });
+    } finally {
+      contents.fill(0);
+    }
+    return true;
+  } finally {
+    snapshot.fill(0);
+  }
+}
+
 async function saveSessionWorkspace(root: string): Promise<void> {
   const files = await collectSessionFiles(root);
   if (files.length > SESSION_FILE_COUNT_LIMIT) throw new Error('App Store provider session contains too many files');
@@ -349,6 +373,51 @@ async function saveSessionWorkspace(root: string): Promise<void> {
   } finally {
     snapshot.fill(0);
   }
+}
+
+let storefrontCountryRefresh: Promise<void> | undefined;
+let storefrontCountryRefreshAfter = 0;
+
+export function refreshAppleAccountStorefrontCountry(): Promise<void> {
+  let vaultStatus: AppleAccountVaultStatus;
+  try {
+    vaultStatus = getAppleAccountVaultStatus();
+  } catch {
+    return Promise.resolve();
+  }
+  if (vaultStatus.storefrontCountry || !vaultStatus.accountConfigured) return Promise.resolve();
+  if (storefrontCountryRefresh) return storefrontCountryRefresh;
+  if (Date.now() < storefrontCountryRefreshAfter) return Promise.resolve();
+  storefrontCountryRefresh = (async () => {
+    const homeDirectory = await mkdtemp(path.join(SESSION_WORKSPACE_ROOT, 'dkrypt-appstore-status-'));
+    await chmod(homeDirectory, 0o700);
+    try {
+      if (!await restoreSessionAccountForStatus(homeDirectory)) {
+        storefrontCountryRefreshAfter = Date.now() + 60_000;
+        return;
+      }
+      const result = await runAppStoreDownloaderRequest({
+        commandPath: config.appStoreOfflineDownloaderBin,
+        homeDirectory,
+        cacheDirectory: path.join(config.stateDir, 'appstore-offline-cache'),
+        memoryMb: config.appStoreOfflineWorkerMemoryMb,
+        cpuSeconds: config.appStoreOfflineAuthenticationTimeoutSeconds,
+        request: { operation: 'status' },
+      });
+      if (result.response.ok && result.response.authenticated && result.response.storefront_country) {
+        saveAppleAccountStorefrontCountry(result.response.storefront_country);
+      } else {
+        storefrontCountryRefreshAfter = Date.now() + 60_000;
+      }
+    } finally {
+      await rm(homeDirectory, { recursive: true, force: true });
+    }
+  })().catch(() => {
+    storefrontCountryRefreshAfter = Date.now() + 60_000;
+  }).finally(() => {
+    storefrontCountryRefresh = undefined;
+  });
+  return storefrontCountryRefresh;
 }
 
 async function waitForSessionOperation(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -447,6 +516,7 @@ async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, output
     throw new Error('App Store download failed');
   }
   markAppleAccountAuthenticated();
+  if (result.response.storefront_country) saveAppleAccountStorefrontCountry(result.response.storefront_country);
   return { freeLicenseClaimed: result.response.free_license_claimed === true };
 }
 
@@ -544,6 +614,7 @@ export async function authenticateAppleAccount(authCode?: string, signal?: Abort
     throw new OfflineAppStoreAuthenticationError(code);
   }
   markAppleAccountAuthenticated();
+  if (result.response.storefront_country) saveAppleAccountStorefrontCountry(result.response.storefront_country);
 }
 
 const appleAccountAuthenticationOperation = createAppleAccountAuthenticationOperation({

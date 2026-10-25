@@ -1,10 +1,34 @@
 import { describeHttpError } from '#util/httpError.js';
 import { throwIfAborted } from '#util/abort.js';
+import { getAppleAccountVaultStatus } from '#appleAccountVault.js';
 
 const DEFAULT_ITUNES_COUNTRY = 'US';
 
-function buildItunesUrl(endpoint: 'lookup' | 'search', params: Record<string, string>): string {
-  const query = new URLSearchParams({ country: DEFAULT_ITUNES_COUNTRY, ...params });
+async function defaultStorefrontCountry(): Promise<string> {
+  let status: ReturnType<typeof getAppleAccountVaultStatus>;
+  try {
+    status = getAppleAccountVaultStatus();
+  } catch {
+    return DEFAULT_ITUNES_COUNTRY;
+  }
+  if (status.storefrontCountry) return status.storefrontCountry;
+  if (!status.accountConfigured) return DEFAULT_ITUNES_COUNTRY;
+  try {
+    const { refreshAppleAccountStorefrontCountry } = await import('#offlineAppStore.js');
+    await refreshAppleAccountStorefrontCountry();
+  } catch {}
+  try {
+    const refreshedStatus = getAppleAccountVaultStatus();
+    if (refreshedStatus.storefrontCountry) return refreshedStatus.storefrontCountry;
+    if (refreshedStatus.accountConfigured) throw new Error('configured Apple Account storefront could not be determined');
+    return DEFAULT_ITUNES_COUNTRY;
+  } catch {
+    throw new Error('configured Apple Account storefront could not be determined');
+  }
+}
+
+async function buildItunesUrl(endpoint: 'lookup' | 'search', params: Record<string, string>): Promise<string> {
+  const query = new URLSearchParams({ country: params.country ?? await defaultStorefrontCountry(), ...params });
   return `https://itunes.apple.com/${endpoint}?${query.toString()}`;
 }
 
@@ -58,7 +82,8 @@ function parseFileSizeBytes(value: unknown): number | undefined {
 
 export async function lookupCurrentVersion(bundleId: string, signal?: AbortSignal): Promise<ItunesLookupResult> {
   throwIfAborted(signal);
-  const url = buildItunesUrl('lookup', { bundleId });
+  const url = await buildItunesUrl('lookup', { bundleId });
+  throwIfAborted(signal);
   const res = await fetch(url, { signal });
   throwIfAborted(signal);
   if (!res.ok) throw new Error(describeHttpError('itunes lookup failed', res));
@@ -78,7 +103,7 @@ export async function lookupCurrentVersion(bundleId: string, signal?: AbortSigna
 }
 
 async function lookupMetadata(params: Record<string, string>): Promise<ItunesAppMetadata> {
-  const url = buildItunesUrl('lookup', params);
+  const url = await buildItunesUrl('lookup', params);
   const res = await fetch(url);
   if (!res.ok) throw new Error(describeHttpError('itunes lookup failed', res));
 
@@ -108,10 +133,10 @@ export function lookupAppMetadata(bundleId: string): Promise<ItunesAppMetadata> 
   return lookupMetadata({ bundleId });
 }
 
-export function lookupAppMetadataByTrackId(trackId: number, country = DEFAULT_ITUNES_COUNTRY): Promise<ItunesAppMetadata> {
+export function lookupAppMetadataByTrackId(trackId: number, country?: string): Promise<ItunesAppMetadata> {
   if (!Number.isSafeInteger(trackId) || trackId < 1) throw new Error('trackId must be a positive integer');
-  if (!/^[A-Z]{2}$/.test(country)) throw new Error('country must be a two-letter uppercase storefront code');
-  return lookupMetadata({ id: String(trackId), entity: 'software', country });
+  if (country !== undefined && !/^[A-Z]{2}$/.test(country)) throw new Error('country must be a two-letter uppercase storefront code');
+  return lookupMetadata({ id: String(trackId), entity: 'software', ...(country ? { country } : {}) });
 }
 
 export interface ItunesSearchResult {
@@ -142,7 +167,7 @@ interface ItunesSearchResponse {
 }
 
 export async function searchApps(term: string, limit = 10): Promise<ItunesSearchResult[]> {
-  const url = buildItunesUrl('search', { entity: 'software', limit: String(limit), term });
+  const url = await buildItunesUrl('search', { entity: 'software', limit: String(limit), term });
   const res = await fetch(url);
   if (!res.ok) throw new Error(describeHttpError('itunes search failed', res));
 

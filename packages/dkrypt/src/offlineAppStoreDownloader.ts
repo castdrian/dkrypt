@@ -10,6 +10,7 @@ export interface AppStoreDownloaderResponse {
   ok: boolean;
   authenticated?: boolean;
   free_license_claimed?: boolean;
+  storefront_country?: string;
   stage?: string;
   code?: string;
   diagnostic?: string;
@@ -49,6 +50,9 @@ function parseResponse(output: string): AppStoreDownloaderResponse {
   }
   const parsed = response as AppStoreDownloaderResponse;
   if (parsed.free_license_claimed !== undefined && typeof parsed.free_license_claimed !== 'boolean') {
+    throw new Error('App Store downloader returned an invalid response');
+  }
+  if (parsed.storefront_country !== undefined && (typeof parsed.storefront_country !== 'string' || !/^[A-Z]{2}$/.test(parsed.storefront_country))) {
     throw new Error('App Store downloader returned an invalid response');
   }
   return parsed;

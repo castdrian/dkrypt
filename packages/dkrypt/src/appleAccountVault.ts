@@ -18,12 +18,14 @@ export interface AppleAccountVaultStatus {
   authenticatedAt?: number;
   accountHint?: string;
   authenticationError?: string;
+  storefrontCountry?: string;
 }
 
 export interface AppleAccountVault {
   status(): AppleAccountVaultStatus;
   read(): AppleAccountSecrets | undefined;
   saveAccount(appleId: string, password: string, now?: number): AppleAccountVaultStatus;
+  saveStorefrontCountry(country: string, now?: number): AppleAccountVaultStatus;
   saveCredential(credential: string, now?: number): AppleAccountVaultStatus;
   saveCredentialForSelector(selector: string, credential: string, now?: number): AppleAccountVaultStatus;
   readSessionSnapshot(): Buffer | undefined;
@@ -155,6 +157,7 @@ export function createAppleAccountVault(repository: AppleAccountRepository, keyV
       sessionCiphertext: Object.hasOwn(record, 'sessionCiphertext') ? record.sessionCiphertext : existing?.sessionCiphertext,
       authenticatedAt: record.authenticatedAt,
       authenticationError: record.authenticationError,
+      storefrontCountry: Object.hasOwn(record, 'storefrontCountry') ? record.storefrontCountry : existing?.storefrontCountry,
     });
   }
 
@@ -179,6 +182,7 @@ export function createAppleAccountVault(repository: AppleAccountRepository, keyV
       authenticatedAt: record?.authenticatedAt,
       accountHint: record?.accountHint,
       authenticationError,
+      storefrontCountry: record?.storefrontCountry,
     };
   }
 
@@ -205,7 +209,16 @@ export function createAppleAccountVault(repository: AppleAccountRepository, keyV
         accountHint: accountHint(appleId),
         authenticatedAt: sameCredentials ? current.record.authenticatedAt : undefined,
         sessionCiphertext: sameCredentials ? current.record.sessionCiphertext : undefined,
+        storefrontCountry: sameCredentials ? current.record.storefrontCountry : undefined,
       }, now);
+      return status();
+    },
+    saveStorefrontCountry(countryValue, now = Date.now()) {
+      const country = countryValue.trim().toUpperCase();
+      if (!/^[A-Z]{2}$/.test(country)) throw new Error('App Store storefront country is invalid');
+      const record = repository.read();
+      if (!record) throw new Error('Apple Account is not configured');
+      repository.write({ ...record, storefrontCountry: country, updatedAt: now });
       return status();
     },
     saveCredential(credentialValue, now = Date.now()) {
@@ -281,6 +294,7 @@ const defaultVault = createAppleAccountVault(createAppleAccountRepository(databa
 export const getAppleAccountVaultStatus = defaultVault.status;
 export const readAppleAccountSecrets = defaultVault.read;
 export const saveAppleAccountCredentials = defaultVault.saveAccount;
+export const saveAppleAccountStorefrontCountry = defaultVault.saveStorefrontCountry;
 export const saveAppleAccountFairPlayCredential = defaultVault.saveCredential;
 export const saveAppleAccountFairPlayCredentialForSelector = defaultVault.saveCredentialForSelector;
 export const readAppleAccountSessionSnapshot = defaultVault.readSessionSnapshot;

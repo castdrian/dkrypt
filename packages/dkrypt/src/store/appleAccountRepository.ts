@@ -8,6 +8,7 @@ export interface EncryptedAppleAccountRecord {
   updatedAt: number;
   authenticatedAt?: number;
   authenticationError?: string;
+  storefrontCountry?: string;
 }
 
 export interface AppleAccountRepository {

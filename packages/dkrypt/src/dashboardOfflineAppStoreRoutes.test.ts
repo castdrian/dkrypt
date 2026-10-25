@@ -109,6 +109,7 @@ test('Apple Account verification returns its durable background status without a
   const authentication = { state: 'running' as const, operationId: 'operation-1', startedAt: 123 };
   const overrides = {
     readiness,
+    refreshStorefrontCountry: async () => {},
     startAuthentication: () => authentication,
     getAuthenticationStatus: () => authentication,
   };

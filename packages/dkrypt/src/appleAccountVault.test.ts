@@ -24,6 +24,7 @@ test('Apple Account secrets are encrypted in SQLite and survive reopening with t
   temporaryDirectories.push(stateDir);
   const vault = createVault(stateDir);
   vault.saveAccount('Admin@icloud.com', 'account-password');
+  vault.saveStorefrontCountry('DE');
   vault.saveCredential(Buffer.alloc(16, 9).toString('hex'));
   vault.saveCredentialForSelector('a'.repeat(64), Buffer.alloc(16, 11).toString('base64'));
   const sessionSnapshot = Buffer.from('provider-session-secret');
@@ -51,6 +52,7 @@ test('Apple Account secrets are encrypted in SQLite and survive reopening with t
       credentialConfigured: true,
       authenticatedAt: 1234,
       accountHint: 'a•••@icloud.com',
+      storefrontCountry: 'DE',
     });
   } finally {
     reopened.close();
@@ -123,6 +125,7 @@ test('Apple Account vault validates credentials and invalidates account-bound ke
     expect(() => vault.saveCredential(Buffer.alloc(17, 1).toString('base64'))).toThrow('exactly 16 bytes');
     vault.saveAccount('second@icloud.com', 'second-password');
     expect(vault.status().credentialConfigured).toBe(false);
+    expect(vault.status().storefrontCountry).toBeUndefined();
     expect(vault.read()?.fairPlayCredentials).toBeUndefined();
   } finally {
     vault.close();

@@ -73,8 +73,13 @@ pub async fn login(
             .get("pod")
             .and_then(|v| v.to_str().ok())
             .map(String::from);
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let response_headers = resp.headers().clone();
         let resp_body = resp.bytes().await?;
-        tracing :: debug ! (len = resp_body . len () , preview = % String :: from_utf8_lossy (& resp_body [.. resp_body . len () . min (500)]) , "auth response body");
         if resp_body.is_empty() {
             if signer.is_none() && status == reqwest::StatusCode::FORBIDDEN {
                 return Err(ClientError::SapSignatureRequired {
@@ -85,8 +90,20 @@ pub async fn login(
                 "empty response (HTTP {status})"
             )));
         }
-        let dict: HashMap<String, plist::Value> =
-            crate::client::plist_xml::parse_plist_response(&resp_body)?;
+        let dict: HashMap<String, plist::Value> = crate::client::plist_xml::parse_plist_response(
+            &resp_body,
+        )
+        .map_err(|error| match error {
+            ClientError::PlistDe(_) => {
+                ClientError::UnexpectedResponse(super::download::response_diagnostic(
+                    status.as_u16(),
+                    content_type.as_deref(),
+                    &resp_body,
+                    &response_headers,
+                ))
+            }
+            other => other,
+        })?;
         if let Some(err) = StoreError::from_plist_dict(&dict) {
             if err.is_retryable() && attempt < MAX_ATTEMPTS {
                 attempt += 1;

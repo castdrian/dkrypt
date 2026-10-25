@@ -29,6 +29,13 @@ function restoreFetch(): void {
 
 async function runCurrentVersionLookupInIsolatedProcess(): Promise<{ url: string; version: string; minimumOsVersion?: string }> {
   const script = [
+    "import { mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "process.env.API_KEY = 'test';",
+    "process.env.SESSION_SIGNING_SECRET = 'test';",
+    "process.env.ADMIN_PASSWORD = 'test';",
+    "process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'dkrypt-storefront-current-'));",
     "globalThis.fetch = async (input) => {",
     "  globalThis.requestUrl = String(input);",
     "  return new Response(JSON.stringify({ resultCount: 1, results: [{ version: '340.0', bundleId: 'com.hammerandchisel.discord', trackId: 985746746, minimumOsVersion: '16.0' }] }), { status: 200 });",
@@ -47,8 +54,72 @@ async function runCurrentVersionLookupInIsolatedProcess(): Promise<{ url: string
   return JSON.parse(stdout) as { url: string; version: string };
 }
 
+async function runStorefrontVersionLookupInIsolatedProcess(): Promise<string> {
+  const script = [
+    "import { mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "process.env.API_KEY = 'test';",
+    "process.env.SESSION_SIGNING_SECRET = 'test';",
+    "process.env.ADMIN_PASSWORD = 'test';",
+    "process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'dkrypt-storefront-'));",
+    "process.env.APPSTORE_OFFLINE_VAULT_KEY = Buffer.alloc(32, 1).toString('base64url');",
+    "const vault = await import('./src/appleAccountVault.ts');",
+    "vault.saveAppleAccountCredentials('admin@example.com', 'password');",
+    "vault.saveAppleAccountStorefrontCountry('DE');",
+    "globalThis.fetch = async (input) => { globalThis.requestUrl = String(input); return new Response(JSON.stringify({ resultCount: 1, results: [{ version: '1.0', bundleId: 'org.mozilla.ios.Klar', trackId: 1073435754 }] }), { status: 200 }); };",
+    "const { lookupCurrentVersion } = await import('./src/appStoreMetadata.ts');",
+    "await lookupCurrentVersion('org.mozilla.ios.Klar');",
+    "console.log(new URL(globalThis.requestUrl).searchParams.get('country'));",
+  ].join('\n');
+  const child = Bun.spawn([process.execPath, '-e', script], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) throw new Error(`storefront lookup failed: ${stderr}`);
+  return stdout.trim();
+}
+
+async function runUnresolvedStorefrontLookupInIsolatedProcess(): Promise<{ error: string; fetched: boolean }> {
+  const script = [
+    "import { mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "process.env.API_KEY = 'test';",
+    "process.env.SESSION_SIGNING_SECRET = 'test';",
+    "process.env.ADMIN_PASSWORD = 'test';",
+    "process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'dkrypt-storefront-unknown-'));",
+    "process.env.APPSTORE_OFFLINE_VAULT_KEY = Buffer.alloc(32, 1).toString('base64url');",
+    "const vault = await import('./src/appleAccountVault.ts');",
+    "vault.saveAppleAccountCredentials('admin@example.com', 'password');",
+    "globalThis.fetched = false;",
+    "globalThis.fetch = async () => { globalThis.fetched = true; return new Response(JSON.stringify({ resultCount: 0, results: [] }), { status: 200 }); };",
+    "const { lookupCurrentVersion } = await import('./src/appStoreMetadata.ts');",
+    "let error = '';",
+    "try { await lookupCurrentVersion('org.mozilla.ios.Klar'); } catch (failure) { error = failure.message; }",
+    "console.log(JSON.stringify({ error, fetched: globalThis.fetched }));",
+  ].join('\n');
+  const child = Bun.spawn([process.execPath, '-e', script], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) throw new Error(`unknown storefront lookup failed: ${stderr}`);
+  return JSON.parse(stdout) as { error: string; fetched: boolean };
+}
+
 async function runAbortableVersionLookupInIsolatedProcess(): Promise<string> {
   const script = [
+    "import { mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "process.env.API_KEY = 'test';",
+    "process.env.SESSION_SIGNING_SECRET = 'test';",
+    "process.env.ADMIN_PASSWORD = 'test';",
+    "process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'dkrypt-storefront-abort-'));",
     'globalThis.fetch = async (_input, init) => {',
     '  if (!init?.signal) return new Response(JSON.stringify({ resultCount: 1, results: [{ version: "340.0", bundleId: "com.hammerandchisel.discord", trackId: 985746746 }] }), { status: 200 });',
     '  return new Promise((resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true }));',
@@ -75,6 +146,17 @@ describe('iTunes storefront selection', () => {
     expect(new URL(result.url).searchParams.get('country')).toBe('US');
     expect(result.version).toBe('340.0');
     expect(result.minimumOsVersion).toBe('16.0');
+  });
+
+  test('uses the authenticated Apple Account storefront for default metadata lookup', async () => {
+    await expect(runStorefrontVersionLookupInIsolatedProcess()).resolves.toBe('DE');
+  });
+
+  test('does not guess a storefront when a configured Apple Account has no verified region', async () => {
+    await expect(runUnresolvedStorefrontLookupInIsolatedProcess()).resolves.toEqual({
+      error: 'configured Apple Account storefront could not be determined',
+      fetched: false,
+    });
   });
 
   test('uses the US storefront for metadata and search', async () => {

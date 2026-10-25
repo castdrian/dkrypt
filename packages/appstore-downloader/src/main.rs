@@ -43,6 +43,8 @@ struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     free_license_claimed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    storefront_country: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stage: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<&'static str>,
@@ -76,22 +78,24 @@ impl DownloaderFailure {
 }
 
 impl Response {
-    fn authenticated(value: bool) -> Self {
+    fn authenticated(value: bool, storefront_country: Option<&'static str>) -> Self {
         Self {
             ok: true,
             authenticated: Some(value),
             free_license_claimed: None,
+            storefront_country,
             stage: None,
             code: None,
             diagnostic: None,
         }
     }
 
-    fn success(free_license_claimed: bool) -> Self {
+    fn success(free_license_claimed: bool, storefront_country: &'static str) -> Self {
         Self {
             ok: true,
             authenticated: None,
             free_license_claimed: Some(free_license_claimed),
+            storefront_country: Some(storefront_country),
             stage: None,
             code: None,
             diagnostic: None,
@@ -103,6 +107,7 @@ impl Response {
             ok: false,
             authenticated: None,
             free_license_claimed: None,
+            storefront_country: None,
             stage: Some(failure.stage),
             code: Some(failure.code),
             diagnostic: failure.diagnostic,
@@ -267,7 +272,14 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
     let session_directory = home.join(".dkrypt-appstore");
     match request {
         Request::Status => load_account(&session_directory)
-            .map(|account| Response::authenticated(account.is_some()))
+            .map(|account| {
+                let storefront_country = account.as_ref().and_then(|account| {
+                    dkrypt_appstore_core::model::storefront::country_code_from_store_front(
+                        &account.store_front,
+                    )
+                });
+                Response::authenticated(account.is_some(), storefront_country)
+            })
             .map_err(|code| DownloaderFailure::new("session", code)),
         Request::Authenticate {
             apple_id,
@@ -341,11 +353,14 @@ async fn authenticate(
     )
     .await
     .map_err(|error| map_authentication_error(&error, verification_code.is_some()))?;
+    let storefront_country = dkrypt_appstore_core::model::storefront::country_code_from_store_front(
+        &account.store_front,
+    );
     save_account(session_directory, account).map_err(|_| "provider_session_storage_failed")?;
     client
         .save_cookies(&cookie_path)
         .map_err(|_| "provider_session_storage_failed")?;
-    Ok(Response::authenticated(true))
+    Ok(Response::authenticated(true, storefront_country))
 }
 
 async fn download(
@@ -450,7 +465,7 @@ async fn download(
     client.save_cookies(&cookie_path).map_err(|_| {
         DownloaderFailure::new("session_persistence", "provider_session_storage_failed")
     })?;
-    Ok(Response::success(free_license_claimed))
+    Ok(Response::success(free_license_claimed, country))
 }
 
 fn verify_requested_version(
@@ -1210,12 +1225,24 @@ mod tests {
     #[test]
     fn successful_download_reports_a_free_license_claim_without_exposing_account_data() {
         assert_eq!(
-            serde_json::to_value(Response::success(true)).unwrap(),
-            serde_json::json!({"ok": true, "free_license_claimed": true})
+            serde_json::to_value(Response::success(true, "DE")).unwrap(),
+            serde_json::json!({"ok": true, "free_license_claimed": true, "storefront_country": "DE"})
         );
         assert_eq!(
-            serde_json::to_value(Response::success(false)).unwrap(),
-            serde_json::json!({"ok": true, "free_license_claimed": false})
+            serde_json::to_value(Response::success(false, "DE")).unwrap(),
+            serde_json::json!({"ok": true, "free_license_claimed": false, "storefront_country": "DE"})
+        );
+    }
+
+    #[test]
+    fn authentication_status_reports_only_a_recognized_storefront_country() {
+        assert_eq!(
+            serde_json::to_value(Response::authenticated(true, Some("DE"))).unwrap(),
+            serde_json::json!({"ok": true, "authenticated": true, "storefront_country": "DE"})
+        );
+        assert_eq!(
+            serde_json::to_value(Response::authenticated(false, None)).unwrap(),
+            serde_json::json!({"ok": true, "authenticated": false})
         );
     }
 
