@@ -806,6 +806,16 @@ const migrations = [
       CREATE INDEX jobs_completed_exact_build ON jobs(bundle_id, external_version_id, testflight_build_id, status, file_path);
     `,
   },
+  {
+    version: 31,
+    sql: `
+      UPDATE projects
+      SET payload = json_set(payload, '$.isDefault', json(CASE WHEN json_extract(payload, '$.isDefault') = 1 THEN 'true' ELSE 'false' END))
+      WHERE json_valid(payload) = 1
+        AND json_type(payload, '$.isDefault') IN ('integer', 'real')
+        AND json_extract(payload, '$.isDefault') IN (0, 1);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
