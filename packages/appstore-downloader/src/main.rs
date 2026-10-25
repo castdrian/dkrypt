@@ -555,12 +555,26 @@ fn map_license_claim_error(error: &ClientError) -> DownloaderFailure {
                 .map(|status| format!("http_status={}", status.as_u16()));
             ("free_license_claim_http_failed", diagnostic)
         }
+        ClientError::UnexpectedResponse(reason)
+            if let Some(diagnostic) = reason.strip_prefix("appstore_response_invalid|") =>
+        {
+            (
+                "free_license_claim_response_invalid",
+                Some(diagnostic.to_string()),
+            )
+        }
         ClientError::UnexpectedResponse(reason) if reason == "purchase_http_failed" => {
             ("free_license_claim_http_failed", None)
         }
-        ClientError::PlistDe(_) | ClientError::UnexpectedResponse(_) => {
-            ("free_license_claim_response_invalid", None)
-        }
+        ClientError::UnexpectedResponse(reason) if reason.starts_with("purchase_") => (
+            "free_license_claim_request_invalid",
+            Some(format!("reason={reason}")),
+        ),
+        ClientError::PlistDe(_) => (
+            "free_license_claim_response_invalid",
+            Some("response_format=plist_parse_failed".into()),
+        ),
+        ClientError::UnexpectedResponse(_) => ("free_license_claim_response_invalid", None),
         _ => ("free_license_claim_failed", None),
     };
     DownloaderFailure {
@@ -1177,6 +1191,29 @@ mod tests {
             }));
         assert_eq!(untrusted_provider_error.code, "free_license_claim_failed");
         assert!(untrusted_provider_error.diagnostic.is_none());
+
+        let malformed_response = map_license_claim_error(&ClientError::UnexpectedResponse(
+            "appstore_response_invalid|http_status=403;content_type=html;body_format=html;body_length=34;server=apple;commerce_header_count=0".into(),
+        ));
+        assert_eq!(
+            malformed_response.code,
+            "free_license_claim_response_invalid"
+        );
+        assert_eq!(
+            malformed_response.diagnostic.as_deref(),
+            Some(
+                "http_status=403;content_type=html;body_format=html;body_length=34;server=apple;commerce_header_count=0"
+            )
+        );
+
+        let invalid_request = map_license_claim_error(&ClientError::UnexpectedResponse(
+            "purchase_pod_invalid".into(),
+        ));
+        assert_eq!(invalid_request.code, "free_license_claim_request_invalid");
+        assert_eq!(
+            invalid_request.diagnostic.as_deref(),
+            Some("reason=purchase_pod_invalid")
+        );
     }
 
     #[test]

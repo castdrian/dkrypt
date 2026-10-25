@@ -317,7 +317,7 @@ async fn post_download_info(
     })?;
     Ok((status, dict))
 }
-fn response_diagnostic(
+pub(crate) fn response_diagnostic(
     status: u16,
     content_type: Option<&str>,
     body: &[u8],

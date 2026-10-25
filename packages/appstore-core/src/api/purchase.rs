@@ -62,8 +62,22 @@ async fn submit_free_license_purchase(
         .send()
         .await?;
     let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let response_headers = response.headers().clone();
     let body = response.bytes().await?;
-    parse_purchase_response(status, &body)
+    parse_purchase_response(status, &body).map_err(|error| {
+        classify_invalid_purchase_response(
+            error,
+            status,
+            content_type.as_deref(),
+            &body,
+            &response_headers,
+        )
+    })
 }
 
 fn build_purchase_request(
@@ -163,12 +177,27 @@ fn parse_purchase_response(status: reqwest::StatusCode, body: &[u8]) -> Result<(
     }
 }
 
+fn classify_invalid_purchase_response(
+    error: ClientError,
+    status: reqwest::StatusCode,
+    content_type: Option<&str>,
+    body: &[u8],
+    headers: &reqwest::header::HeaderMap,
+) -> ClientError {
+    match error {
+        ClientError::PlistDe(_) => ClientError::UnexpectedResponse(
+            super::download::response_diagnostic(status.as_u16(), content_type, body, headers),
+        ),
+        error => error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ALTERNATE_FREE_LICENSE_PRICING_PARAMETER, STANDARD_FREE_LICENSE_PRICING_PARAMETER,
-        build_purchase_request, claim_free_license, parse_purchase_response,
-        retry_pricing_parameter,
+        build_purchase_request, claim_free_license, classify_invalid_purchase_response,
+        parse_purchase_response, retry_pricing_parameter,
     };
     use crate::client::AppleClient;
     use crate::error::{ClientError, StoreError};
@@ -332,6 +361,28 @@ mod tests {
             ("status", plist::Value::Integer(0.into())),
         ]);
         assert!(parse_purchase_response(reqwest::StatusCode::OK, &body).is_ok());
+    }
+
+    #[test]
+    fn classifies_unparseable_purchase_response_without_retaining_body_contents() {
+        let body = b"<html>private response body</html>";
+        let status = reqwest::StatusCode::FORBIDDEN;
+        let parser_error = parse_purchase_response(status, body).unwrap_err();
+        let error = classify_invalid_purchase_response(
+            parser_error,
+            status,
+            Some("text/html; charset=utf-8"),
+            body,
+            &reqwest::header::HeaderMap::new(),
+        );
+        let ClientError::UnexpectedResponse(diagnostic) = error else {
+            panic!("expected a safe invalid-response diagnostic");
+        };
+        assert!(diagnostic.contains("http_status=403"));
+        assert!(diagnostic.contains("content_type=html"));
+        assert!(diagnostic.contains("body_format=html"));
+        assert!(diagnostic.contains("body_length=34"));
+        assert!(!diagnostic.contains("private response body"));
     }
 
     #[test]
