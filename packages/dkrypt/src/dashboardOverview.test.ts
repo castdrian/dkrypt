@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test';
 import type { Job } from '#jobs/types.js';
-import { DEFAULT_PROJECT_ID, createDevice, createProject, deleteDevice, recordJobHistory } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, createDevice, deleteDevice, recordJobHistory } from '#store/state.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
 
 mock.module('./jobs/runner.js', () => ({
@@ -17,13 +17,12 @@ const { buildDashboardOverview } = await import('#dashboardOverview.js');
 
 test('dashboard overview reports each queued job estimated start and completion times', async () => {
   const device = createDevice({ name: 'dashboard-eta-device', transport: 'wifi', host: '127.0.0.4' }, 'tests');
-  const project = createProject({ name: `Dashboard ETA ${crypto.randomUUID()}` }, 'tests').project!;
   setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
   const bundleId = `com.test.dashboard-eta-${crypto.randomUUID()}`;
   const historyFinishedAt = Date.now() - 20_000;
   recordJobHistory({
     id: `dashboard-eta-history-${crypto.randomUUID()}`,
-    projectId: project.id,
+    projectId: DEFAULT_PROJECT_ID,
     bundleId,
     source: 'manual',
     status: 'done',
@@ -32,16 +31,16 @@ test('dashboard overview reports each queued job estimated start and completion 
     finishedAt: historyFinishedAt,
   });
   const running = enqueueDecryptJob(`com.test.dashboard-eta-blocker-${crypto.randomUUID()}`, 'manual', {
-    projectId: project.id,
+    projectId: DEFAULT_PROJECT_ID,
     preferredDeviceId: device.id,
   });
   const queued = enqueueDecryptJob(bundleId, 'manual', {
-    projectId: project.id,
+    projectId: DEFAULT_PROJECT_ID,
     preferredDeviceId: device.id,
   });
 
   try {
-    const overview = buildDashboardOverview(0n, 'root', project.id);
+    const overview = buildDashboardOverview(0n, 'root');
     expect(running.status).toBe('running');
     expect(queued.status).toBe('queued');
     expect(overview.activeJobs.find((job) => job.id === queued.id)?.queue).toMatchObject({
@@ -59,9 +58,8 @@ test('dashboard overview reports each queued job estimated start and completion 
   }
 });
 
-test('dashboard overview estimates queue times for a new project from shared job history', async () => {
+test('dashboard overview estimates queue times from workspace-wide job history', async () => {
   const device = createDevice({ name: 'dashboard-shared-eta-device', transport: 'wifi', host: '127.0.0.5' }, 'tests');
-  const project = createProject({ name: `Dashboard shared ETA ${crypto.randomUUID()}` }, 'tests').project!;
   setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
   const historyFinishedAt = Date.now() - 20_000;
   recordJobHistory({
@@ -75,16 +73,16 @@ test('dashboard overview estimates queue times for a new project from shared job
     finishedAt: historyFinishedAt,
   });
   const running = enqueueDecryptJob(`com.test.dashboard-shared-blocker-${crypto.randomUUID()}`, 'manual', {
-    projectId: project.id,
+    projectId: DEFAULT_PROJECT_ID,
     preferredDeviceId: device.id,
   });
   const queued = enqueueDecryptJob(`com.test.dashboard-shared-queued-${crypto.randomUUID()}`, 'manual', {
-    projectId: project.id,
+    projectId: DEFAULT_PROJECT_ID,
     preferredDeviceId: device.id,
   });
 
   try {
-    const activeJob = buildDashboardOverview(0n, 'root', project.id).activeJobs.find((job) => job.id === queued.id);
+    const activeJob = buildDashboardOverview(0n, 'root').activeJobs.find((job) => job.id === queued.id);
     expect(running.status).toBe('running');
     expect(queued.status).toBe('queued');
     expect(activeJob?.queue?.predictedStartMs).toBeGreaterThan(0);

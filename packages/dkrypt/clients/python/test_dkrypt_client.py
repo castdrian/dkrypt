@@ -17,6 +17,32 @@ class Response:
 
 
 class DkryptClientTests(unittest.TestCase):
+    @patch('dkrypt_client.DkryptClient._send')
+    def test_decrypt_helper_sends_idempotency_key_and_version(self, send):
+        send.return_value = b'{"id":"job-1","status":"queued"}'
+        client = DkryptClient('https://ipa.dylib.dev', api_key='dk_test_key')
+
+        result = client.decrypt('com.example.app', '3.2', 'request-1')
+
+        self.assertEqual(result, {"id": "job-1", "status": "queued"})
+        request = send.call_args.args
+        self.assertEqual(request[0:4], ('POST', '/v1/decrypts', b'{"bundleId": "com.example.app", "version": "3.2"}', 'application/json'))
+        self.assertEqual(request[4], {'Idempotency-Key': 'request-1'})
+
+    @patch('dkrypt_client.DkryptClient.request')
+    def test_follow_job_uses_long_poll_and_stops_on_terminal_state(self, request):
+        request.side_effect = [
+            {'id': 'job/1', 'status': 'running'},
+            {'id': 'job/1', 'status': 'done'},
+        ]
+        client = DkryptClient('https://ipa.dylib.dev')
+
+        updates = list(client.follow_job('job/1'))
+
+        self.assertEqual([update['status'] for update in updates], ['running', 'done'])
+        self.assertEqual(request.call_args_list[0].args, ('GET', '/v1/jobs/job%2F1/wait?timeoutSeconds=25'))
+        self.assertEqual(request.call_count, 2)
+
     @patch('dkrypt_client.build_opener')
     def test_download_returns_binary_bytes_with_api_key(self, build_opener):
         opener = MagicMock()

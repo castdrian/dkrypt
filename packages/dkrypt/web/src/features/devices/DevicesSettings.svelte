@@ -562,7 +562,7 @@
     <div class="flex items-center justify-between gap-3">
       <div class="min-w-0">
         <div class="text-sm">Pause decrypts &amp; API</div>
-        <div class="text-xs text-muted">Blocks every decrypt request and API call. Also engages on its own when the primary device isn't in a usable state.</div>
+        <div class="text-xs text-muted">Manual mode pauses decrypt requests. Automatic recovery only pauses work that needs the unavailable device; server-side App Store decrypts can continue.</div>
       </div>
       <Switch checked={maintenanceSettings?.maintenanceMode ?? false} disabled={!canManageMaintenance || !maintenanceSettings || togglingMaintenance} onCheckedChange={() => void toggleMaintenance()} aria-label="Maintenance mode" />
     </div>
@@ -641,6 +641,17 @@
               <details class="mt-3 border-t border-border/70 pt-2">
                 <summary class="cursor-pointer text-xs text-muted">{msg('device.rawDiagnostics')}</summary>
                 <pre class="mt-2 max-h-64 overflow-auto rounded-md bg-muted/30 p-2 text-[10px] whitespace-pre-wrap">{JSON.stringify({ error: h.error, readiness: h.readiness, subsystemDetails: h.subsystemDetails, bridgeHeartbeats: h.bridgeHeartbeats }, null, 2)}</pre>
+              </details>
+              <details class="mt-2 border-t border-border/70 pt-2">
+                <summary class="cursor-pointer text-xs text-muted">{msg('device.statusDefinitions')}</summary>
+                <dl class="mt-2 grid gap-x-4 gap-y-1 text-[10px] leading-4 text-muted sm:grid-cols-2">
+                  <div><dt class="inline font-medium text-text">{msg('device.state.ready')}:</dt> <dd class="inline">{msg('device.definition.ready')}</dd></div>
+                  <div><dt class="inline font-medium text-text">{msg('device.state.idle')}:</dt> <dd class="inline">{msg('device.definition.idle')}</dd></div>
+                  <div><dt class="inline font-medium text-text">{msg('device.state.degraded')}:</dt> <dd class="inline">{msg('device.definition.degraded')}</dd></div>
+                  <div><dt class="inline font-medium text-text">{msg('device.state.offline')}:</dt> <dd class="inline">{msg('device.definition.offline')}</dd></div>
+                  <div><dt class="inline font-medium text-text">{msg('device.state.unsupported')}:</dt> <dd class="inline">{msg('device.definition.unsupported')}</dd></div>
+                  <div><dt class="inline font-medium text-text">{msg('device.state.unknown')}:</dt> <dd class="inline">{msg('device.definition.unknown')}</dd></div>
+                </dl>
               </details>
             </div>
           {/if}

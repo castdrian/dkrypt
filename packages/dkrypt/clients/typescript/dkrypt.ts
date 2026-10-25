@@ -18,6 +18,25 @@ export interface DkryptRequestInit extends RequestInit {
   path: string;
 }
 
+export interface DkryptJob {
+  id: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  progress?: string;
+  error?: string;
+  artifactId?: string;
+}
+
+export interface DkryptDecryptOptions {
+  version?: string;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
+export interface DkryptArtifactPage {
+  artifacts: Array<{ id: string; bundleId: string; versionLabel?: string; fileSizeBytes?: number }>;
+  nextCursor?: string;
+}
+
 export class DkryptClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
@@ -50,6 +69,47 @@ export class DkryptClient {
     });
     if (!response.ok) throw new Error(await this.responseError(response));
     return response.arrayBuffer();
+  }
+
+  async decrypt(bundleId: string, options: DkryptDecryptOptions = {}): Promise<DkryptJob> {
+    const idempotencyKey = options.idempotencyKey ?? crypto.randomUUID();
+    const { version, signal } = options;
+    return this.request<DkryptJob>({
+      path: '/v1/decrypts',
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ bundleId, ...(version ? { version } : {}) }),
+      signal,
+    });
+  }
+
+  getJob(id: string, signal?: AbortSignal): Promise<DkryptJob> {
+    return this.request<DkryptJob>({ path: `/v1/jobs/${encodeURIComponent(id)}`, signal });
+  }
+
+  waitForJob(id: string, timeoutSeconds = 25, signal?: AbortSignal): Promise<DkryptJob> {
+    const timeout = Math.max(1, Math.min(25, Math.floor(timeoutSeconds)));
+    return this.request<DkryptJob>({ path: `/v1/jobs/${encodeURIComponent(id)}/wait?timeoutSeconds=${timeout}`, signal });
+  }
+
+  async *followJob(id: string, signal?: AbortSignal): AsyncGenerator<DkryptJob> {
+    while (!signal?.aborted) {
+      const job = await this.waitForJob(id, 25, signal);
+      yield job;
+      if (job.status === 'done' || job.status === 'failed') return;
+    }
+  }
+
+  listArtifacts(options: { q?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<DkryptArtifactPage> {
+    const params = new URLSearchParams();
+    if (options.q) params.set('q', options.q);
+    params.set('limit', String(Math.max(1, Math.min(100, Math.floor(options.limit ?? 100)))));
+    if (options.cursor) params.set('cursor', options.cursor);
+    return this.request<DkryptArtifactPage>({ path: `/v1/artifacts?${params}`, signal: options.signal });
+  }
+
+  downloadArtifact(id: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+    return this.download(`/v1/artifacts/${encodeURIComponent(id)}/file`, { signal });
   }
 
   private createHeaders(headers: RequestInit['headers'] | undefined, accept: string): Headers {

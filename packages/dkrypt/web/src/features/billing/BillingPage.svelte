@@ -5,8 +5,8 @@
   import Button from '#lib/components/ui/Button.svelte';
   import Card from '#lib/components/ui/Card.svelte';
   import LegalLinks from '#components/LegalLinks.svelte';
-  import { refreshSession } from '#lib/session.svelte';
-  import { confirmDialog, showToast } from '#lib/ui.svelte';
+  import { pushDecryptUsageAlertThresholds, refreshSession } from '#lib/session.svelte';
+  import { confirmDialog, decryptUsageAlertThresholdsState, showToast } from '#lib/ui.svelte';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
   import { fetchBillingInvoices, redeemBillingAccessCode, type BillingInvoice } from '#lib/api';
@@ -70,6 +70,7 @@
     legacyBilling: boolean;
     entitlement: Entitlement;
     quota: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number };
+    usageForecast: { sampleDays: number; jobsInSample: number; averagePerDay: number; daysUntilAllowanceUsed: number | null };
     providers: {
       stripe: ProviderStatus;
       crypto: ProviderStatus & { provider: 'nowpayments'; assets: string[] };
@@ -121,6 +122,19 @@
     } finally {
       loading = false;
     }
+  }
+
+  function toggleUsageAlert(threshold: number): void {
+    const current = decryptUsageAlertThresholdsState.value;
+    const next = current.includes(threshold) ? current.filter((value) => value !== threshold) : [...current, threshold];
+    void pushDecryptUsageAlertThresholds(next).catch((error) => showToast(error instanceof Error ? error.message : 'Could not save usage alerts', 'error'));
+  }
+
+  function usageForecastLabel(): string {
+    const days = billing?.usageForecast.daysUntilAllowanceUsed;
+    if (days === null || days === undefined) return 'Not enough recent usage to estimate';
+    if (days < 1) return 'At your recent pace, you may use this allowance within a day';
+    return `At your recent pace, the remaining allowance may last about ${days.toFixed(days < 10 ? 1 : 0)} days`;
   }
 
   async function refreshAfterCheckout(): Promise<void> {
@@ -360,6 +374,7 @@
         <div class="flex flex-wrap items-center gap-2 font-medium">Your decrypt allowance {#if billing.entitlement.legacy}<Badge variant="secondary">Grandfathered</Badge>{/if}</div>
         <div class="mt-1 text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.remaining ?? 0} of ${billing.quota.limit} new decrypts available in the rolling 24-hour window`}. IPA Library downloads do not use this allowance.</div>
         {#if billing.quota.nextAvailableAt && billing.quota.remaining === 0}<div class="mt-1 text-xs text-muted">Next slot opens {formatDate(new Date(billing.quota.nextAvailableAt).toISOString())}.</div>{/if}
+        {#if billing.quota.limit !== null}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-1 text-xs text-muted">API: {billing.entitlement.apiRatePerMinute} requests per minute across your keys.</div>{/if}
         {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
         <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a></div>

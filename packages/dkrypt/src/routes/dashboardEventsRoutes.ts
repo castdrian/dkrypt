@@ -6,10 +6,9 @@ import type { LogEntry } from '#logger.js';
 import { hasPermission, isSubsetPermission, PermissionFlag } from '#permissions.js';
 import { getRouteContract } from '#contracts.js';
 import { getAuthProfile } from '#identity.js';
-import { canAccessProject, dashboardHistoryEntry } from '#dashboardJobPresentation.js';
+import { dashboardHistoryEntry } from '#dashboardJobPresentation.js';
 import { buildDashboardOverview } from '#dashboardOverview.js';
-import { logBelongsToProject } from '#dashboardLogPresentation.js';
-import { DEFAULT_PROJECT_ID, getProject, getUserEffectivePermissions, type JobHistoryEntry } from '#store/state.js';
+import { getUserEffectivePermissions, type JobHistoryEntry } from '#store/state.js';
 import { fastifyRequireSession, getFastifySession } from '#session.js';
 import { sendHttpErrorEnvelope } from '#util/httpResponse.js';
 
@@ -26,12 +25,6 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
       return;
     }
 
-    const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-    if (!getProject(projectId) || !canAccessProject(session.sub, session.permissions, projectId)) {
-      sendHttpErrorEnvelope(reply, request.id, 404, 'project not found');
-      return;
-    }
-
     reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     reply.raw.setHeader('Cache-Control', 'no-cache, no-transform');
     reply.raw.setHeader('Connection', 'keep-alive');
@@ -41,28 +34,28 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
     reply.raw.flushHeaders();
 
     const { sub } = session;
-    let projectAccessRevoked = false;
+    let accessRevoked = false;
     let sequenceNumber = 0;
     const nextSequence = () => ++sequenceNumber;
-    const closeForRevokedProject = (): boolean => {
-      if (projectAccessRevoked) return false;
+    const closeForRevokedPermissions = (): boolean => {
+      if (accessRevoked) return false;
       const currentPermissions = sub === 'root' ? session.permissions : getUserEffectivePermissions(sub);
       const permissionsRemainValid = isSubsetPermission(session.permissions, currentPermissions);
-      if (permissionsRemainValid && canAccessProject(sub, currentPermissions, projectId)) return true;
-      projectAccessRevoked = true;
+      if (permissionsRemainValid) return true;
+      accessRevoked = true;
       const sequence = nextSequence();
-      reply.raw.write(`id: ${sequence}\nevent: project-access-revoked\ndata: ${JSON.stringify({ sequence, data: { projectId } })}\n\n`);
+      reply.raw.write(`id: ${sequence}\nevent: access-revoked\ndata: ${JSON.stringify({ sequence, data: {} })}\n\n`);
       reply.raw.end();
       return false;
     };
     const sendEvent = (event: string, data: unknown) => {
-      if (!closeForRevokedProject()) return;
+      if (!closeForRevokedPermissions()) return;
       const sequence = nextSequence();
       const payload = Array.isArray(data) ? { sequence, data } : data && typeof data === 'object' ? { ...(data as Record<string, unknown>), sequence } : { sequence, data };
       reply.raw.write(`id: ${sequence}\nevent: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
 
-    sendEvent('overview', buildDashboardOverview(session.permissions, sub, projectId));
+    sendEvent('overview', buildDashboardOverview(session.permissions, sub));
 
     registerPresence(sub);
     const unregisterDashboardConnection = registerDashboardConnection(() => {
@@ -71,20 +64,11 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
     const presentOnlineUsers = (usernames: string[]) => usernames.map((userId) => ({ userId, displayName: getAuthProfile(userId)?.displayName ?? (userId === 'root' ? 'Administrator' : userId) }));
     sendEvent('presence', presentOnlineUsers(getOnlineUsernames()));
 
-    const onOverviewChanged = () => sendEvent('overview', buildDashboardOverview(session.permissions, sub, projectId));
-    const onLogAdded = (entry: LogEntry) => {
-      if (logBelongsToProject(entry, projectId)) sendEvent('log', entry);
-    };
-    const onHistoryAdded = (entry: JobHistoryEntry) => {
-      if ((entry.projectId ?? DEFAULT_PROJECT_ID) === projectId) sendEvent('history', dashboardHistoryEntry(entry));
-    };
+    const onOverviewChanged = () => sendEvent('overview', buildDashboardOverview(session.permissions, sub));
+    const onLogAdded = (entry: LogEntry) => sendEvent('log', entry);
+    const onHistoryAdded = (entry: JobHistoryEntry) => sendEvent('history', dashboardHistoryEntry(entry));
     const onPresenceChanged = (usernames: string[]) => sendEvent('presence', presentOnlineUsers(usernames));
     const onBillingChanged = () => sendEvent('billing', {});
-    const onProjectChanged = (changedProjectId?: string) => {
-      if (changedProjectId === undefined || changedProjectId === projectId) {
-        if (closeForRevokedProject()) sendEvent('overview', buildDashboardOverview(session.permissions, sub, projectId));
-      }
-    };
 
     dashboardEvents.on('jobsChanged', onOverviewChanged);
     dashboardEvents.on('deviceHealthChanged', onOverviewChanged);
@@ -94,11 +78,8 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
     if (hasPermission(session.permissions, PermissionFlag.viewBilling) || hasPermission(session.permissions, PermissionFlag.manageBilling)) {
       dashboardEvents.on('billingChanged', onBillingChanged);
     }
-    dashboardEvents.on('projectChanged', onProjectChanged);
-    dashboardEvents.on('projectsChanged', onProjectChanged);
-
     const heartbeat = setInterval(() => {
-      if (closeForRevokedProject()) reply.raw.write(': ping\n\n');
+      if (closeForRevokedPermissions()) reply.raw.write(': ping\n\n');
     }, 15_000);
 
     reply.raw.once('close', () => {
@@ -111,8 +92,6 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
       dashboardEvents.off('historyAdded', onHistoryAdded);
       dashboardEvents.off('presenceChanged', onPresenceChanged);
       dashboardEvents.off('billingChanged', onBillingChanged);
-      dashboardEvents.off('projectChanged', onProjectChanged);
-      dashboardEvents.off('projectsChanged', onProjectChanged);
     });
   });
 };

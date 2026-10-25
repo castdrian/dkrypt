@@ -49,11 +49,33 @@ test('billing revenue combines paid Stripe invoices and crypto payments while su
   expect(summary).toMatchObject({
     complete: true,
     totals: [{ currency: 'EUR', gross: 18, refunded: 5.5, net: 12.5 }],
+    retention: { activeAccounts: 0, paymentIssues: 0, cancellationsUpdatedLast30Days: 0, recentCancellationRatePercent: 0 },
     providers: {
       stripe: { state: 'ready', paymentCount: 1, totals: [{ currency: 'EUR', gross: 10, refunded: 2.5, net: 7.5 }] },
       nowpayments: { state: 'ready', paymentCount: 2, totals: [{ currency: 'EUR', gross: 8, refunded: 3, net: 5 }] },
     },
   });
+});
+
+test('billing retention summarizes each account using its latest subscription state', async () => {
+  const now = Date.parse('2026-10-25T00:00:00.000Z');
+  const subscriptions = [
+    { provider: 'stripe', subscriptionId: 'sub-active', customerId: 'cus-active', userId: 'active@example.com', status: 'active', updatedAt: new Date(now - 2 * 86400000).toISOString() },
+    { provider: 'stripe', subscriptionId: 'sub-old', customerId: 'cus-past-due', userId: 'past-due@example.com', status: 'active', updatedAt: new Date(now - 4 * 86400000).toISOString() },
+    { provider: 'stripe', subscriptionId: 'sub-new', customerId: 'cus-past-due', userId: 'past-due@example.com', status: 'past_due', updatedAt: new Date(now - 86400000).toISOString() },
+    { provider: 'nowpayments', subscriptionId: 'sub-canceled', customerId: 'wallet-canceled', userId: 'canceled@example.com', status: 'cancelled', updatedAt: new Date(now - 10 * 86400000).toISOString() },
+    { provider: 'nowpayments', subscriptionId: 'sub-old-canceled', customerId: 'wallet-old', userId: 'old-canceled@example.com', status: 'canceled', updatedAt: new Date(now - 40 * 86400000).toISOString() },
+  ] as BillingSubscription[];
+  const readRevenue = createBillingRevenueReader({
+    listSubscriptions: () => subscriptions,
+    listCharges: () => [],
+    stripeConfigured: false,
+    now: () => now,
+  });
+
+  const summary = await readRevenue();
+
+  expect(summary.retention).toEqual({ activeAccounts: 1, paymentIssues: 1, cancellationsUpdatedLast30Days: 1, recentCancellationRatePercent: 50 });
 });
 
 test('billing revenue marks incomplete Stripe history instead of claiming a precise total', async () => {
@@ -100,6 +122,7 @@ test('billing revenue endpoint is manager-only and excluded from API-key routes'
     updatedAt: new Date(0).toISOString(),
     complete: true,
     totals: [],
+    retention: { activeAccounts: 0, paymentIssues: 0, cancellationsUpdatedLast30Days: 0, recentCancellationRatePercent: 0 },
     providers: {
       stripe: { state: 'not_configured', totals: [], paymentCount: 0 },
       nowpayments: { state: 'ready', totals: [], paymentCount: 0 },

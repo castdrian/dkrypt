@@ -2,14 +2,12 @@ import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from '@sinclair/typebox';
 import type { DashboardAuditLogExportRoute, DashboardAuditLogRoute, DashboardLogsRoute } from '#dashboardObservabilityContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
-import { logBelongsToProject } from '#dashboardLogPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { getAuthProfile } from '#identity.js';
 import { getRecentLogs } from '#logger.js';
 import { PermissionFlag } from '#permissions.js';
-import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
-import { DEFAULT_PROJECT_ID, getAuditLog, getAuditLogByTarget, getAuditLogPage } from '#store/state.js';
+import { fastifyRequirePermission, fastifyRequireSession } from '#session.js';
+import { getAuditLog, getAuditLogByTarget, getAuditLogPage } from '#store/state.js';
 import { csvCell } from '#util/csv.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 
@@ -24,12 +22,6 @@ export const dashboardObservabilityRoutes: FastifyPluginAsyncTypebox = async (se
     schema: getRouteContract('GET', '/v1/dashboard/logs'),
     preHandler: canViewLogs,
   }, (request, reply) => {
-    const session = getFastifySession(request)!;
-    const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-    if (!canAccessProject(session.sub, session.permissions, projectId)) {
-      reply.code(404);
-      return createHttpErrorEnvelope(request.id, 404, 'project not found');
-    }
     const query = request.query;
     const scope = query.scope && query.scope !== 'all' ? query.scope.slice(0, 100) : undefined;
     const search = query.q?.trim().slice(0, 100) || undefined;
@@ -45,7 +37,6 @@ export const dashboardObservabilityRoutes: FastifyPluginAsyncTypebox = async (se
         cursor,
         offset,
         limit,
-        filter: (entry) => logBelongsToProject(entry, projectId),
       });
     } catch {
       reply.code(400);

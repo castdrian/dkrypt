@@ -1,6 +1,6 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { ApiErrorEnvelope, DashboardJobHistoryPage, DashboardJobSummary, DashboardJobTimeline } from '#contracts.js';
-import { bundleIdSchema as BundleId, deviceTransportSchema, identifierSchema, paginationQueryProperties, projectIdentifierSchema } from '#apiCommonContracts.js';
+import { bundleIdSchema as BundleId, deviceTransportSchema, identifierSchema, paginationQueryProperties } from '#apiCommonContracts.js';
 import type { BundleStats } from '#store/state.js';
 import { jobFailureClassSchema } from '#util/failureCategory.js';
 
@@ -29,7 +29,6 @@ export const dashboardJobIpaMetadataSchema = Type.Object({
 export const dashboardJobExportEntrySchema = Type.Object({
   id: identifierSchema,
   correlationId: Type.Optional(identifierSchema),
-  projectId: Type.Optional(identifierSchema),
   bundleId: BundleId,
   externalVersionId: Type.Optional(identifierSchema),
   testflight: Type.Optional(Type.Object({ appId: Type.Number(), build: TestFlightBuild }, { additionalProperties: true })),
@@ -64,13 +63,13 @@ export const dashboardJobExportEntrySchema = Type.Object({
   deadlineExceeded: Type.Optional(Type.Boolean()),
   failureClass: Type.Optional(jobFailureClassSchema),
   queueReason: Type.Optional(Type.String()),
+  pausedAt: Type.Optional(Type.Number()),
 }, { additionalProperties: true });
 export const dashboardJobExportQuerySchema = Type.Object({
   format: Type.Optional(Type.Union([
     Type.String({ description: 'Only csv selects CSV output; other values return JSON.' }),
     Type.Array(Type.String()),
   ])),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 export const dashboardJobExportResponseSchema = {
   content: {
@@ -80,7 +79,6 @@ export const dashboardJobExportResponseSchema = {
 };
 export const dashboardJobBulkPreviewBodySchema = Type.Object({
   ids: Type.Optional(Type.Unknown({ description: 'Non-array input is treated as empty; array entries are filtered to strings, deduplicated, and capped at 100.' })),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 export const dashboardJobBulkPreviewResponseSchema = Type.Object({
   requested: Type.Integer({ minimum: 0 }),
@@ -102,7 +100,6 @@ export const dashboardJobDiffQuerySchema = Type.Object({
   bundleId: BundleId,
   a: identifierSchema,
   b: identifierSchema,
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 const dashboardJobDiffVersionSchema = Type.Object({
   id: identifierSchema,
@@ -128,7 +125,6 @@ export const dashboardJobDiffResponseSchema = Type.Object({
 export const dashboardJobAttemptDiffQuerySchema = Type.Object({
   a: identifierSchema,
   b: identifierSchema,
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 const dashboardJobAttemptSnapshotSchema = Type.Object({
   id: identifierSchema,
@@ -167,7 +163,6 @@ const Requester = Type.Object({
 const DashboardJobHistoryEntry = Type.Object({
   id: identifierSchema,
   correlationId: Type.Optional(identifierSchema),
-  projectId: Type.Optional(identifierSchema),
   bundleId: BundleId,
   externalVersionId: Type.Optional(identifierSchema),
   testflight: Type.Optional(Type.Object({ appId: Type.Number(), build: TestFlightBuild }, { additionalProperties: true })),
@@ -209,7 +204,6 @@ const DashboardJobHistoryEntry = Type.Object({
 
 export const dashboardJobListQuerySchema = Type.Object({
   ...paginationQueryProperties,
-  projectId: Type.Optional(Type.String({ minLength: 1, maxLength: 80, pattern: '^[A-Za-z0-9_-]{1,80}$' })),
   q: Type.Optional(Type.String({ maxLength: 200 })),
   source: Type.Optional(Type.Union([Type.Literal('manual'), Type.Literal('scheduler')])),
   status: Type.Optional(Type.Union([Type.Literal('done'), Type.Literal('failed')])),
@@ -223,7 +217,7 @@ export const dashboardJobListQuerySchema = Type.Object({
 
 export const dashboardJobParamsSchema = Type.Object({ id: identifierSchema }, { additionalProperties: true });
 export const dashboardJobBundleParamsSchema = Type.Object({ bundleId: BundleId }, { additionalProperties: true });
-export const dashboardJobProjectQuerySchema = Type.Object({ projectId: Type.Optional(projectIdentifierSchema) }, { additionalProperties: true });
+export const dashboardJobProjectQuerySchema = Type.Object({}, { additionalProperties: true });
 export const dashboardJobEtaResponseSchema = Type.Object({ avgMs: Type.Union([Type.Number(), Type.Null()]) }, { additionalProperties: true });
 export const dashboardJobBundleStatsResponseSchema = Type.Object({
   bundleId: BundleId,
@@ -237,7 +231,6 @@ export const dashboardJobBundleStatsResponseSchema = Type.Object({
 }, { additionalProperties: true });
 export const dashboardJobVolumeQuerySchema = Type.Object({
   days: Type.Optional(Type.Integer({ minimum: 1, maximum: 90 })),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 export const dashboardJobDailyVolumeResponseSchema = Type.Object({
   days: Type.Array(Type.Object({ date: Type.String(), count: Type.Integer({ minimum: 0 }) })),
@@ -273,7 +266,6 @@ export const dashboardManualDecryptBodySchema = Type.Object({
   versionLabel: Type.Optional(Type.String({ maxLength: 64 })),
   minimumOsVersion: Type.Optional(Type.String({ maxLength: 32, pattern: '^\\d+(?:\\.\\d+){0,3}$' })),
   preferPrimary: Type.Optional(Type.Boolean()),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 export const dashboardManualDecryptPreflightBodySchema = Type.Object({
   bundleId: BundleId,
@@ -281,7 +273,6 @@ export const dashboardManualDecryptPreflightBodySchema = Type.Object({
   versionLabel: Type.Optional(Type.String({ maxLength: 64 })),
   installSizeBytes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
   deviceId: Type.Optional(identifierSchema),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 const dashboardManualDecryptPreflightReadinessSchema = Type.Object({
   score: Type.Number({ minimum: 0, maximum: 100 }),
@@ -314,13 +305,11 @@ export const dashboardManualDecryptPreflightResponseSchema = Type.Object({
 }, { additionalProperties: true });
 export const dashboardJobReorderBodySchema = Type.Object({
   ids: Type.Array(identifierSchema, { maxItems: 100 }),
-  projectId: Type.Optional(projectIdentifierSchema),
 }, { additionalProperties: true });
 export const dashboardJobRetryBodySchema = Type.Object({ preferPrimary: Type.Optional(Type.Boolean()) }, { additionalProperties: true });
 export const dashboardJobDiagnosticJobSchema = Type.Object({
   id: identifierSchema,
   correlationId: Type.Optional(identifierSchema),
-  projectId: Type.Optional(identifierSchema),
   bundleId: BundleId,
   externalVersionId: Type.Optional(identifierSchema),
   testflight: Type.Optional(Type.Object({ appId: Type.Number(), build: TestFlightBuild }, { additionalProperties: false })),

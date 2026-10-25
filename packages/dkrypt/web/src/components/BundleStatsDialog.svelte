@@ -20,7 +20,6 @@
 	import { fmtBytesGB, fmtDurationApprox, fmtNumber } from "#lib/format.svelte";
 	import RelativeTime from "#components/RelativeTime.svelte";
 	import RateLimitHint from "#components/RateLimitHint.svelte";
-	import { projectSelectionState } from "#lib/projectSelection.svelte";
 	import { isServerQueryCancelled } from "#lib/serverStateCache.svelte";
 
 	let {
@@ -75,7 +74,6 @@
 
 	$effect(() => {
 		if (open && bundleId) {
-			projectSelectionState.id;
 			stats = null;
 			versions = null;
 			versionsOffset = 0;

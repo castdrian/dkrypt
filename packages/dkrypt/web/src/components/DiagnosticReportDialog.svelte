@@ -4,7 +4,6 @@
   import Button from '#lib/components/ui/Button.svelte';
   import Select from '#lib/components/ui/Select.svelte';
   import { fetchDiagnosticReports, previewDiagnosticReport, submitDiagnosticReport, type DiagnosticReport, type DiagnosticReportCategory, type DiagnosticReportPreview } from '#lib/api';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { sessionState } from '#lib/session.svelte';
   import { clearFormDraft, readFormDraft, setFormUnsaved, writeFormDraft } from '#lib/formDrafts.svelte';
   import { fmtDateTime } from '#lib/format.svelte';
@@ -26,7 +25,7 @@
   let consent = $state(false);
   let lastLoadedDraftKey = '';
   const formId = 'diagnostic-report';
-  const draftKey = $derived(sessionState.sub ? `${formId}:${sessionState.sub}:${projectSelectionState.id}` : '');
+  const draftKey = $derived(sessionState.sub ? `${formId}:${sessionState.sub}` : '');
   const categoryItems = [
     { value: 'bug', label: 'Bug or broken workflow' },
     { value: 'device', label: 'Device connection or setup' },
@@ -74,7 +73,7 @@
     if (!summary.trim() || !details.trim()) return;
     loading = true;
     try {
-      preview = await previewDiagnosticReport({ projectId: projectSelectionState.id, category, summary, details });
+      preview = await previewDiagnosticReport({ category, summary, details });
       summary = preview.summary;
       details = preview.details;
       writeFormDraft(draftKey, { category: preview.category, summary: preview.summary, details: preview.details });

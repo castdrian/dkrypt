@@ -1,6 +1,5 @@
 import type { JobHistoryEntry, LogEntry, OverviewPayload } from '#lib/api';
 import { DashboardEventSequenceTracker } from '#lib/liveSequence';
-import { projectSelectionState, setProjectSelection } from '#lib/projectSelection.svelte';
 import { serverStateCache } from '#lib/serverStateCache.svelte';
 import { announceScreenReader } from '#lib/ui.svelte';
 
@@ -49,7 +48,7 @@ async function refreshOverview(force = false): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 8_000);
 	liveState.overviewRefreshFailed = false;
-	const refresh = fetch(`/v1/dashboard/overview?projectId=${encodeURIComponent(projectSelectionState.id)}`, { signal: controller.signal })
+	const refresh = fetch('/v1/dashboard/overview', { signal: controller.signal })
 		.then(async (response) => {
 			if (requestGeneration !== overviewRefreshGeneration) return;
 			if (!response.ok) {
@@ -132,7 +131,7 @@ export function connectLive(): void {
   installVisibilityListener();
   if (source || document.visibilityState === 'hidden') return;
 
-  const eventSource = new EventSource(`/v1/dashboard/events?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+	const eventSource = new EventSource('/v1/dashboard/events');
   source = eventSource;
   const initialSource = eventSource;
 	const requiresFreshOverview =
@@ -198,11 +197,10 @@ export function connectLive(): void {
     liveState.billingRevision += 1;
   });
 
-  eventSource.addEventListener('project-access-revoked', () => {
+  eventSource.addEventListener('access-revoked', () => {
     eventSource.close();
     if (source !== eventSource) return;
     source = null;
-    setProjectSelection('default');
     liveState.overview = null;
     liveState.logs = [];
     liveState.historyAdditions = [];
@@ -252,12 +250,12 @@ export function disconnectLive(): void {
   sequenceTracker.reset();
 }
 
-export function reconnectLive(resetProjectState = false): void {
+export function reconnectLive(resetState = false): void {
   source?.close();
   source = null;
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
-  if (resetProjectState) {
+  if (resetState) {
     liveState.overview = null;
     liveState.logs = [];
     liveState.historyAdditions = [];

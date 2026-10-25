@@ -1,7 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { FastifyReply } from 'fastify';
 import type { DashboardManualDecryptPreflightRoute } from '#dashboardJobContracts.js';
-import { projectIdentifierPattern } from '#apiCommonContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getDeviceHealth, getDeviceInstallBlocker, getDeviceReadiness } from '#deviceHealth.js';
 import { getRouteContract } from '#contracts.js';
@@ -15,16 +14,13 @@ import {
   getAverageJobDurationMs,
   getDevice,
   getEffectiveDevices,
-  getProject,
 } from '#store/state.js';
 import { getVerifiedTestFlightCatalog, TestFlightCatalogUnavailableError } from '#testflightSubscriptions.js';
 import { recentlyVerifiedTestFlightDevices } from '#testflightPolicy.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { resolveWithin } from '#util/resolveWithin.js';
 
 export interface DashboardDecryptPreflightServices {
-  canAccessProject: typeof canAccessProject;
   getActiveJobs: typeof getActiveJobs;
   getAverageJobDurationMs: typeof getAverageJobDurationMs;
   getDevice: typeof getDevice;
@@ -32,12 +28,10 @@ export interface DashboardDecryptPreflightServices {
   getDeviceInstallBlocker: typeof getDeviceInstallBlocker;
   getDeviceReadiness: typeof getDeviceReadiness;
   getEffectiveDevices: typeof getEffectiveDevices;
-  getProject: typeof getProject;
   getVerifiedTestFlightCatalog: typeof getVerifiedTestFlightCatalog;
 }
 
 const defaultServices: DashboardDecryptPreflightServices = {
-  canAccessProject,
   getActiveJobs,
   getAverageJobDurationMs,
   getDevice,
@@ -45,7 +39,6 @@ const defaultServices: DashboardDecryptPreflightServices = {
   getDeviceInstallBlocker,
   getDeviceReadiness,
   getEffectiveDevices,
-  getProject,
   getVerifiedTestFlightCatalog,
 };
 
@@ -69,13 +62,7 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
       const entitlement = getBillingEntitlements(session.sub);
-      const projectId = request.body.projectId ?? DEFAULT_PROJECT_ID;
-      if (!projectIdentifierPattern.test(projectId)) return sendPreflightError(request.id, reply, 400, 'projectId must be a valid project identifier');
-      const project = services.getProject(projectId);
-      if (!project || !services.canAccessProject(session.sub, session.permissions, projectId)) {
-        return sendPreflightError(request.id, reply, 404, 'project not found');
-      }
-      if (project.archivedAt !== undefined) return sendPreflightError(request.id, reply, 409, 'project is archived');
+      const projectId = DEFAULT_PROJECT_ID;
 
       const bundleId = request.body.bundleId.trim();
       const testflight = request.body.testflight === true;

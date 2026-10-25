@@ -469,8 +469,8 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   server.get('/v1/billing/usage.csv', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const rows = getDecryptQuotaJournal(userId);
-    const headers = ['job_id', 'admitted_at', 'reservation_state', 'bundle_id', 'version', 'project_id', 'source', 'job_status', 'execution_path'];
-    const csv = [headers, ...rows.map((row) => [row.jobId, new Date(row.admittedAt).toISOString(), row.state, row.bundleId ?? '', row.versionLabel ?? '', row.projectId ?? '', row.source ?? '', row.status ?? 'pruned', row.executionPath ?? ''])]
+    const headers = ['job_id', 'admitted_at', 'reservation_state', 'bundle_id', 'version', 'source', 'job_status', 'execution_path'];
+    const csv = [headers, ...rows.map((row) => [row.jobId, new Date(row.admittedAt).toISOString(), row.state, row.bundleId ?? '', row.versionLabel ?? '', row.source ?? '', row.status ?? 'pruned', row.executionPath ?? ''])]
       .map((values) => values.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(','))
       .join('\r\n');
     return reply.type('text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="dkrypt-usage.csv"').send(`${csv}\r\n`);
@@ -522,6 +522,10 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const profile = getAuthProfile(userId);
     const entitlement = getBillingEntitlements(userId);
+    const quota = getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
+    const sampleDays = 7;
+    const recentQuotaAdmissions = getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
+    const averagePerDay = recentQuotaAdmissions.length / sampleDays;
     const crypto = await getNowPaymentsProviderStatus();
     const minimumResults = crypto.enabled && crypto.ready
       ? await Promise.allSettled(crypto.supportedAssets.map((asset) => getNowPaymentsMinimumFiat(asset)))
@@ -543,7 +547,13 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       customerEmail: profile?.email,
       legacyBilling: hasLegacyBillingRecord(userId),
       entitlement,
-      quota: getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit),
+      quota,
+      usageForecast: {
+        sampleDays,
+        jobsInSample: recentQuotaAdmissions.length,
+        averagePerDay,
+        daysUntilAllowanceUsed: quota.limit !== null && quota.remaining !== null && averagePerDay > 0 ? quota.remaining / averagePerDay : null,
+      },
     });
   });
 
@@ -801,7 +811,8 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const subscriptionOrder = new Map(
       listBillingSubscriptions().map((subscription, index) => [`${subscription.provider}:${subscription.subscriptionId}`, index]),
     );
-    const subscriptions = listManagerBillingSubscriptions({ query, provider, status, planId, from, to, wallet, invoice });
+    const subscriptions = listManagerBillingSubscriptions({ query, provider, status: status === 'needs_attention' ? undefined : status, planId, from, to, wallet, invoice })
+      .filter((subscription) => status !== 'needs_attention' || ['past_due', 'unpaid'].includes(String(subscription.status).toLowerCase()));
     const page = paginateCursor(subscriptions, {
       cursor,
       offset,
@@ -818,11 +829,19 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
 
   server.get<BillingWebhookInboxRoute>('/v1/billing/webhooks/inbox', { schema: getRouteContract('GET', '/v1/billing/webhooks/inbox'), preHandler: requireBillingManager }, (request, reply) => {
     const { status, provider, limit: requestedLimit, cursor, offset: requestedOffset } = request.query;
-    const filter = { status, provider };
+    const filter = { status: status === 'needs_attention' ? undefined : status, provider };
     const limit = Math.min(Math.max(requestedLimit ?? 50, 1), 200);
     const offset = cursor ? decodeCursor(cursor) : Math.max(requestedOffset ?? 0, 0);
-    const total = countWebhookInbox(filter);
-    const page = listWebhookInbox(filter, { limit, offset }).map(({ rawBody, ...record }) => ({
+    const attentionStatuses = ['failed', 'received'] as const;
+    const total = status === 'needs_attention'
+      ? attentionStatuses.reduce((sum, attentionStatus) => sum + countWebhookInbox({ provider, status: attentionStatus }), 0)
+      : countWebhookInbox(filter);
+    const records = status === 'needs_attention'
+      ? attentionStatuses.flatMap((attentionStatus) => listWebhookInbox({ provider, status: attentionStatus }, { limit: offset + limit, offset: 0 }))
+        .sort((left, right) => right.receivedAt - left.receivedAt || right.id.localeCompare(left.id))
+        .slice(offset, offset + limit)
+      : listWebhookInbox(filter, { limit, offset });
+    const page = records.map(({ rawBody, ...record }) => ({
       ...record,
       rawBodyBytes: Buffer.byteLength(rawBody),
       replayableProcessed: record.status === 'processed' && isProcessedStripeInvoiceDelivery(record.provider, rawBody),

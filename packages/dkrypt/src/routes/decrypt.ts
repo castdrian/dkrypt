@@ -3,12 +3,12 @@ import { createHash } from 'node:crypto';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { config } from '#config.js';
 import { fastifyRequireApiKey, fastifyRequireTestFlightScope, getFastifyApiKeyContext } from '#auth.js';
-import { fastifyBlockDuringMaintenance } from '#maintenance.js';
+import { fastifyBlockDuringMaintenance, fastifyBlockManualMaintenance } from '#maintenance.js';
 import { jobFileAvailable, jobSummary, streamFilePath, streamJobFile } from '#jobs/http.js';
 import { enqueueDecryptJob, getJob, waitForJob } from '#jobs/store.js';
 import { DailyDecryptLimitError } from '#jobs/repository.js';
-import { DEFAULT_PROJECT_ID, getProject, recordApiKeyBundleUsage } from '#store/state.js';
-import { apiKeyCanAccessProject, isBundleIdAllowed } from '#apiKeyAccess.js';
+import { DEFAULT_PROJECT_ID, recordApiKeyBundleUsage } from '#store/state.js';
+import { isBundleIdAllowed } from '#apiKeyAccess.js';
 import { listBuilds, listTrains, type TFBuild } from '#testflight.js';
 import { apiIdempotencyRegistry } from '#idempotency.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, touchArtifact } from '#artifacts.js';
@@ -52,7 +52,7 @@ class IdempotencyRequestError extends Error {
 
 class DecryptTargetRequestError extends Error {}
 
-function artifactSummary(artifact: ReturnType<typeof getArtifactById>, projectId: string) {
+function artifactSummary(artifact: ReturnType<typeof getArtifactById>) {
   if (!artifact) return undefined;
   return {
     id: artifact.id,
@@ -67,7 +67,7 @@ function artifactSummary(artifact: ReturnType<typeof getArtifactById>, projectId
     createdAt: new Date(artifact.createdAt).toISOString(),
     lastAccessedAt: new Date(artifact.lastAccessedAt).toISOString(),
     accessCount: artifact.accessCount,
-    fileUrl: `/v1/artifacts/${artifact.id}/file?projectId=${encodeURIComponent(projectId)}`,
+    fileUrl: `/v1/artifacts/${artifact.id}/file`,
   };
 }
 
@@ -160,34 +160,6 @@ function normalizeBundleScope(scope: string[] | undefined): string[] | undefined
   return scope && scope.length > 0 ? scope : undefined;
 }
 
-function resolveApiProjectId(
-  value: unknown,
-  apiKey: ReturnType<typeof getFastifyApiKeyContext>,
-  reply: { code: (status: number) => unknown; statusCode: number },
-  options: { requireActive?: boolean } = {},
-): string | undefined {
-  if (value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value))) {
-    reply.code(400);
-    return undefined;
-  }
-  const projectId = typeof value === 'string' ? value : DEFAULT_PROJECT_ID;
-  if (!apiKeyCanAccessProject(apiKey, projectId)) {
-    reply.code(404);
-    return undefined;
-  }
-  if (options.requireActive && getProject(projectId)?.archivedAt !== undefined) {
-    reply.code(409);
-    return undefined;
-  }
-  return projectId;
-}
-
-function projectResolutionError(reply: { statusCode: number }, requestId: string) {
-  return reply.statusCode === 409
-    ? apiErrorEnvelope('project is archived; restore it before queuing work', 'project_archived', requestId)
-    : apiErrorEnvelope('project not found', 'request_error', requestId);
-}
-
 function isTestFlightBuild(value: unknown): value is TFBuild {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const build = value as Record<string, unknown>;
@@ -215,7 +187,7 @@ export function createDecryptRoutes(
       '/v1/decrypt',
       {
         schema: getRouteContract('GET', '/v1/decrypt'),
-        preHandler: [fastifyRequireApiKey, fastifyBlockDuringMaintenance],
+        preHandler: [fastifyRequireApiKey, fastifyBlockManualMaintenance],
       },
       async (request, reply) => {
         const query = request.query as Record<string, unknown>;
@@ -233,8 +205,7 @@ export function createDecryptRoutes(
           reply.code(401);
           return apiErrorEnvelope('unauthorized', 'unauthorized', request.id);
         }
-        const projectId = resolveApiProjectId(query.projectId, apiKey, reply, { requireActive: true });
-        if (!projectId) return projectResolutionError(reply, request.id);
+        const projectId = DEFAULT_PROJECT_ID;
         if (!isBundleIdAllowed(apiKey.allowedBundleIds, bundleId)) {
           reply.code(403);
           return apiErrorEnvelope('this API key is not scoped to this bundleId', 'request_error', request.id);
@@ -339,7 +310,7 @@ export function createDecryptRoutes(
         const { id } = request.params as { id: string };
         const query = request.query as { timeoutSeconds?: number };
         const job = services.getJob(id);
-        if (!job || !apiKeyCanAccessProject(apiKey, job.projectId ?? DEFAULT_PROJECT_ID) || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
+        if (!job || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
           reply.code(404);
           return apiErrorEnvelope('job not found (finished jobs are pruned after retention window)', 'request_error', request.id);
         }
@@ -358,7 +329,7 @@ export function createDecryptRoutes(
         return {
           jobs: ids.map((id) => {
             const job = services.getJob(id);
-            if (!job || !apiKeyCanAccessProject(apiKey, job.projectId ?? DEFAULT_PROJECT_ID) || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
+            if (!job || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
               return { id, state: 'not_found' as const };
             }
             return { id, state: 'found' as const, job: jobSummary(job) };
@@ -374,7 +345,7 @@ export function createDecryptRoutes(
         const apiKey = getFastifyApiKeyContext(request);
         const params = request.params as { id: string };
         const job = services.getJob(params.id);
-        if (!job || !apiKeyCanAccessProject(apiKey, job.projectId ?? DEFAULT_PROJECT_ID)) {
+        if (!job) {
           reply.code(404);
           return apiErrorEnvelope('job not found (finished jobs are pruned after retention window)', 'request_error', request.id);
         }
@@ -390,7 +361,7 @@ export function createDecryptRoutes(
       '/v1/decrypts',
       {
         schema: getRouteContract('POST', '/v1/decrypts'),
-        preHandler: [fastifyRequireApiKey, fastifyBlockDuringMaintenance],
+        preHandler: [fastifyRequireApiKey, fastifyBlockManualMaintenance],
       },
       async (request, reply) => {
         const body = request.body as Record<string, unknown>;
@@ -410,8 +381,7 @@ export function createDecryptRoutes(
           reply.code(401);
           return apiErrorEnvelope('unauthorized', 'unauthorized', request.id);
         }
-        const projectId = resolveApiProjectId(body.projectId, apiKey, reply, { requireActive: true });
-        if (!projectId) return projectResolutionError(reply, request.id);
+        const projectId = DEFAULT_PROJECT_ID;
         if (!isBundleIdAllowed(apiKey.allowedBundleIds, bundleId)) {
           reply.code(403);
           return apiErrorEnvelope('this API key is not scoped to this bundleId', 'request_error', request.id);
@@ -457,7 +427,7 @@ export function createDecryptRoutes(
             channel: job.testflight ? 'testflight' : 'appstore',
             resolvedVersion: job.versionLabel,
             cacheHit: job.cacheHit === true,
-            artifact: job.artifactId ? artifactSummary(services.getArtifactById(job.artifactId), job.projectId ?? DEFAULT_PROJECT_ID) : undefined,
+            artifact: job.artifactId ? artifactSummary(services.getArtifactById(job.artifactId)) : undefined,
           };
           return reply.code(job.status === 'done' ? 200 : 202).send(payload);
         } catch (error) {
@@ -504,8 +474,7 @@ export function createDecryptRoutes(
           reply.code(401);
           return apiErrorEnvelope('unauthorized', 'unauthorized', request.id);
         }
-        const projectId = resolveApiProjectId(body.projectId, apiKey, reply, { requireActive: true });
-        if (!projectId) return projectResolutionError(reply, request.id);
+        const projectId = DEFAULT_PROJECT_ID;
 
         const fingerprintInput = { bundleId, appId, build, projectId };
         const fingerprint = canonicalRequestFingerprint('/v1/testflight/decrypt', fingerprintInput);
@@ -554,18 +523,16 @@ export function createArtifactCatalogRoutes(
     server.get(
       '/v1/artifacts',
       { schema: getRouteContract('GET', '/v1/artifacts'), preHandler: fastifyRequireApiKey },
-      async (request, reply) => {
+      async (request) => {
         const query = request.query as {
           cursor?: string;
           offset?: string | number;
           limit?: string | number;
           q?: string;
           channel?: 'appstore' | 'testflight';
-          projectId?: string;
         };
         const apiKey = getFastifyApiKeyContext(request);
-        const projectId = resolveApiProjectId(query.projectId, apiKey, reply);
-        if (!projectId) return projectResolutionError(reply, request.id);
+        const projectId = DEFAULT_PROJECT_ID;
         const offset = query.cursor ? 0 : Number.parseInt(String(query.offset ?? '0'), 10);
         const limit = Number.parseInt(String(query.limit ?? '50'), 10);
         const result = services.listArtifacts({
@@ -579,7 +546,7 @@ export function createArtifactCatalogRoutes(
         });
         return {
           ...result,
-          artifacts: result.artifacts.map((artifact) => artifactSummary(artifact, projectId)),
+          artifacts: result.artifacts.map((artifact) => artifactSummary(artifact)),
         };
       },
     );
@@ -589,12 +556,9 @@ export function createArtifactCatalogRoutes(
       { schema: getRouteContract('GET', '/v1/artifacts/:id'), preHandler: fastifyRequireApiKey },
       async (request, reply) => {
         const params = request.params as { id: string };
-        const query = request.query as { projectId?: string };
         const apiKey = getFastifyApiKeyContext(request);
-        const projectId = resolveApiProjectId(query.projectId, apiKey, reply);
-        if (!projectId) return projectResolutionError(reply, request.id);
         const artifact = services.getArtifactById(params.id);
-        if (!artifact || !artifact.projectIds.includes(projectId) || !services.artifactFileAvailable(artifact)) {
+        if (!artifact || !services.artifactFileAvailable(artifact)) {
           reply.code(404);
           return apiErrorEnvelope('artifact not found', 'request_error', request.id);
         }
@@ -602,7 +566,7 @@ export function createArtifactCatalogRoutes(
           reply.code(403);
           return apiErrorEnvelope('this API key is not scoped to this bundleId', 'bundle_scope_denied', request.id);
         }
-        return artifactSummary(artifact, projectId);
+        return artifactSummary(artifact);
       },
     );
 
@@ -611,12 +575,9 @@ export function createArtifactCatalogRoutes(
       { schema: getRouteContract('GET', '/v1/artifacts/:id/file'), preHandler: fastifyRequireApiKey },
       async (request, reply) => {
         const params = request.params as { id: string };
-        const query = request.query as { projectId?: string };
         const apiKey = getFastifyApiKeyContext(request);
-        const projectId = resolveApiProjectId(query.projectId, apiKey, reply);
-        if (!projectId) return projectResolutionError(reply, request.id);
         const artifact = services.getArtifactById(params.id);
-        if (!artifact || !artifact.projectIds.includes(projectId) || !services.artifactFileAvailable(artifact)) {
+        if (!artifact || !services.artifactFileAvailable(artifact)) {
           reply.code(404);
           return apiErrorEnvelope('artifact not found', 'request_error', request.id);
         }

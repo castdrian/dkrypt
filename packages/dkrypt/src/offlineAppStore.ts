@@ -682,6 +682,33 @@ export function getOfflineAppStoreReadiness(job?: Pick<Job, 'testflight'>): Offl
   return defaultProcessor.readiness(job);
 }
 
+export async function checkAppleDownloaderNetwork(): Promise<{ reachable: boolean; latencyMs: number; endpoint: string; diagnostic?: string }> {
+  const homeDirectory = await mkdtemp(path.join(SESSION_WORKSPACE_ROOT, 'dkrypt-appstore-network-'));
+  await chmod(homeDirectory, 0o700);
+  try {
+    const result = await runAppStoreDownloaderRequest({
+      commandPath: config.appStoreOfflineDownloaderBin,
+      homeDirectory,
+      cacheDirectory: path.join(config.stateDir, 'appstore-offline-cache'),
+      memoryMb: config.appStoreOfflineWorkerMemoryMb,
+      cpuSeconds: 15,
+      request: { operation: 'network_check' },
+    });
+    const response = result.response;
+    if (response.network_reachable === undefined || response.network_latency_ms === undefined || !response.network_endpoint) {
+      throw new Error('Apple network check returned an incomplete result');
+    }
+    return {
+      reachable: response.network_reachable,
+      latencyMs: response.network_latency_ms,
+      endpoint: response.network_endpoint,
+      diagnostic: response.diagnostic,
+    };
+  } finally {
+    await rm(homeDirectory, { recursive: true, force: true });
+  }
+}
+
 export const offlineAppStoreProcessor = createOfflineAppStoreProcessor({
   enabled: config.appStoreOfflineDecryptEnabled,
   fairPlayAuthorized: config.appStoreOfflineFairPlayAuthorized,

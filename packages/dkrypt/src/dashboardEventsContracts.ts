@@ -1,10 +1,6 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { ApiErrorEnvelope } from '#contracts.js';
-import { projectIdentifierSchema } from '#apiCommonContracts.js';
-
-export const dashboardEventsQuerySchema = Type.Object({
-  projectId: Type.Optional(projectIdentifierSchema),
-}, { additionalProperties: true });
+export const dashboardEventsQuerySchema = Type.Object({}, { additionalProperties: true });
 
 export type DashboardEventsRoute = {
   Querystring: Static<typeof dashboardEventsQuerySchema>;

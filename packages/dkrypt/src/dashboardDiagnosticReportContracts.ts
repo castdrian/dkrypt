@@ -4,14 +4,12 @@ import type { ApiErrorEnvelope } from '#contracts.js';
 const reportCategorySchema = Type.Union([Type.Literal('bug'), Type.Literal('device'), Type.Literal('job'), Type.Literal('other')]);
 
 export const diagnosticReportPreviewBodySchema = Type.Object({
-  projectId: Type.String({ minLength: 1, maxLength: 128 }),
   category: reportCategorySchema,
   summary: Type.String({ minLength: 1, maxLength: 200 }),
   details: Type.String({ minLength: 1, maxLength: 5000 }),
 }, { additionalProperties: false });
 
 export const diagnosticReportSubmitBodySchema = Type.Object({
-  projectId: Type.String({ minLength: 1, maxLength: 128 }),
   category: reportCategorySchema,
   summary: Type.String({ minLength: 1, maxLength: 200 }),
   details: Type.String({ minLength: 1, maxLength: 5000 }),
@@ -23,7 +21,6 @@ export const diagnosticReportRecordSchema = Type.Object({
   id: Type.String(),
   userId: Type.Optional(Type.String()),
   userDisplayName: Type.Optional(Type.String()),
-  projectId: Type.String(),
   category: reportCategorySchema,
   summary: Type.String(),
   details: Type.String(),
@@ -33,7 +30,6 @@ export const diagnosticReportRecordSchema = Type.Object({
 }, { additionalProperties: false });
 
 export const diagnosticReportPreviewResponseSchema = Type.Object({
-  projectId: Type.String(),
   category: reportCategorySchema,
   summary: Type.String(),
   details: Type.String(),

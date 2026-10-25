@@ -749,7 +749,7 @@ describe('enqueueDecryptJob', () => {
     expect(retry.artifactId).toBe(artifact.id);
   });
 
-  test('keeps active-job deduplication within a project and links shared cache hits', async () => {
+  test('deduplicates jobs and cache hits across legacy workspace identifiers', async () => {
     const bundleId = `com.test.project-cache.${crypto.randomUUID()}`;
     const projectA = createProject({ name: `Cache project A ${crypto.randomUUID()}` }, 'root').project!.id;
     const projectB = createProject({ name: `Cache project B ${crypto.randomUUID()}` }, 'root').project!.id;
@@ -758,12 +758,11 @@ describe('enqueueDecryptJob', () => {
     const secondProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: projectB });
 
     expect(firstProjectJob.id).toBe(duplicateFirstProjectJob.id);
-    expect(secondProjectJob.id).not.toBe(firstProjectJob.id);
-    expect(firstProjectJob.projectId).toBe(projectA);
-    expect(secondProjectJob.projectId).toBe(projectB);
+    expect(secondProjectJob.id).toBe(firstProjectJob.id);
+    expect(firstProjectJob.projectId).toBe('default');
+    expect(secondProjectJob.projectId).toBe('default');
 
     cancelQueuedJob(firstProjectJob.id, 'project test cleanup');
-    cancelQueuedJob(secondProjectJob.id, 'project test cleanup');
 
     const outputDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-project-cache-'));
     const outputPath = path.join(outputDir, 'app.ipa');
@@ -778,19 +777,18 @@ describe('enqueueDecryptJob', () => {
     });
     const shared = enqueueDecryptJob(bundleId, 'manual', { externalVersionId: 'project-cache-build', projectId: projectB });
 
-    expect(shared).toMatchObject({ status: 'done', projectId: projectB, artifactId: artifact.id, cacheHit: true });
+    expect(shared).toMatchObject({ status: 'done', projectId: 'default', artifactId: artifact.id, cacheHit: true });
     expect(getJobHistoryEntryById(shared.id)).toMatchObject({ status: 'done', cacheHit: true });
-    expect(artifact.projectIds).toContain(projectB);
+    expect(artifact.projectIds).toEqual(['default']);
   });
 
-  test('enforces a project concurrent-job quota without affecting another project', async () => {
+  test('legacy workspace identifiers share one queue without separate project quotas', async () => {
     const project = createProject({ name: `Concurrency quota ${crypto.randomUUID()}`, maxConcurrentJobs: 1 }, 'root').project!;
     const first = enqueueDecryptJob(`com.test.project-quota.${crypto.randomUUID()}`, 'manual', { projectId: project.id });
-
-    expect(() => enqueueDecryptJob(`com.test.project-quota.${crypto.randomUUID()}`, 'manual', { projectId: project.id })).toThrow('project concurrency limit reached');
     const otherProject = createProject({ name: `Independent quota ${crypto.randomUUID()}` }, 'root').project!;
     const independent = enqueueDecryptJob(`com.test.project-quota.${crypto.randomUUID()}`, 'manual', { projectId: otherProject.id });
-    expect(independent.projectId).toBe(otherProject.id);
+    expect(independent.projectId).toBe('default');
+    expect(first.projectId).toBe('default');
 
     cancelQueuedJob(first.id, 'project quota test cleanup');
     cancelQueuedJob(independent.id, 'project quota test cleanup');
@@ -931,7 +929,7 @@ test('cancels a running job while it is waiting for transient Rust device-agent 
   }
 });
 
-test('reordering and prioritizing a project queue leaves other project positions intact', async () => {
+test('reordering and prioritizing changes the one shared queue', async () => {
   await clearActiveTestJobs();
   const blocker = enqueueDecryptJob(`com.test.queue-blocker.${crypto.randomUUID()}`, 'manual');
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -944,21 +942,12 @@ test('reordering and prioritizing a project queue leaves other project positions
 
   try {
     expect(blocker.status).toBe('running');
-    const firstBPosition = getQueueInfo(firstB.id)?.position;
-    const secondBPosition = getQueueInfo(secondB.id)?.position;
-    expect(reorderQueue([secondA.id, firstA.id], projectA)).toBe(true);
-    expect(getQueueInfo(secondA.id)!.position).toBeLessThan(firstBPosition!);
-    expect(firstBPosition).toBe(getQueueInfo(firstB.id)?.position);
-    expect(getQueueInfo(firstB.id)!.position).toBeLessThan(getQueueInfo(firstA.id)!.position);
-    expect(getQueueInfo(firstA.id)!.position).toBeLessThan(secondBPosition!);
-    expect(secondBPosition).toBe(getQueueInfo(secondB.id)?.position);
-    expect(prioritizeQueuedJob(firstA.id, projectA)).toBe(true);
-    expect(getQueueInfo(firstA.id)!.position).toBeLessThan(firstBPosition!);
-    expect(firstBPosition).toBe(getQueueInfo(firstB.id)?.position);
-    expect(getQueueInfo(firstB.id)!.position).toBeLessThan(getQueueInfo(secondA.id)!.position);
-    expect(getQueueInfo(secondA.id)!.position).toBeLessThan(secondBPosition!);
-    expect(secondBPosition).toBe(getQueueInfo(secondB.id)?.position);
-    expect(prioritizeQueuedJob(firstB.id, projectA)).toBe(false);
+    expect(reorderQueue([secondA.id, firstB.id, secondB.id, firstA.id])).toBe(true);
+    expect(getQueueInfo(secondA.id)!.position).toBeLessThan(getQueueInfo(firstB.id)!.position);
+    expect(getQueueInfo(firstB.id)!.position).toBeLessThan(getQueueInfo(secondB.id)!.position);
+    expect(getQueueInfo(secondB.id)!.position).toBeLessThan(getQueueInfo(firstA.id)!.position);
+    expect(prioritizeQueuedJob(firstA.id)).toBe(true);
+    expect(getQueueInfo(firstA.id)!.position).toBe(2);
   } finally {
     await clearActiveTestJobs();
   }

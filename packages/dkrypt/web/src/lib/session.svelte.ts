@@ -22,11 +22,14 @@ import {
   setHomeViewModes,
   setDisplayTimeZone,
   setLargeTargets,
+  setOneThumbMode,
+  setDecryptUsageAlertThresholds,
   setNavigationPreferences,
   setArtifactLibraryPreferences,
   setArtifactFilenameTemplate,
   homeLayoutPreferencesState,
   homeViewModesState,
+  artifactLibraryPreferencesState,
   resetUserInterfacePreferences,
   soundEnabledState,
   themePrefState,
@@ -35,7 +38,7 @@ import {
 import type { FormattingLocalePreference } from '#lib/locale';
 import type { InterfaceLanguagePreference } from '#lib/locale';
 import type { HomeLayout, HomeViewModes } from '#lib/homeLayouts';
-import type { ArtifactColumnId, DisplayDensity, SettingsMode, TabId } from '#lib/ui.svelte';
+import type { ArtifactColumnId, DisplayDensity, SavedArtifactColumnLayout, SettingsMode, TabId } from '#lib/ui.svelte';
 import { resetShortcutBindings, setShortcutBindings, type ShortcutBindings } from '#lib/shortcuts.svelte';
 
 export interface Role {
@@ -168,9 +171,11 @@ async function syncThemeFromServer(): Promise<void> {
     appFavorites?: Array<{ bundleId: string; trackName: string }>;
     navigationOrder?: TabId[];
     pinnedNavigation?: TabId[];
-    artifactLibrary?: { groupByApp: boolean; columns: ArtifactColumnId[] };
+    artifactLibrary?: { groupByApp: boolean; columns: ArtifactColumnId[]; layouts?: SavedArtifactColumnLayout[]; activeLayoutId?: string };
     artifactFilenameTemplate?: string;
     largeTargets?: boolean;
+    oneThumbMode?: boolean;
+    decryptUsageAlertThresholds?: number[];
     shortcutBindings?: ShortcutBindings;
   };
   if (sessionState.sub !== accountId) return;
@@ -190,9 +195,11 @@ async function syncThemeFromServer(): Promise<void> {
   if (prefs.settingsMode) setSettingsMode(prefs.settingsMode);
   setDisplayTimeZone(prefs.displayTimeZone ?? 'system');
   if (prefs.navigationOrder) setNavigationPreferences(prefs.navigationOrder, prefs.pinnedNavigation ?? []);
-  if (prefs.artifactLibrary) setArtifactLibraryPreferences(prefs.artifactLibrary.groupByApp, prefs.artifactLibrary.columns);
+  if (prefs.artifactLibrary) setArtifactLibraryPreferences(prefs.artifactLibrary.groupByApp, prefs.artifactLibrary.columns, prefs.artifactLibrary.layouts ?? [], prefs.artifactLibrary.activeLayoutId);
   setArtifactFilenameTemplate(prefs.artifactFilenameTemplate ?? '{app}-{version}');
   setLargeTargets(prefs.largeTargets ?? false);
+  setOneThumbMode(prefs.oneThumbMode ?? false);
+  setDecryptUsageAlertThresholds(prefs.decryptUsageAlertThresholds ?? []);
   if (prefs.shortcutBindings) setShortcutBindings(prefs.shortcutBindings);
   const userId = sessionState.sub?.trim().toLowerCase();
   const migrationKey = userId ? `starredAppsMigrated:${userId}` : undefined;
@@ -264,14 +271,24 @@ export function pushLargeTargetsPref(largeTargets: boolean): Promise<void> {
   return pushDashboardPreference({ largeTargets });
 }
 
+export function pushOneThumbModePref(enabled: boolean): Promise<void> {
+  setOneThumbMode(enabled);
+  return pushDashboardPreference({ oneThumbMode: enabled });
+}
+
+export function pushDecryptUsageAlertThresholds(thresholds: number[]): Promise<void> {
+  setDecryptUsageAlertThresholds(thresholds);
+  return pushDashboardPreference({ decryptUsageAlertThresholds: thresholds });
+}
+
 export function pushNavigationPreferences(order: TabId[], pinned: TabId[]): Promise<void> {
   setNavigationPreferences(order, pinned);
   return pushDashboardPreference({ navigationOrder: order, pinnedNavigation: pinned });
 }
 
-export function pushArtifactLibraryPreferences(groupByApp: boolean, columns: ArtifactColumnId[]): Promise<void> {
-  setArtifactLibraryPreferences(groupByApp, columns);
-  return pushDashboardPreference({ artifactLibrary: { groupByApp, columns } });
+export function pushArtifactLibraryPreferences(groupByApp: boolean, columns: ArtifactColumnId[], layouts = artifactLibraryPreferencesState.layouts, activeLayoutId?: string): Promise<void> {
+  setArtifactLibraryPreferences(groupByApp, columns, layouts, activeLayoutId);
+  return pushDashboardPreference({ artifactLibrary: { groupByApp, columns, layouts, activeLayoutId } });
 }
 
 export async function pushArtifactFilenameTemplate(template: string): Promise<void> {

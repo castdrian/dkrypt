@@ -1,18 +1,15 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { DashboardJobEtaRoute, DashboardJobSloRoute, DashboardJobStatsRoute, DashboardJobVolumeRoute } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { config } from '#config.js';
 import { getRouteContract } from '#contracts.js';
 import { getActiveJobs, getJobEligibleDeviceCount, getQueueInfo } from '#jobs/store.js';
 import { assessQueueServiceObjective, projectCompletedJobDurationP95Ms, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { PermissionFlag } from '#permissions.js';
-import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
+import { fastifyRequirePermission, fastifyRequireSession } from '#session.js';
 import { DEFAULT_PROJECT_ID, getAllJobHistory, getAverageJobDurationMs, getBundleStats, getDailyVolume } from '#store/state.js';
-import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 
 interface DashboardJobAnalyticsServices {
-  canAccessProject: typeof canAccessProject;
   getActiveJobs: typeof getActiveJobs;
   getAllJobHistory: typeof getAllJobHistory;
   getAverageJobDurationMs: typeof getAverageJobDurationMs;
@@ -23,7 +20,6 @@ interface DashboardJobAnalyticsServices {
 }
 
 const defaultServices: DashboardJobAnalyticsServices = {
-  canAccessProject,
   getActiveJobs,
   getAllJobHistory,
   getAverageJobDurationMs,
@@ -44,55 +40,30 @@ export function createDashboardJobAnalyticsRoutes(overrides: Partial<DashboardJo
 
     server.get<DashboardJobEtaRoute>('/v1/dashboard/jobs/eta/:bundleId', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/eta/:bundleId'),
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
-      }
-      return { avgMs: services.getAverageJobDurationMs(request.params.bundleId, projectId) ?? null };
+    }, (request) => {
+      return { avgMs: services.getAverageJobDurationMs(request.params.bundleId, DEFAULT_PROJECT_ID) ?? null };
     });
 
     server.get<DashboardJobStatsRoute>('/v1/dashboard/jobs/stats/:bundleId', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/stats/:bundleId'),
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
-      }
-      return services.getBundleStats(request.params.bundleId, projectId);
+    }, (request) => {
+      return services.getBundleStats(request.params.bundleId);
     });
 
     server.get<DashboardJobVolumeRoute>('/v1/dashboard/jobs/volume', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/volume'),
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
-      }
-      return { days: services.getDailyVolume(request.query.days ?? 14, projectId) };
+    }, (request) => {
+      return { days: services.getDailyVolume(request.query.days ?? 14) };
     });
 
     server.get<DashboardJobSloRoute>('/v1/dashboard/jobs/slo', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/slo'),
       preHandler: canViewJobSlo,
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
-      }
+    }, () => {
       const now = Date.now();
-      const historicalP95Ms = projectCompletedJobDurationP95Ms(services.getAllJobHistory(), projectId, DEFAULT_PROJECT_ID);
+      const historicalP95Ms = projectCompletedJobDurationP95Ms(services.getAllJobHistory(), DEFAULT_PROJECT_ID, DEFAULT_PROJECT_ID);
       const targetMs = queueServiceObjectiveMs(services.queueSloMinutes);
       const jobs = services.getActiveJobs()
-        .filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId)
         .map((job) => {
           const queue = job.status === 'queued' ? services.getQueueInfo(job.id) : undefined;
           const assessment = assessQueueServiceObjective({

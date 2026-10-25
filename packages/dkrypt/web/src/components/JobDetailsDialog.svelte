@@ -11,7 +11,6 @@
   import { fmtDurationApprox, fmtSize, fmtTime } from '#lib/format.svelte';
   import { buttonVariants, statusToBadgeVariant } from '#lib/components/ui/variants';
   import { showToast } from '#lib/ui.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
 
   let { open = $bindable(), jobId, title }: { open: boolean; jobId: string; title: string } = $props();
   let timeline = $state<JobTimeline | null>(null);
@@ -60,7 +59,6 @@
   async function copyDeepLink(): Promise<void> {
     const url = new URL(location.href);
     url.searchParams.set('job', jobId);
-    url.searchParams.set('projectId', projectSelectionState.id);
     await navigator.clipboard.writeText(url.toString());
     showToast('Job link copied', 'success');
   }

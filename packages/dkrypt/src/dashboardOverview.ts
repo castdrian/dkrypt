@@ -9,15 +9,11 @@ import { getCachedDeviceHealth } from '#deviceHealthCache.js';
 import { getDeviceInstallBlocker } from '#deviceInstallEligibility.js';
 import { serializeDashboardDevice } from '#dashboardDevicePresentation.js';
 import { getDiskUsage } from '#util/diskUsage.js';
-import {
-  DEFAULT_PROJECT_ID,
-  getEffectiveDevices,
-  getEffectiveSettings,
-} from '#store/state.js';
+import { getEffectiveDevices, getEffectiveSettings } from '#store/state.js';
 
 const DEVICE_STATUS_FRESH_MS = 10 * 60_000;
 
-export function buildDashboardOverview(permissions: bigint, userId: string, projectId = DEFAULT_PROJECT_ID) {
+export function buildDashboardOverview(permissions: bigint, userId: string) {
   const canViewAutomation = hasPermission(permissions, PermissionFlag.viewAutomation) || hasPermission(permissions, PermissionFlag.manageAutomation);
   const canViewDeviceData = hasPermission(permissions, PermissionFlag.viewDevices) || hasPermission(permissions, PermissionFlag.manageDevices);
   const deviceRecords = getEffectiveDevices();
@@ -55,9 +51,7 @@ export function buildDashboardOverview(permissions: bigint, userId: string, proj
     freshUntil: recentHealth.length > 0 ? Math.min(...recentHealth.map((health) => health.checkedAt + DEVICE_STATUS_FRESH_MS)) : undefined,
   };
   const settings = getEffectiveSettings();
-  const activeJobs = getActiveJobs().filter((job): job is Job & { status: 'queued' | 'running' } =>
-    (job.status === 'queued' || job.status === 'running') && (job.projectId ?? DEFAULT_PROJECT_ID) === projectId,
-  );
+  const activeJobs = getActiveJobs().filter((job): job is Job & { status: 'queued' | 'running' } => job.status === 'queued' || job.status === 'running');
   const queueSummaries = getJobQueueSummaries(activeJobs);
   return {
     settings: canViewAutomation ? settings : { ...settings, notifyWebhookUrl: '' },
@@ -67,7 +61,6 @@ export function buildDashboardOverview(permissions: bigint, userId: string, proj
     disk: getDiskUsage(config.artifactDir),
     isPaidPlan: getBillingEntitlements(userId).planId !== 'viewer',
     maintenance: getMaintenanceStatus(),
-    projectId,
     activeJobs: activeJobs.map((job) => ({
       id: job.id,
       correlationId: job.correlationId ?? job.id,

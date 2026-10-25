@@ -92,7 +92,7 @@ export const DEFAULT_PROJECT_ID = 'default';
 function createDefaultProject(now = Date.now()): ProjectRecord {
   return {
     id: DEFAULT_PROJECT_ID,
-    name: 'Default workspace',
+    name: 'dkrypt',
     memberIds: [],
     isDefault: true,
     createdBy: 'system',
@@ -504,8 +504,15 @@ export interface UserPrefs {
   appFavorites?: Array<{ bundleId: string; trackName: string }>;
   navigationOrder?: Array<'home' | 'billing' | 'keys' | 'logs' | 'insights' | 'docs' | 'settings'>;
   pinnedNavigation?: Array<'home' | 'billing' | 'keys' | 'logs' | 'insights' | 'docs' | 'settings'>;
-  artifactLibrary?: { groupByApp: boolean; columns: Array<'app' | 'bundleId' | 'version' | 'source' | 'size' | 'created'> };
+  artifactLibrary?: {
+    groupByApp: boolean;
+    columns: Array<'app' | 'bundleId' | 'version' | 'source' | 'size' | 'created'>;
+    layouts?: Array<{ id: string; name: string; groupByApp: boolean; columns: Array<'app' | 'bundleId' | 'version' | 'source' | 'size' | 'created'> }>;
+    activeLayoutId?: string;
+  };
   largeTargets?: boolean;
+  oneThumbMode?: boolean;
+  decryptUsageAlertThresholds?: number[];
   accent?: string;
   highContrast?: boolean;
   sound?: boolean;
@@ -1393,6 +1400,9 @@ function normalizeLoadedState(migrated: PersistedState): PersistedState {
   migrated.testFlightCatalog = isTestFlightCatalogCacheShape(migrated.testFlightCatalog) ? migrated.testFlightCatalog : undefined;
   migrated.notifications = Array.isArray(migrated.notifications) ? migrated.notifications.slice(0, MAX_NOTIFICATIONS) : [];
   migrated.testFlightSubscriptions = Array.isArray(migrated.testFlightSubscriptions) ? migrated.testFlightSubscriptions : [];
+  migrated.projects = [projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject()];
+  migrated.jobHistory = migrated.jobHistory.map((entry) => ({ ...entry, projectId: DEFAULT_PROJECT_ID }));
+  migrated.watches = migrated.watches.map((watch) => ({ ...watch, projectId: DEFAULT_PROJECT_ID }));
   validateProjectCollection(migrated.projects);
   return migrated;
 }
@@ -1815,94 +1825,30 @@ export interface UpdateProjectInput {
   archived?: boolean;
 }
 
-function normalizeProjectMemberIds(memberIds: string[] | undefined): string[] {
-  return [...new Set((memberIds ?? []).map((memberId) => memberId.trim().toLowerCase()).filter(Boolean))];
+export function getProject(_id: string): ProjectRecord | undefined {
+  return projectRepository.findById(DEFAULT_PROJECT_ID);
 }
 
-function validProjectQuota(value: number | null | undefined): boolean {
-  return value === undefined || value === null || (Number.isSafeInteger(value) && value > 0);
+export function listProjectsForUser(_userId: string, _includeAll = false): ProjectRecord[] {
+  const account = projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject();
+  return [{ ...account, name: 'dkrypt', memberIds: [] }];
 }
 
-function projectMembersExist(memberIds: string[]): boolean {
-  const knownUsers = new Set(state.allowedUsers.map((user) => user.username.toLowerCase()));
-  return memberIds.every((memberId) => knownUsers.has(memberId));
+export function userCanAccessProject(_userId: string, _projectId: string): boolean {
+  return true;
 }
 
-export function getProject(id: string): ProjectRecord | undefined {
-  return projectRepository.findById(id);
+function normalizeProjectMemberIds(memberIds: string[]): string[] {
+  return [...new Set(memberIds.map((memberId) => memberId.trim().toLowerCase()).filter(Boolean))];
 }
 
-export function listProjectsForUser(userId: string, includeAll = false): ProjectRecord[] {
-  const normalizedUserId = userId.toLowerCase();
-  return projectRepository.listAll()
-    .filter((project) => includeAll || project.isDefault || project.memberIds.includes(normalizedUserId))
-    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name))
-    .map((project) => ({ ...project, memberIds: [...project.memberIds] }));
+export function createProject(_input: CreateProjectInput, _actor: string): { ok: boolean; project: ProjectRecord } {
+  const account = projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject();
+  return { ok: true, project: { ...account, name: 'dkrypt', memberIds: [] } };
 }
 
-export function userCanAccessProject(userId: string, projectId: string): boolean {
-  const project = projectRepository.findById(projectId);
-  if (!project || project.archivedAt !== undefined) return false;
-  return project.isDefault || project.memberIds.includes(userId.toLowerCase());
-}
-
-export function createProject(input: CreateProjectInput, actor: string): { ok: boolean; project?: ProjectRecord; error?: string } {
-  const name = input.name.trim();
-  const description = input.description?.trim();
-  const memberIds = normalizeProjectMemberIds([...(input.memberIds ?? []), ...(actor !== 'root' && state.allowedUsers.some((user) => user.username === actor.toLowerCase()) ? [actor] : [])]);
-  if (!name || name.length > 80) return { ok: false, error: 'project name must contain 1 to 80 characters' };
-  if (description && description.length > 240) return { ok: false, error: 'project description must be at most 240 characters' };
-  if (!validProjectQuota(input.storageQuotaBytes) || !validProjectQuota(input.dailyJobQuota) || !validProjectQuota(input.maxConcurrentJobs)) return { ok: false, error: 'project quotas must be positive whole numbers' };
-  if (!projectMembersExist(memberIds)) return { ok: false, error: 'every project member must have an authorized account' };
-  if (projectRepository.listAll().some((project) => project.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: 'a project with that name already exists' };
-  const now = Date.now();
-  const project: ProjectRecord = {
-    id: randomUUID(),
-    name,
-    description: description || undefined,
-    memberIds,
-    isDefault: false,
-    storageQuotaBytes: input.storageQuotaBytes,
-    dailyJobQuota: input.dailyJobQuota,
-    maxConcurrentJobs: input.maxConcurrentJobs,
-    createdBy: actor,
-    createdAt: now,
-    updatedAt: now,
-  };
-  state.projects.push(project);
-  recordAudit(actor, 'project.add', project.id, project.name);
-  return { ok: true, project: getProject(project.id) };
-}
-
-export function updateProject(id: string, patch: UpdateProjectInput, actor: string): { ok: boolean; project?: ProjectRecord; error?: string } {
-  const project = projectRepository.findById(id);
-  if (!project) return { ok: false, error: 'project not found' };
-  const wasArchived = project.archivedAt !== undefined;
-  const name = patch.name?.trim();
-  const description = patch.description?.trim() ?? '';
-  const memberIds = patch.memberIds === undefined ? undefined : normalizeProjectMemberIds(patch.memberIds);
-  if (patch.name !== undefined && (!name || name.length > 80)) return { ok: false, error: 'project name must contain 1 to 80 characters' };
-  if (name && projectRepository.listAll().some((candidate) => candidate.id !== id && candidate.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: 'a project with that name already exists' };
-  if (description.length > 240) return { ok: false, error: 'project description must be at most 240 characters' };
-  if (memberIds && !projectMembersExist(memberIds)) return { ok: false, error: 'every project member must have an authorized account' };
-  if (![patch.storageQuotaBytes, patch.dailyJobQuota, patch.maxConcurrentJobs].every(validProjectQuota)) return { ok: false, error: 'project quotas must be positive whole numbers' };
-  if (patch.archived && project.isDefault) return { ok: false, error: 'the default workspace cannot be archived' };
-  const updatedProject: ProjectRecord = { ...project };
-  if (name !== undefined) updatedProject.name = name;
-  if (patch.description !== undefined) updatedProject.description = description || undefined;
-  if (memberIds && !project.isDefault) updatedProject.memberIds = memberIds;
-  if (patch.storageQuotaBytes !== undefined) updatedProject.storageQuotaBytes = patch.storageQuotaBytes ?? undefined;
-  if (patch.dailyJobQuota !== undefined) updatedProject.dailyJobQuota = patch.dailyJobQuota ?? undefined;
-  if (patch.maxConcurrentJobs !== undefined) updatedProject.maxConcurrentJobs = patch.maxConcurrentJobs ?? undefined;
-  if (patch.archived !== undefined) {
-    updatedProject.archivedAt = patch.archived ? project.archivedAt ?? Date.now() : undefined;
-  }
-  updatedProject.updatedAt = Date.now();
-  const archiveChanged = patch.archived !== undefined && patch.archived !== wasArchived;
-  const action: AuditAction = archiveChanged ? patch.archived ? 'project.archive' : 'project.restore' : 'project.update';
-  state.projects = state.projects.map((candidate) => candidate.id === id ? updatedProject : candidate);
-  recordAudit(actor, action, updatedProject.id, archiveChanged ? (patch.archived ? 'archived' : 'restored') : updatedProject.name);
-  return { ok: true, project: getProject(id) };
+export function updateProject(_id: string, _patch: UpdateProjectInput, _actor: string): { ok: false; error: string } {
+  return { ok: false, error: 'dkrypt uses one shared account space' };
 }
 
 export function getRole(id: string): Role | undefined {
@@ -3372,7 +3318,7 @@ export function recordJobResolutionNotice(id: string, actor: string, recipientId
     severity: 'info',
     createdAt: sentAt,
     jobId: id,
-    href: `/?tab=home&projectId=${encodeURIComponent(entry.projectId ?? DEFAULT_PROJECT_ID)}&job=${encodeURIComponent(id)}`,
+    href: `/?tab=home&job=${encodeURIComponent(id)}`,
   });
   if (state.notifications.length > MAX_NOTIFICATIONS) state.notifications.length = MAX_NOTIFICATIONS;
   persistNow();
@@ -3387,9 +3333,9 @@ export function setJobResolutionEmailStatus(id: string, status: 'sent' | 'failed
   persistNow();
 }
 
-export function getAverageJobDurationMs(bundleId: string, projectId?: string): number | undefined {
+export function getAverageJobDurationMs(bundleId: string, _projectId?: string): number | undefined {
   const durations = state.jobHistory
-    .filter((j) => j.bundleId === bundleId && (!projectId || (j.projectId ?? DEFAULT_PROJECT_ID) === projectId) && j.status === 'done' && j.startedAt)
+    .filter((j) => j.bundleId === bundleId && j.status === 'done' && j.startedAt)
     .map((j) => j.finishedAt - (j.startedAt as number));
   if (durations.length === 0) return undefined;
   return durations.reduce((a, b) => a + b, 0) / durations.length;
@@ -3406,8 +3352,8 @@ export interface BundleStats {
   failureBreakdown: { category: string; count: number }[];
 }
 
-export function getBundleStats(bundleId: string, projectId?: string): BundleStats {
-  const runs = state.jobHistory.filter((j) => j.bundleId === bundleId && (!projectId || (j.projectId ?? DEFAULT_PROJECT_ID) === projectId));
+export function getBundleStats(bundleId: string, _projectId?: string): BundleStats {
+  const runs = state.jobHistory.filter((j) => j.bundleId === bundleId);
   const doneCount = runs.filter((j) => j.status === 'done').length;
   const failedCount = runs.filter((j) => j.status === 'failed').length;
   return {
@@ -3416,13 +3362,13 @@ export function getBundleStats(bundleId: string, projectId?: string): BundleStat
     doneCount,
     failedCount,
     successRate: runs.length > 0 ? doneCount / runs.length : 0,
-    avgDurationMs: getAverageJobDurationMs(bundleId, projectId),
+    avgDurationMs: getAverageJobDurationMs(bundleId),
     lastRunAt: runs.length > 0 ? Math.max(...runs.map((j) => j.finishedAt)) : undefined,
     failureBreakdown: getFailureBreakdown(runs),
   };
 }
 
-export function getDailyVolume(days: number, projectId?: string): { date: string; count: number }[] {
+export function getDailyVolume(days: number, _projectId?: string): { date: string; count: number }[] {
   const buckets = new Map<string, number>();
   const now = new Date();
   for (let i = days - 1; i >= 0; i--) {
@@ -3431,7 +3377,7 @@ export function getDailyVolume(days: number, projectId?: string): { date: string
     buckets.set(d.toISOString().slice(0, 10), 0);
   }
   for (const j of state.jobHistory) {
-    if (j.status !== 'done' || (projectId && (j.projectId ?? DEFAULT_PROJECT_ID) !== projectId)) continue;
+    if (j.status !== 'done') continue;
     const key = new Date(j.finishedAt).toISOString().slice(0, 10);
     if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + 1);
   }
@@ -3538,7 +3484,7 @@ function getPerformanceAnomalies(runs: JobHistoryEntry[]): PerformanceAnomaly[] 
 }
 
 export function getInsightsSummary(topAppsLimit = 5, trendDays = 14, projectId?: string): InsightsSummary {
-  const runs = state.jobHistory.filter((entry) => !projectId || (entry.projectId ?? DEFAULT_PROJECT_ID) === projectId);
+  const runs = state.jobHistory;
   const doneCount = runs.filter((j) => j.status === 'done').length;
   const failedCount = runs.filter((j) => j.status === 'failed').length;
   const totalSizeBytes = runs.reduce((sum, j) => sum + (j.sizeBytes ?? 0), 0);
@@ -3603,11 +3549,11 @@ export interface DeviceThroughputStats {
   avgDurationMs?: number;
 }
 
-export function getDeviceThroughput(projectId?: string): DeviceThroughputStats[] {
+export function getDeviceThroughput(_projectId?: string): DeviceThroughputStats[] {
   const devicesById = new Map(getEffectiveDevices().map((d) => [d.id, d]));
   const byDevice = new Map<string, JobHistoryEntry[]>();
   for (const j of state.jobHistory) {
-    if (!j.deviceId || (projectId && (j.projectId ?? DEFAULT_PROJECT_ID) !== projectId)) continue;
+    if (!j.deviceId) continue;
     const list = byDevice.get(j.deviceId) ?? [];
     list.push(j);
     byDevice.set(j.deviceId, list);
@@ -3866,6 +3812,19 @@ export function getUserPrefs(username: string): UserPrefs {
   return state.userPrefs[username.toLowerCase()] ?? {};
 }
 
+export function recordDecryptQuotaThresholdNotice(userId: string, used: number, limit: number, threshold: number): void {
+  const normalizedUserId = userId.trim().toLowerCase();
+  if (!normalizedUserId || !getUserPrefs(normalizedUserId).decryptUsageAlertThresholds?.includes(threshold)) return;
+  recordNotification({
+    userId: normalizedUserId,
+    title: 'Decrypt allowance',
+    message: `You have used ${used} of ${limit} new decrypts in the rolling 24-hour window.`,
+    severity: threshold >= 90 ? 'warning' : 'info',
+    groupKey: `decrypt-quota:${threshold}`,
+    href: '/?tab=billing',
+  });
+}
+
 export function updateUserPrefs(username: string, patch: Partial<UserPrefs>): UserPrefs {
   const lower = username.toLowerCase();
   const updated = { ...(state.userPrefs[lower] ?? {}), ...patch };
@@ -3974,7 +3933,7 @@ export function markNotificationsRead(userId: string, ids?: string[]): number {
   return changed;
 }
 
-const BACKUP_VERSION = 10;
+const BACKUP_VERSION = 11;
 
 type BackupDeviceRecord = Omit<DeviceRecord, 'transport' | 'host' | 'udid'>
   & { transport: DeviceTransport }
@@ -3990,11 +3949,9 @@ export interface BackupPayload {
   exportedAt: number;
   allowedUsers: AllowedUser[];
   roles: Role[];
-  projects: ProjectRecord[];
-  artifactProjectLinks: ArtifactProjectLink[];
   apiKeys: ApiKeyRecord[];
   settings: PersistedSettings;
-  watches: AppWatch[];
+  watches: Array<Omit<AppWatch, 'projectId'>>;
   devices: BackupDeviceRecord[];
   jobHistory: JobHistoryEntry[];
   lastSchedulerRunAt?: number;
@@ -4013,19 +3970,6 @@ export interface BackupPayload {
   decryptQuotaLedger: ReturnType<typeof exportDecryptQuotaLedger>;
 }
 
-function exportArtifactProjectLinks(): ArtifactProjectLink[] {
-  const knownProjectIds = new Set(state.projects.map((project) => project.id));
-  return stateDatabase.readCollection('artifacts').flatMap((value) => {
-    if (!value || typeof value !== 'object') return [];
-    const artifact = value as Record<string, unknown>;
-    if (typeof artifact.id !== 'string') return [];
-    const projectIds = Array.isArray(artifact.projectIds)
-      ? [...new Set(artifact.projectIds.filter((projectId): projectId is string => typeof projectId === 'string' && knownProjectIds.has(projectId)))]
-      : [DEFAULT_PROJECT_ID];
-    return [{ artifactId: artifact.id, projectIds: projectIds.length > 0 ? projectIds : [DEFAULT_PROJECT_ID] }];
-  });
-}
-
 function normalizeBackupDevice(device: DeviceRecord): BackupDeviceRecord {
   const transport = device.transport ?? (device.udid ? device.usbmuxNetwork ? 'wifi' : 'usb' : 'wifi');
   if (transport !== 'wifi' && transport !== 'usb') throw new Error(`device ${device.id} has no supported transport`);
@@ -4033,61 +3977,35 @@ function normalizeBackupDevice(device: DeviceRecord): BackupDeviceRecord {
   return { ...device, transport } as BackupDeviceRecord;
 }
 
-function artifactProjectLinksReplacement(links: ArtifactProjectLink[], existingLinks: ArtifactProjectLink[] = []): StateCollectionReplacement[] {
-  const projectIdsByArtifact = new Map(links.map((link) => [link.artifactId, link.projectIds]));
-  const existingProjectIdsByArtifact = new Map(existingLinks.map((link) => [link.artifactId, link.projectIds]));
+function artifactProjectLinksReplacement(): StateCollectionReplacement[] {
   const rows = stateDatabase.readCollection('artifacts').flatMap((value) => {
     if (!value || typeof value !== 'object') return [];
     const artifact = value as Record<string, unknown>;
     if (typeof artifact.id !== 'string') return [];
-    const projectIds = projectIdsByArtifact.get(artifact.id) ?? existingProjectIdsByArtifact.get(artifact.id) ?? [DEFAULT_PROJECT_ID];
     return [{
       id: artifact.id,
-      payload: { ...artifact, projectIds },
+      payload: { ...artifact, projectIds: [DEFAULT_PROJECT_ID] },
       updatedAt: typeof artifact.lastAccessedAt === 'number' ? artifact.lastAccessedAt : Date.now(),
     }];
   });
   return [{ table: 'artifacts', rows }];
 }
 
-function preserveCurrentProjectReferences(projects: ProjectRecord[], artifactLinks: ArtifactProjectLink[]): { projects: ProjectRecord[]; missing: string[] } {
-  const knownProjectIds = new Set(projects.map((project) => project.id));
-  const currentProjects = new Map(state.projects.map((project) => [project.id, project]));
-  const referencedProjectIds = new Set(artifactLinks.flatMap((link) => link.projectIds));
-  for (const value of stateDatabase.readCollection('jobs')) {
-    if (!value || typeof value !== 'object') continue;
-    const projectId = (value as Record<string, unknown>).projectId;
-    referencedProjectIds.add(typeof projectId === 'string' ? projectId : DEFAULT_PROJECT_ID);
-  }
-
-  const retained: ProjectRecord[] = [];
-  const missing: string[] = [];
-  for (const projectId of referencedProjectIds) {
-    if (knownProjectIds.has(projectId)) continue;
-    const currentProject = currentProjects.get(projectId);
-    if (!currentProject) {
-      missing.push(projectId);
-      continue;
-    }
-    retained.push({ ...currentProject, memberIds: [...currentProject.memberIds] });
-    knownProjectIds.add(projectId);
-  }
-  return { projects: [...projects, ...retained], missing };
-}
-
 export function exportBackup(): BackupPayload {
+  const apiKeys = state.apiKeys.map((key) => {
+    const { projectIds: _projectIds, ...portable } = key as ApiKeyRecord & { projectIds?: string[] };
+    return { ...portable, pendingReveal: undefined };
+  });
   return {
     backupVersion: BACKUP_VERSION,
     exportedAt: Date.now(),
     allowedUsers: state.allowedUsers,
     roles: state.roles,
-    projects: listProjectsForUser('root', true),
-    artifactProjectLinks: exportArtifactProjectLinks(),
-    apiKeys: state.apiKeys.map((k) => ({ ...k, pendingReveal: undefined })),
+    apiKeys,
     settings: state.settings,
-    watches: state.watches,
+    watches: state.watches.map(({ projectId: _projectId, ...watch }) => watch),
     devices: getEffectiveDevices().map(normalizeBackupDevice),
-    jobHistory: state.jobHistory,
+    jobHistory: state.jobHistory.map(({ projectId: _projectId, ...entry }) => entry),
     lastSchedulerRunAt: state.lastSchedulerRunAt,
     userPrefs: state.userPrefs,
     auditLog: state.auditLog,
@@ -4528,8 +4446,8 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'not a valid backup file' };
   const b = raw as Record<string, unknown>;
 
-  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== BACKUP_VERSION) {
-    return { ok: false, error: `unsupported backup version (expected 3, 4, 5, 6, 7, 8, 9, or ${BACKUP_VERSION})` };
+  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== BACKUP_VERSION) {
+    return { ok: false, error: `unsupported backup version (expected 3 through ${BACKUP_VERSION})` };
   }
   if (b.backupVersion === BACKUP_VERSION && (!Array.isArray(b.decryptQuotaLedger) || !b.decryptQuotaLedger.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.jobId === 'string' && typeof entry.ownerId === 'string' && Number.isFinite(entry.admittedAt) && ['reserved', 'consumed'].includes(entry.state)))) {
     return { ok: false, error: 'decrypt quota ledger is missing or malformed' };
@@ -4586,15 +4504,15 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (b.backupVersion >= 6 && (!Array.isArray(b.testFlightSubscriptions) || !b.testFlightSubscriptions.every(isTestFlightSubscriptionShape))) {
     return { ok: false, error: 'testFlightSubscriptions is missing or malformed' };
   }
-  if (b.backupVersion >= 7 && (!Array.isArray(b.projects) || !b.projects.every(isProjectRecordShape))) {
-    return { ok: false, error: 'projects is missing or malformed' };
+  if (b.backupVersion >= 7 && b.backupVersion <= 10 && (!Array.isArray(b.projects) || !b.projects.every(isProjectRecordShape))) {
+    return { ok: false, error: 'legacy workspace data is missing or malformed' };
   }
-  if (b.backupVersion >= 7) {
+  if (b.backupVersion >= 7 && b.backupVersion <= 10) {
     const projects = b.projects as ProjectRecord[];
     const projectIds = new Set(projects.map((project) => project.id));
     const userIds = new Set((b.allowedUsers as AllowedUser[]).map((user) => user.username.toLowerCase()));
     if (projectIds.size !== projects.length || projects.filter((project) => project.isDefault).length !== 1 || projects.filter((project) => project.isDefault && project.id === DEFAULT_PROJECT_ID).length !== 1 || projects.some((project) => project.memberIds.some((memberId) => !userIds.has(memberId.toLowerCase())))) {
-      return { ok: false, error: 'projects have duplicate ids, invalid membership, or no unique default workspace' };
+      return { ok: false, error: 'legacy workspace data has invalid membership or no default workspace' };
     }
     if (b.backupVersion >= 8 && (b.jobHistory as JobHistoryEntry[]).some((entry) => typeof entry.projectId !== 'string' || !projectIds.has(entry.projectId))) {
       return { ok: false, error: 'job history references a missing project' };
@@ -4602,8 +4520,8 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
     if ((b.watches as AppWatch[]).some((watch) => watch.projectId !== undefined && !projectIds.has(watch.projectId))) {
       return { ok: false, error: 'watches reference a missing project' };
     }
-    if (b.backupVersion >= 9 && (!Array.isArray(b.artifactProjectLinks) || !b.artifactProjectLinks.every(isArtifactProjectLinkShape))) {
-      return { ok: false, error: 'artifact project links are missing or malformed' };
+    if (b.backupVersion >= 9 && b.backupVersion <= 10 && (!Array.isArray(b.artifactProjectLinks) || !b.artifactProjectLinks.every(isArtifactProjectLinkShape))) {
+      return { ok: false, error: 'legacy artifact links are missing or malformed' };
     }
     if (Array.isArray(b.artifactProjectLinks)) {
       const artifactLinks = b.artifactProjectLinks as ArtifactProjectLink[];
@@ -4627,13 +4545,13 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
       exportedAt: typeof b.exportedAt === 'number' ? b.exportedAt : undefined,
       allowedUsers: b.allowedUsers as AllowedUser[],
       roles: b.roles as Role[],
-      projects: Array.isArray(b.projects) && b.projects.every(isProjectRecordShape) ? b.projects as ProjectRecord[] : [createDefaultProject()],
+      projects: [createDefaultProject()],
       artifactProjectLinks: Array.isArray(b.artifactProjectLinks) && b.artifactProjectLinks.every(isArtifactProjectLinkShape) ? b.artifactProjectLinks as ArtifactProjectLink[] : [],
       apiKeys: b.apiKeys as ApiKeyRecord[],
       settings: b.settings as PersistedSettings,
-      watches: b.watches as AppWatch[],
+      watches: (b.watches as AppWatch[]).map((watch) => ({ ...watch, projectId: DEFAULT_PROJECT_ID })),
       devices: b.devices as BackupDeviceRecord[],
-      jobHistory: (b.jobHistory as JobHistoryEntry[]).map((entry) => ({ ...entry, projectId: entry.projectId ?? DEFAULT_PROJECT_ID })),
+      jobHistory: (b.jobHistory as JobHistoryEntry[]).map((entry) => ({ ...entry, projectId: DEFAULT_PROJECT_ID })),
       lastSchedulerRunAt: typeof b.lastSchedulerRunAt === 'number' ? b.lastSchedulerRunAt : undefined,
       userPrefs: b.userPrefs as Record<string, UserPrefs>,
       auditLog: b.auditLog as AuditLogEntry[],
@@ -4718,12 +4636,15 @@ function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedSt
   return {
     allowedUsers: payload.allowedUsers.map((user) => ({ ...user, username: user.username.toLowerCase() })),
     roles: payload.roles.map((role) => ({ ...role, permissions: serializeBits(consolidatePermissionBits(upgradePermissionBits(parseBits(role.permissions)))) })),
-    projects: payload.projects,
-    apiKeys: payload.apiKeys.map((key) => ({ ...key, pendingReveal: undefined })),
+    projects: [createDefaultProject()],
+    apiKeys: payload.apiKeys.map((key) => {
+      const { projectIds: _projectIds, ...portable } = key as ApiKeyRecord & { projectIds?: string[] };
+      return { ...portable, pendingReveal: undefined };
+    }),
     settings: payload.settings,
-    watches: payload.watches.map((watch) => ({ ...watch, enabled: false })),
+    watches: payload.watches.map((watch) => ({ ...watch, projectId: DEFAULT_PROJECT_ID, enabled: false })),
     devices: payload.devices.map(normalizeLoadedDevice),
-    jobHistory: payload.jobHistory.slice(0, MAX_HISTORY),
+    jobHistory: payload.jobHistory.slice(0, MAX_HISTORY).map((entry) => ({ ...entry, projectId: DEFAULT_PROJECT_ID })),
     auditLog: payload.auditLog.slice(0, MAX_AUDIT_LOG),
     schedulerRunHistory: payload.schedulerRunHistory.slice(0, MAX_LEGACY_SCHEDULER_RUNS).map((entry) => ({ ...entry, id: entry.id ?? randomUUID() })),
     userPrefs: payload.userPrefs,
@@ -4739,14 +4660,13 @@ function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedSt
 
 function backupDatabaseCollections(
   payload: ValidatedBackupPayload,
-  projects: ProjectRecord[] = payload.projects,
   accounts: AccountCollections = { users: payload.allowedUsers, roles: payload.roles },
 ): StateCollectionReplacement[] {
   return [
     ...billingSnapshotCollections(payload.billing),
     ...identitySnapshotCollections(payload.identities),
     ...accountRepository.collectionReplacements(accounts),
-    projectCollectionReplacement(projects),
+    projectCollectionReplacement([createDefaultProject()]),
     { table: 'decrypt_quota_ledger', rows: payload.decryptQuotaLedger.map((entry) => ({ id: entry.jobId, payload: entry, updatedAt: entry.admittedAt })) },
   ];
 }
@@ -4852,7 +4772,7 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
   try {
     let database = openStateDatabase(options);
     try {
-      database.writeState(restoredState, undefined, [...backupDatabaseCollections(payload, restored.projects, { users: restored.allowedUsers, roles: restored.roles }), ...additionalCollections]);
+      database.writeState(restoredState, undefined, [...backupDatabaseCollections(payload, { users: restored.allowedUsers, roles: restored.roles }), ...additionalCollections]);
       database.integrityStatus();
     } finally {
       database.close();
@@ -4931,8 +4851,6 @@ function backupRestoreChecks(payload: ValidatedBackupPayload, restored: BackupRe
   const userIds = new Set(payload.allowedUsers.map((user) => user.username.toLowerCase()));
   const watchIds = new Set(payload.watches.map((watch) => watch.id));
   const deviceIds = new Set(payload.devices.map((device) => device.id));
-  const projectIds = new Set(payload.projects.map((project) => project.id));
-  const projectMemberIds = new Set(payload.allowedUsers.map((user) => user.username.toLowerCase()));
   const checks = [
     { label: 'Unique role IDs', ok: roleIds.size === payload.roles.length, detail: `${roleIds.size} roles` },
     { label: 'Default role', ok: payload.roles.filter((role) => role.isDefault).length <= 1, detail: `${payload.roles.filter((role) => role.isDefault).length} default roles` },
@@ -4940,8 +4858,7 @@ function backupRestoreChecks(payload: ValidatedBackupPayload, restored: BackupRe
     { label: 'API key owners', ok: payload.apiKeys.every((key) => key.ownerId === 'root' || userIds.has(key.ownerId.toLowerCase())), detail: `${payload.apiKeys.length} keys checked` },
     { label: 'Unique watch IDs', ok: watchIds.size === payload.watches.length, detail: `${watchIds.size} watches` },
     { label: 'Unique device IDs', ok: deviceIds.size === payload.devices.length, detail: `${deviceIds.size} devices` },
-    { label: 'Unique project IDs and default workspace', ok: projectIds.size === payload.projects.length && payload.projects.filter((project) => project.isDefault && project.id === DEFAULT_PROJECT_ID).length === 1, detail: `${projectIds.size} projects` },
-    { label: 'Project member references', ok: payload.projects.every((project) => project.memberIds.every((memberId) => projectMemberIds.has(memberId.toLowerCase()))), detail: `${payload.projects.length} projects checked` },
+    { label: 'Shared data scope', ok: restored.projects.length === 1 && restored.projects[0]?.id === DEFAULT_PROJECT_ID, detail: 'one shared account scope' },
     { label: 'Restore transformation', ok: restored.roles.length === payload.roles.length && restored.apiKeys.every((key) => key.pendingReveal === undefined), detail: `${restored.apiKeys.length} keys normalized` },
     { label: 'Serializable restored state', ok: (() => { try { JSON.stringify(restored); return true; } catch { return false; } })(), detail: 'normalized state checked' },
     temporaryDatabaseRestoreCheck(payload, restored, additionalCollections),
@@ -4968,14 +4885,8 @@ export function importBackup(raw: unknown, actor: string): ImportBackupResult {
   if (!validated.ok) return { ok: false, error: validated.error };
   const b = validated.payload;
   const restored = prepareBackupRestore(b);
-  const currentArtifactLinks = exportArtifactProjectLinks();
-  const preservedProjects = preserveCurrentProjectReferences(restored.projects, currentArtifactLinks);
-  if (preservedProjects.missing.length > 0) {
-    return { ok: false, error: `backup restore cannot preserve existing data for missing project records: ${preservedProjects.missing.join(', ')}` };
-  }
-  restored.projects = preservedProjects.projects;
-  const artifactCollections = artifactProjectLinksReplacement(b.artifactProjectLinks, currentArtifactLinks);
-  const restoreCollections = [...backupDatabaseCollections(b, restored.projects, { users: restored.allowedUsers, roles: restored.roles }), ...artifactCollections];
+  const artifactCollections = artifactProjectLinksReplacement();
+  const restoreCollections = [...backupDatabaseCollections(b, { users: restored.allowedUsers, roles: restored.roles }), ...artifactCollections];
   const checks = backupRestoreChecks(b, restored, artifactCollections);
   if (checks.some((check) => !check.ok)) {
     return { ok: false, error: `backup restore test failed: ${checks.filter((check) => !check.ok).map((check) => check.label).join(', ')}` };

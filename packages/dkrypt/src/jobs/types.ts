@@ -58,6 +58,8 @@ export interface Job {
   warnings?: string[];
   error?: string;
   queueReason?: string;
+  pausedAt?: number;
+  pausedRemainingMs?: number;
   lastQueueReason?: string;
   retryCount?: number;
   attempt?: number;

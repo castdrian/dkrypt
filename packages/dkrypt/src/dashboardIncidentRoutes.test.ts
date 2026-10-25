@@ -15,12 +15,10 @@ function sessionCookie(permissions: bigint): string {
   return value.split(';', 1)[0]!;
 }
 
-test('incident timeline merges authorized project jobs, device history, and deployment outcomes', async () => {
+test('incident timeline merges authorized jobs, device history, and deployment outcomes across dkrypt', async () => {
   const now = Date.now();
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardIncidentRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'project-a' || projectId === 'default',
-    getProject: (projectId) => projectId === 'project-a' || projectId === 'default' ? { id: projectId } as never : undefined,
     getEffectiveDevices: () => [{ id: 'device-1', name: 'Test iPad' } as never],
     getDeviceActivityPage: () => ({ entries: [{ id: 'health-1', ts: now - 3000, deviceId: 'device-1', kind: 'health', message: 'Agent recovered' }], total: 1 }),
     getAllJobHistory: () => [{
@@ -41,37 +39,31 @@ test('incident timeline merges authorized project jobs, device history, and depl
   try {
     const response = await server.inject({
       method: 'GET',
-      url: `/v1/dashboard/incidents?projectId=project-a&since=${now - 10000}`,
+      url: `/v1/dashboard/incidents?since=${now - 10000}`,
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices | PermissionFlag.viewLogs) },
     });
-    const denied = await server.inject({
-      method: 'GET',
-      url: '/v1/dashboard/incidents?projectId=project-b',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
-    });
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/incidents', headers: { cookie: sessionCookie(0n) } });
     const defaultProject = await server.inject({
       method: 'GET',
-      url: `/v1/dashboard/incidents?projectId=default&since=${now - 10000}`,
+      url: `/v1/dashboard/incidents?since=${now - 10000}`,
       headers: { cookie: sessionCookie(PermissionFlag.viewDevices) },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().events.map((event: { kind: string }) => event.kind)).toEqual(['deployment', 'job', 'job']);
+    expect(response.json().events.map((event: { kind: string }) => event.kind)).toEqual(['deployment', 'deployment', 'job', 'device', 'job']);
     expect(response.json().events.some((event: { jobId?: string }) => event.jobId === 'job-1')).toBe(true);
-    expect(response.json().events.some((event: { deviceId?: string }) => event.deviceId)).toBe(false);
+    expect(response.json().events.some((event: { deviceId?: string }) => event.deviceId)).toBe(true);
     expect(defaultProject.statusCode).toBe(200);
     expect(defaultProject.json().events.some((event: { kind: string }) => event.kind === 'device')).toBe(true);
-    expect(denied.statusCode).toBe(404);
+    expect(denied.statusCode).toBe(403);
   } finally {
     await server.close();
   }
 });
 
-test('Action Center separates view and management permissions while retaining project isolation', async () => {
+test('Action Center separates view and management permissions and includes the shared workspace', async () => {
   const incident = openIncident({ projectId: 'default', sourceKey: `job:${randomUUID()}`, sourceId: randomUUID(), kind: 'job', title: 'Decrypt failed', detail: 'com.example.app' });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardIncidentRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
-    getProject: (projectId) => projectId === 'default' ? { id: projectId } as never : undefined,
   }));
   try {
     const url = '/v1/dashboard/action-center';
@@ -80,11 +72,12 @@ test('Action Center separates view and management permissions while retaining pr
     const visible = await server.inject({ method: 'GET', url, headers: { cookie: sessionCookie(PermissionFlag.viewIncidents) } });
     expect(visible.statusCode).toBe(200);
     expect(visible.json().incidents.some((entry: { id: string }) => entry.id === incident.id)).toBe(true);
-    const isolated = await server.inject({ method: 'GET', url: `${url}?projectId=other`, headers: { cookie: sessionCookie(PermissionFlag.viewIncidents) } });
-    expect(isolated.statusCode).toBe(404);
-    const readonlyChange = await server.inject({ method: 'PATCH', url: `${url}/${incident.id}`, headers: { cookie: sessionCookie(PermissionFlag.viewIncidents) }, payload: { projectId: 'default', status: 'in_progress' } });
+    const globallyVisible = await server.inject({ method: 'GET', url, headers: { cookie: sessionCookie(PermissionFlag.viewIncidents) } });
+    expect(globallyVisible.statusCode).toBe(200);
+    expect(globallyVisible.json().incidents.some((entry: { id: string }) => entry.id === incident.id)).toBe(true);
+    const readonlyChange = await server.inject({ method: 'PATCH', url: `${url}/${incident.id}`, headers: { cookie: sessionCookie(PermissionFlag.viewIncidents) }, payload: { status: 'in_progress' } });
     expect(readonlyChange.statusCode).toBe(403);
-    const managed = await server.inject({ method: 'PATCH', url: `${url}/${incident.id}`, headers: { cookie: sessionCookie(PermissionFlag.manageIncidents) }, payload: { projectId: 'default', status: 'resolved', resolutionNote: 'Verified recovery' } });
+    const managed = await server.inject({ method: 'PATCH', url: `${url}/${incident.id}`, headers: { cookie: sessionCookie(PermissionFlag.manageIncidents) }, payload: { status: 'resolved', resolutionNote: 'Verified recovery' } });
     expect(managed.statusCode).toBe(200);
     expect(managed.json().incident.status).toBe('resolved');
   } finally {
@@ -93,26 +86,23 @@ test('Action Center separates view and management permissions while retaining pr
 });
 
 test('incident state at a time uses recorded transitions and labels earlier history incomplete', async () => {
-  const projectId = `timeline-${randomUUID()}`;
-  const incident = openIncident({ projectId, sourceKey: `job:${randomUUID()}`, sourceId: randomUUID(), kind: 'job', title: 'Decrypt failed', detail: 'com.example.app' });
+  const incident = openIncident({ projectId: 'default', sourceKey: `job:${randomUUID()}`, sourceId: randomUUID(), kind: 'job', title: 'Decrypt failed', detail: 'com.example.app' });
   await Bun.sleep(5);
-  updateOperationalIncident(incident.id, projectId, 'operator', { status: 'resolved', resolutionNote: 'Retried successfully' });
+  updateOperationalIncident(incident.id, 'default', 'operator', { status: 'resolved', resolutionNote: 'Retried successfully' });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
-  await server.register(createDashboardIncidentRoutes({
-    canAccessProject: (_userId, _permissions, id) => id === projectId,
-    getProject: (id) => id === projectId ? { id } as never : undefined,
-  }));
+  await server.register(createDashboardIncidentRoutes());
   try {
-    const base = `/v1/dashboard/incidents/state-at?projectId=${encodeURIComponent(projectId)}`;
+    const base = '/v1/dashboard/incidents/state-at?';
     const headers = { cookie: sessionCookie(PermissionFlag.viewIncidents) };
-    const before = await server.inject({ method: 'GET', url: `${base}&at=${incident.createdAt - 1}`, headers });
-    const opened = await server.inject({ method: 'GET', url: `${base}&at=${incident.createdAt}`, headers });
-    const resolved = await server.inject({ method: 'GET', url: `${base}&at=${Date.now()}`, headers });
-    const denied = await server.inject({ method: 'GET', url: `${base}&at=${Date.now()}`, headers: { cookie: sessionCookie(PermissionFlag.viewLogs) } });
+    const before = await server.inject({ method: 'GET', url: `${base}at=0`, headers });
+    const opened = await server.inject({ method: 'GET', url: `${base}at=${incident.createdAt}`, headers });
+    const resolved = await server.inject({ method: 'GET', url: `${base}at=${Date.now()}`, headers });
+    const denied = await server.inject({ method: 'GET', url: `${base}at=${Date.now()}`, headers: { cookie: sessionCookie(PermissionFlag.viewLogs) } });
     expect(before.statusCode).toBe(200);
     expect(before.json()).toMatchObject({ coverage: 'incomplete', incidents: [] });
-    expect(opened.json()).toMatchObject({ coverage: 'recorded', incidents: [{ id: incident.id, status: 'open' }] });
-    expect(resolved.json()).toMatchObject({ coverage: 'recorded', incidents: [{ id: incident.id, status: 'resolved' }] });
+    expect(opened.json().coverage).toBe('recorded');
+    expect(opened.json().incidents.find((entry: { id: string }) => entry.id === incident.id)).toMatchObject({ status: 'open' });
+    expect(resolved.json().incidents.find((entry: { id: string }) => entry.id === incident.id)).toMatchObject({ status: 'resolved' });
     expect(denied.statusCode).toBe(403);
   } finally {
     await server.close();

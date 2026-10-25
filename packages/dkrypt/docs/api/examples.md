@@ -52,6 +52,29 @@ if (!response.ok) throw new Error((await response.json()).message);
 const job = await response.json();
 ```
 
+## Generated client helpers
+
+The generated clients provide helpers to submit a decrypt, wait for or follow its job, list artifacts, and download an IPA. They use the same API-key scopes and routes.
+
+```ts
+import { DkryptClient } from './clients/typescript/dkrypt.js';
+
+const client = new DkryptClient(process.env.DKRYPT_API_URL!, { apiKey: process.env.DKRYPT_API_KEY });
+const job = await client.decrypt('com.example.app', { idempotencyKey: crypto.randomUUID() });
+for await (const update of client.followJob(job.id)) {
+  process.stdout.write(`${update.status}: ${update.progress ?? ''}\n`);
+}
+```
+
+```python
+from dkrypt_client import DkryptClient
+
+client = DkryptClient(api_url, api_key)
+job = client.decrypt('com.example.app')
+for update in client.follow_job(job['id']):
+    print(update['status'], update.get('progress', ''))
+```
+
 ## CLI
 
 The Node-based CLI source is in [`packages/dkrypt-cli`](../../../dkrypt-cli/README.md). It uses only the same public API operations and rejects cross-origin redirects.

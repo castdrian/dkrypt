@@ -29,7 +29,6 @@
 	} from "#lib/format.svelte";
 	import { liveState } from "#lib/live.svelte";
 	import { PermissionFlag } from "#lib/permissions";
-	import { projectSelectionState } from "#lib/projectSelection.svelte";
 	import { createSavedViews } from "#lib/savedViews.svelte";
 	import { sessionHasAnyPermission } from "#lib/session.svelte";
 	import {
@@ -105,7 +104,6 @@
 	let queueSloLoading = $state(false);
 	let queueSloError = $state(false);
 	let queueSloRequestId = 0;
-	let queueSloProjectId = "";
 	const activeJobSloSignature = $derived(
 		(liveState.overview?.activeJobs ?? [])
 			.map((job) => `${job.id}:${job.status}`)
@@ -130,16 +128,10 @@
 	}
 
 	$effect(() => {
-		const projectId = projectSelectionState.id;
 		activeJobSloSignature;
 		historySloSignature;
-		if (queueSloProjectId !== projectId) {
-			queueSloProjectId = projectId;
-			queueSlo = null;
-		}
 		if (!canViewQueueSlo) {
 			queueSloRequestId += 1;
-			queueSloProjectId = "";
 			queueSlo = null;
 			queueSloError = false;
 			queueSloLoading = false;
@@ -156,7 +148,6 @@
 	let failurePatterns = $state<FailurePattern[]>([]);
 
 	$effect(() => {
-		projectSelectionState.id;
 		if (!canViewOperationalInsights) return;
 		void fetchStorageForecast().then((forecast) => (storageForecast = forecast));
 		void fetchFailurePatterns().then(({ patterns }) => (failurePatterns = patterns));
@@ -171,7 +162,6 @@
 	$effect(() => {
 		void trendDays;
 		void topAppsLimit;
-		projectSelectionState.id;
 		load();
 	});
 

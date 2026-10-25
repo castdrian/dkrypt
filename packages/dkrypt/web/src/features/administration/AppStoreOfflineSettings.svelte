@@ -5,7 +5,7 @@
   import Card from '#lib/components/ui/Card.svelte';
   import Input from '#lib/components/ui/Input.svelte';
   import Label from '#lib/components/ui/Label.svelte';
-  import { authenticateOfflineAppStoreAccount, fetchDevices, fetchOfflineAppStoreStatus, reauthenticate, retrieveOfflineAppStoreCredential, saveOfflineAppStoreAccount, verifyOfflineAppStoreReadiness, type DeviceRecord, type OfflineAppStoreReadinessCheck, type OfflineAppStoreStatus } from '#lib/api';
+  import { authenticateOfflineAppStoreAccount, checkAppStoreDownloaderNetwork, fetchDevices, fetchOfflineAppStoreStatus, reauthenticate, retrieveOfflineAppStoreCredential, saveOfflineAppStoreAccount, verifyOfflineAppStoreReadiness, type AppStoreDownloaderNetworkCheck, type DeviceRecord, type OfflineAppStoreReadinessCheck, type OfflineAppStoreStatus } from '#lib/api';
   import { retryAfterReauthentication } from '#lib/reauthenticatedRequest.js';
   import { withRequestTimeout } from '#lib/apiRequestTimeout.js';
   import { sessionState } from '#lib/session.svelte';
@@ -22,7 +22,9 @@
   let authenticating = $state(false);
   let retrievingCredential = $state(false);
   let verifyingReadiness = $state(false);
+  let checkingNetwork = $state(false);
   let readinessChecks = $state<OfflineAppStoreReadinessCheck[] | null>(null);
+  let networkCheck = $state<AppStoreDownloaderNetworkCheck | null>(null);
   let error = $state('');
   let notice = $state('');
   let statusRefresh: Promise<void> | undefined;
@@ -170,6 +172,18 @@
     }
   }
 
+  async function checkDownloaderNetwork(): Promise<void> {
+    checkingNetwork = true;
+    error = '';
+    try {
+      networkCheck = await checkAppStoreDownloaderNetwork();
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not check the App Store downloader connection.';
+    } finally {
+      checkingNetwork = false;
+    }
+  }
+
   onMount(() => {
     void refresh();
     const timer = setInterval(() => {
@@ -188,11 +202,12 @@
       </div>
       <p class="mt-1 max-w-3xl text-xs text-muted">Eligible App Store jobs try server-side download and decryption first; failures return to the existing device queue. TestFlight remains device-based.</p>
     </div>
-    <div class="flex gap-2"><Button size="sm" variant="secondary" loading={verifyingReadiness} onclick={() => void verifyReadiness()}>Run no-purchase check</Button><Button size="sm" variant="secondary" loading={loading} onclick={() => void refresh()}>Refresh</Button></div>
+    <div class="flex flex-wrap gap-2"><Button size="sm" variant="secondary" loading={checkingNetwork} onclick={() => void checkDownloaderNetwork()}>Test downloader connection</Button><Button size="sm" variant="secondary" loading={verifyingReadiness} onclick={() => void verifyReadiness()}>Run no-purchase check</Button><Button size="sm" variant="secondary" loading={loading} onclick={() => void refresh()}>Refresh</Button></div>
   </div>
 
   {#if error}<div class="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-err" role="alert">{error}</div>{/if}
   {#if notice}<div class="mt-3 rounded-lg border border-success/30 bg-success/5 p-3 text-sm text-ok" role="status">{notice}</div>{/if}
+  {#if networkCheck}<div class="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3 text-sm" role={networkCheck.reachable ? 'status' : 'alert'}><div class="flex flex-wrap items-center gap-2"><Badge variant={networkCheck.reachable ? 'success' : 'destructive'}>{networkCheck.reachable ? 'Apple reachable' : 'Apple unreachable'}</Badge><span>{networkCheck.reachable ? `${networkCheck.latencyMs} ms` : networkCheck.diagnostic ?? 'The downloader could not reach Apple.'}</span></div><p class="mt-1 text-xs text-muted">Checked from the downloader runtime against Apple’s App Store metadata endpoint. This does not download, install, or purchase an app.</p></div>{/if}
   {#if readinessChecks}<ul class="mt-3 grid gap-2 sm:grid-cols-2" aria-label="No-purchase setup check results">{#each readinessChecks as check (check.id)}<li class="rounded-lg border border-border/70 p-3 text-xs"><div class="font-medium">{check.ready ? 'Ready' : 'Needs attention'} · {check.id.replaceAll('-', ' ')}</div><div class="mt-1 text-muted">{check.detail}</div></li>{/each}</ul>{/if}
 
   {#if status}

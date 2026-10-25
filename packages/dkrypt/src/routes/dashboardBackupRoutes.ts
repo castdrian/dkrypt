@@ -16,7 +16,7 @@ import type {
   DashboardBackupScheduleSetRoute,
 } from '#dashboardBackupContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { dashboardEvents, emitJobsChanged } from '#events.js';
+import { emitJobsChanged } from '#events.js';
 import { getRouteContract } from '#contracts.js';
 import { reloadArtifactIndex } from '#artifacts.js';
 import { PermissionFlag } from '#permissions.js';
@@ -72,7 +72,6 @@ export const dashboardBackupRoutes: FastifyPluginAsyncTypebox = async (server) =
       return;
     }
     reloadArtifactIndex();
-    dashboardEvents.emit('projectsChanged');
     emitJobsChanged();
     return { ok: true };
   });

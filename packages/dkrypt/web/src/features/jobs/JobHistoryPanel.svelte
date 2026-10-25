@@ -41,7 +41,6 @@
 	import { liveState } from "#lib/live.svelte";
 	import { createSavedViews } from "#lib/savedViews.svelte";
 	import { sessionState } from "#lib/session.svelte";
-	import { projectSelectionState } from "#lib/projectSelection.svelte";
 	import { isServerQueryCancelled, mergeServerPage, serverQueryStatus } from "#lib/serverStateCache.svelte";
 	import { categorizeFailure } from "#lib/failureCategory";
 	import {
@@ -263,7 +262,7 @@
 			status,
 			opts: filters,
 		};
-		const historyQueryKey = JSON.stringify([projectSelectionState.id, historyQuery]);
+		const historyQueryKey = JSON.stringify(historyQuery);
 		const previousHistoryQueryKey = activeHistoryQueryKey;
 		activeHistoryQueryKey = historyQueryKey;
 		const applyPage = (data: Awaited<ReturnType<typeof fetchJobHistory>>) => {
@@ -394,7 +393,6 @@
 		deviceFilter;
 		errorFilter;
 		failureCategoryFilter;
-		projectSelectionState.id;
 		if (!hasSearched) {
 			hasSearched = true;
 			activeQuery = query;

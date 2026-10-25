@@ -3,7 +3,6 @@ import { getQueryParam, setQueryParams } from '#lib/urlState';
 import { normalizeFormattingLocalePreference, normalizeInterfaceLanguagePreference, type FormattingLocalePreference, type InterfaceLanguagePreference } from '#lib/locale';
 import { DEFAULT_HOME_LAYOUT, DEFAULT_HOME_VIEW_MODES, type HomeLayout, type HomeViewModes } from '#lib/homeLayouts';
 import { clearUnsavedFormWarnings, unsavedFormsState } from '#lib/formDrafts.svelte';
-import { projectSelectionState, setProjectSelection } from '#lib/projectSelection.svelte';
 
 export type Theme = 'dark' | 'light';
 export type ThemePref = Theme | 'auto';
@@ -161,19 +160,23 @@ export function setSoundEnabled(enabled: boolean): void {
 export type DisplayDensity = 'comfortable' | 'compact';
 export type SettingsMode = 'basic' | 'advanced';
 export type ArtifactColumnId = 'app' | 'bundleId' | 'version' | 'source' | 'size' | 'created';
+export interface SavedArtifactColumnLayout { id: string; name: string; groupByApp: boolean; columns: ArtifactColumnId[] }
 
 export const densityState = $state<{ value: DisplayDensity }>({ value: 'comfortable' });
 export const sidebarState = $state<{ width: number; collapsed: boolean }>({ width: 256, collapsed: false });
 export const settingsModeState = $state<{ value: SettingsMode }>({ value: 'basic' });
 export const displayTimeZoneState = $state<{ value: string }>({ value: 'system' });
 export const largeTargetsState = $state<{ value: boolean }>({ value: false });
+export const oneThumbModeState = $state<{ value: boolean }>({ value: false });
+export const decryptUsageAlertThresholdsState = $state<{ value: number[] }>({ value: [] });
 export const navigationPreferencesState = $state<{ order: TabId[]; pinned: TabId[] }>({
   order: ['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'],
   pinned: [],
 });
-export const artifactLibraryPreferencesState = $state<{ groupByApp: boolean; columns: ArtifactColumnId[] }>({
+export const artifactLibraryPreferencesState = $state<{ groupByApp: boolean; columns: ArtifactColumnId[]; layouts: SavedArtifactColumnLayout[]; activeLayoutId?: string }>({
   groupByApp: false,
   columns: ['app', 'bundleId', 'version', 'source', 'size'],
+  layouts: [],
 });
 export const artifactFilenameTemplateState = $state<{ value: string }>({ value: '{app}-{version}' });
 export const screenSharePrivacyState = $state<{ enabled: boolean }>({ enabled: sessionStorage.getItem('screensharePrivacy') === 'true' });
@@ -207,6 +210,20 @@ export function setLargeTargets(enabled: boolean): void {
   else document.documentElement.removeAttribute('data-large-targets');
 }
 
+export function setOneThumbMode(enabled: boolean): void {
+  oneThumbModeState.value = enabled;
+  if (enabled) document.documentElement.setAttribute('data-one-thumb', 'true');
+  else document.documentElement.removeAttribute('data-one-thumb');
+}
+
+export function initOneThumbMode(): void {
+  if (oneThumbModeState.value) document.documentElement.setAttribute('data-one-thumb', 'true');
+}
+
+export function setDecryptUsageAlertThresholds(thresholds: number[]): void {
+  decryptUsageAlertThresholdsState.value = [...thresholds].sort((a, b) => a - b);
+}
+
 export function initLargeTargets(): void {
   if (largeTargetsState.value) document.documentElement.setAttribute('data-large-targets', 'true');
 }
@@ -216,9 +233,11 @@ export function setNavigationPreferences(order: TabId[], pinned: TabId[]): void 
   navigationPreferencesState.pinned = [...pinned];
 }
 
-export function setArtifactLibraryPreferences(groupByApp: boolean, columns: ArtifactColumnId[]): void {
+export function setArtifactLibraryPreferences(groupByApp: boolean, columns: ArtifactColumnId[], layouts: SavedArtifactColumnLayout[] = artifactLibraryPreferencesState.layouts, activeLayoutId?: string): void {
   artifactLibraryPreferencesState.groupByApp = groupByApp;
   artifactLibraryPreferencesState.columns = [...columns];
+  artifactLibraryPreferencesState.layouts = layouts.map((layout) => ({ ...layout, columns: [...layout.columns] }));
+  artifactLibraryPreferencesState.activeLayoutId = activeLayoutId;
 }
 
 export function setArtifactFilenameTemplate(template: string): void {
@@ -265,7 +284,7 @@ export function resetUserInterfacePreferences(): void {
   setDisplayTimeZone('system');
   setLargeTargets(false);
   setNavigationPreferences(['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'], []);
-  setArtifactLibraryPreferences(false, ['app', 'bundleId', 'version', 'source', 'size']);
+  setArtifactLibraryPreferences(false, ['app', 'bundleId', 'version', 'source', 'size'], [], undefined);
   setArtifactFilenameTemplate('{app}-{version}');
   setHomeLayoutPreferences([{ ...DEFAULT_HOME_LAYOUT, order: [...DEFAULT_HOME_LAYOUT.order], hidden: [], collapsed: [] }], DEFAULT_HOME_LAYOUT.id);
   setHomeViewModes(DEFAULT_HOME_VIEW_MODES);
@@ -533,16 +552,13 @@ export function setSettingsSubtab(subtab: string): void {
 export function initUrlTabSync(): void {
   let synchronizedUrl = window.location.href;
   window.addEventListener('popstate', () => {
-    const destination = new URL(window.location.href);
     const tab = getQueryParam('tab');
     const stab = getQueryParam('stab');
     const nextTab = tab && VALID_TAB_IDS.includes(tab as TabId) ? tab as TabId : tabState.active;
     const nextSubtab = stab ?? tabState.settingsSubtab;
-    const projectId = destination.searchParams.get('projectId') ?? 'default';
     const artifactId = getQueryParam('artifact');
     const jobId = getQueryParam('job');
     const applyLocation = () => {
-      setProjectSelection(projectId);
       if (nextTab !== tabState.active) applyActiveTab(nextTab);
       if (nextSubtab !== tabState.settingsSubtab) applySettingsSubtab(nextSubtab);
       if (artifactId) {
@@ -559,7 +575,7 @@ export function initUrlTabSync(): void {
       }
       synchronizedUrl = window.location.href;
     };
-    const routeChanged = nextTab !== tabState.active || nextSubtab !== tabState.settingsSubtab || projectId !== projectSelectionState.id;
+    const routeChanged = nextTab !== tabState.active || nextSubtab !== tabState.settingsSubtab;
     if (routeChanged && unsavedFormsState.ids.length > 0) {
       navigateWithUnsavedReview(applyLocation, () => {
         window.history.replaceState(window.history.state, '', synchronizedUrl);

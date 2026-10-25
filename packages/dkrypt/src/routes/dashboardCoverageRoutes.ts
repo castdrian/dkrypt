@@ -1,20 +1,19 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { listArtifacts, type ArtifactRecord } from '#artifacts.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { PermissionFlag } from '#permissions.js';
-import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
-import { DEFAULT_PROJECT_ID, getAllJobHistory, getAppCatalogEntries, getEffectiveDevices, getTestFlightCatalogCache, upsertAppCatalogEntries } from '#store/state.js';
+import { fastifyRequirePermission, fastifyRequireSession } from '#session.js';
+import { getAllJobHistory, getAppCatalogEntries, getEffectiveDevices, getTestFlightCatalogCache, upsertAppCatalogEntries } from '#store/state.js';
 import { listBuilds, listTrains } from '#testflight.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { compareVersions } from '#util/version.js';
 import { listAppVersions } from '#versions.js';
 
-function projectArtifacts(projectId: string): ArtifactRecord[] {
+function workspaceArtifacts(): ArtifactRecord[] {
   const artifacts: ArtifactRecord[] = [];
   let cursor: string | undefined;
   for (;;) {
-    const page = listArtifacts({ projectIds: [projectId], limit: 200, cursor });
+    const page = listArtifacts({ limit: 200, cursor });
     artifacts.push(...page.artifacts);
     if (!page.nextCursor) break;
     if (page.nextCursor === cursor) throw new Error('artifact pagination did not advance');
@@ -23,9 +22,9 @@ function projectArtifacts(projectId: string): ArtifactRecord[] {
   return artifacts;
 }
 
-function coverageForProject(projectId: string) {
-  const artifacts = projectArtifacts(projectId);
-  const jobs = getAllJobHistory().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId);
+function coverageForWorkspace() {
+  const artifacts = workspaceArtifacts();
+  const jobs = getAllJobHistory();
   const bundleIds = [...new Set([...artifacts.map((artifact) => artifact.bundleId), ...jobs.map((job) => job.bundleId)])];
   const catalog = new Map(getAppCatalogEntries(bundleIds).map((entry) => [entry.bundleId, entry]));
   const testFlightCache = getTestFlightCatalogCache();
@@ -53,22 +52,16 @@ export const dashboardCoverageRoutes: FastifyPluginAsyncTypebox = async (server)
   server.addHook('preHandler', fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation));
 
   server.get('/v1/dashboard/release-coverage', {
-    schema: { hide: true, querystring: Type.Object({ projectId: Type.Optional(Type.String()) }) },
-  }, (request, reply) => {
-    const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-    const session = getFastifySession(request)!;
-    if (!canAccessProject(session.sub, session.permissions, projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
-    return { projectId, items: coverageForProject(projectId) };
+    schema: { hide: true },
+  }, () => {
+    return { items: coverageForWorkspace() };
   });
 
   server.post('/v1/dashboard/release-coverage/:bundleId/refresh', {
-    schema: { hide: true, params: Type.Object({ bundleId: Type.String({ minLength: 3, maxLength: 200 }) }), body: Type.Object({ projectId: Type.String() }) },
+    schema: { hide: true, params: Type.Object({ bundleId: Type.String({ minLength: 3, maxLength: 200 }) }) },
   }, async (request, reply) => {
     const { bundleId } = request.params;
-    const { projectId } = request.body;
-    const session = getFastifySession(request)!;
-    if (!canAccessProject(session.sub, session.permissions, projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
-    if (!coverageForProject(projectId).some((item) => item.bundleId === bundleId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'app not found in this project'));
+    if (!coverageForWorkspace().some((item) => item.bundleId === bundleId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'app not found'));
     const catalog = getAppCatalogEntries([bundleId])[0];
     const testFlightApp = getTestFlightCatalogCache()?.apps.find((app) => app.bundleId === bundleId);
     const updates: { bundleId: string; displayName: string; latestAppStoreVersion?: string; latestAppStoreExternalId?: string; appStoreReleaseCheckedAt?: number; latestTestFlightVersion?: string; latestTestFlightBuildId?: number; testFlightReleaseCheckedAt?: number } = { bundleId, displayName: catalog?.displayName ?? testFlightApp?.displayName ?? bundleId };
@@ -97,6 +90,6 @@ export const dashboardCoverageRoutes: FastifyPluginAsyncTypebox = async (server)
       updates.testFlightReleaseCheckedAt = Date.now();
     } else if (testFlightResult.status === 'rejected') failures.push('TestFlight lookup failed');
     upsertAppCatalogEntries([updates]);
-    return { item: coverageForProject(projectId).find((item) => item.bundleId === bundleId), failures };
+    return { item: coverageForWorkspace().find((item) => item.bundleId === bundleId), failures };
   });
 };

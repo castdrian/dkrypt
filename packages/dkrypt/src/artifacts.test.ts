@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from '#config.js';
 import { withCorrelation } from '#correlation.js';
-import { createProject, exportBackup, importBackup } from '#store/state.js';
+import { exportBackup, importBackup } from '#store/state.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
 import { flushTelemetry, startSpan } from '#telemetry.js';
 import {
@@ -488,7 +488,7 @@ describe('persistent artifact store', () => {
     expect(result.maxBytes).toBe(1024 * 1024);
   });
 
-  test('keeps artifact availability scoped to the projects that can access it', async () => {
+  test('keeps all imported artifact records in the shared library', async () => {
     const bundleId = `com.example.project.${crypto.randomUUID()}`;
     const artifact = await promoteArtifact({
       key: `test-project-scope-${crypto.randomUUID()}`,
@@ -499,9 +499,9 @@ describe('persistent artifact store', () => {
       stagingPath: await stagingFile('project ipa'),
     });
 
-    expect(artifact.projectIds).toEqual(['project-a']);
+    expect(artifact.projectIds).toEqual(['default']);
     expect(listArtifacts({ projectIds: ['project-a'], query: bundleId }).total).toBe(1);
-    expect(listArtifacts({ projectIds: ['project-b'], query: bundleId }).total).toBe(0);
+    expect(listArtifacts({ projectIds: ['project-b'], query: bundleId }).total).toBe(1);
 
     const linked = await promoteArtifact({
       key: artifact.key,
@@ -513,47 +513,43 @@ describe('persistent artifact store', () => {
     });
 
     expect(linked.id).toBe(artifact.id);
-    expect(linked.projectIds).toEqual(['project-a', 'project-b']);
+    expect(linked.projectIds).toEqual(['default']);
     expect(listArtifacts({ projectIds: ['project-b'], query: bundleId }).total).toBe(1);
   });
 
-  test('enforces a project storage quota before promoting an artifact', async () => {
-    const project = createProject({ name: `Storage quota ${crypto.randomUUID()}`, storageQuotaBytes: 3 }, 'root').project!;
+  test('applies the shared artifact storage policy regardless of legacy workspace metadata', async () => {
     const stagingPath = await stagingFile('four');
 
-    await expect(promoteArtifact({
+    const artifact = await promoteArtifact({
       key: `test-project-quota-${crypto.randomUUID()}`,
       bundleId: `com.example.project-quota.${crypto.randomUUID()}`,
       channel: 'appstore',
-      projectId: project.id,
+      projectId: 'legacy-workspace',
       stagingPath,
-    })).rejects.toThrow('project storage quota would be exceeded');
-    await rm(stagingPath, { force: true });
+    });
+    expect(artifact.projectIds).toEqual(['default']);
   });
 
-  test('backup restore preserves artifact project links without exposing file paths', async () => {
-    const project = createProject({ name: `Artifact backup ${crypto.randomUUID()}` }, 'root').project!;
+  test('backup restore omits workspace metadata and keeps artifacts in the shared library', async () => {
     const artifact = await promoteArtifact({
       key: `test-artifact-backup-${crypto.randomUUID()}`,
       bundleId: `com.example.artifact-backup.${crypto.randomUUID()}`,
       channel: 'appstore',
-      projectId: project.id,
+      projectId: 'default',
       stagingPath: await stagingFile('backup ipa'),
     });
     const backup = exportBackup();
-    const link = backup.artifactProjectLinks.find((entry) => entry.artifactId === artifact.id);
+    expect(backup).not.toHaveProperty('projects');
+    expect(backup).not.toHaveProperty('artifactProjectLinks');
+    expect(JSON.stringify(backup)).not.toContain(artifact.filePath);
 
-    expect(link).toEqual({ artifactId: artifact.id, projectIds: [project.id] });
-    expect(JSON.stringify(link)).not.toContain(artifact.filePath);
-
-    const changedLinks = backup.artifactProjectLinks.map((entry) => entry.artifactId === artifact.id ? { ...entry, projectIds: ['default'] } : entry);
-    expect(importBackup({ ...backup, artifactProjectLinks: changedLinks }, 'test').ok).toBe(true);
+    expect(importBackup(backup, 'test').ok).toBe(true);
     reloadArtifactIndex();
     expect(getArtifactById(artifact.id)?.projectIds).toEqual(['default']);
 
     expect(importBackup(backup, 'test').ok).toBe(true);
     reloadArtifactIndex();
-    expect(getArtifactById(artifact.id)?.projectIds).toEqual([project.id]);
+    expect(getArtifactById(artifact.id)?.projectIds).toEqual(['default']);
   });
 
   test('previews least-recently-used quota evictions without changing artifact storage', async () => {

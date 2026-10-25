@@ -29,7 +29,7 @@ export function getPendingOauthLink(id: string, ownerId: string): PendingOauthLi
 
 export function pendingOauthLinkPreview(link: PendingOauthLink): { provider: AuthIdentity['provider']; willMerge: boolean; categories: string[]; expiresAt: number } {
   const existing = findAuthProfileByIdentity(link.identity.provider, link.identity.providerId);
-  return { provider: link.identity.provider, willMerge: Boolean(existing && existing.userId !== link.ownerId), categories: existing && existing.userId !== link.ownerId ? ['sign-in methods', 'roles and permissions', 'projects', 'jobs and artifacts', 'watches and preferences', 'billing and subscriptions'] : ['sign-in methods'], expiresAt: link.expiresAt };
+  return { provider: link.identity.provider, willMerge: Boolean(existing && existing.userId !== link.ownerId), categories: existing && existing.userId !== link.ownerId ? ['sign-in methods', 'roles and permissions', 'jobs and artifacts', 'watches and preferences', 'billing and subscriptions'] : ['sign-in methods'], expiresAt: link.expiresAt };
 }
 
 export function deletePendingOauthLink(id: string, ownerId: string): void {

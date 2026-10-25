@@ -43,6 +43,13 @@ const artifactColumnSchema = Type.Union([
 const artifactLibraryPreferencesSchema = Type.Object({
   groupByApp: Type.Boolean(),
   columns: Type.Array(artifactColumnSchema, { minItems: 1, maxItems: 6, uniqueItems: true }),
+  layouts: Type.Optional(Type.Array(Type.Object({
+    id: Type.String({ minLength: 1, maxLength: 40, pattern: '^[a-zA-Z0-9_-]+$' }),
+    name: Type.String({ minLength: 1, maxLength: 40 }),
+    groupByApp: Type.Boolean(),
+    columns: Type.Array(artifactColumnSchema, { minItems: 1, maxItems: 6, uniqueItems: true }),
+  }, { additionalProperties: false }), { maxItems: 10 })),
+  activeLayoutId: Type.Optional(Type.String({ minLength: 1, maxLength: 40, pattern: '^[a-zA-Z0-9_-]+$' })),
 });
 
 const userPrefsProperties = {
@@ -67,6 +74,8 @@ const userPrefsProperties = {
   pinnedNavigation: Type.Optional(Type.Array(navigationIdSchema, { maxItems: 7, uniqueItems: true })),
   artifactLibrary: Type.Optional(artifactLibraryPreferencesSchema),
   largeTargets: Type.Optional(Type.Boolean()),
+  oneThumbMode: Type.Optional(Type.Boolean()),
+  decryptUsageAlertThresholds: Type.Optional(Type.Array(Type.Integer({ minimum: 25, maximum: 100 }), { maxItems: 5, uniqueItems: true })),
   accent: Type.Optional(Type.String()),
   highContrast: Type.Optional(Type.Boolean()),
   sound: Type.Optional(Type.Boolean()),

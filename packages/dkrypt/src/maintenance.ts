@@ -47,9 +47,22 @@ export function blockDuringMaintenance(_req: Request, res: Response, next: NextF
 export function fastifyBlockDuringMaintenance(request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void {
   const status = getMaintenanceStatus();
   if (status.active) {
-    const message = `decrypts are paused for maintenance${status.reason ? ` - ${status.reason}` : ''}`;
-    reply.code(503).send({ error: message, code: 'maintenance_mode', message, requestId: request.id, retryable: true, remediation: { maintenance: true } });
+    sendMaintenanceBlocked(request, reply, status.reason);
     return;
   }
   done();
+}
+
+export function fastifyBlockManualMaintenance(request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void {
+  const status = getMaintenanceStatus();
+  if (status.manual) {
+    sendMaintenanceBlocked(request, reply, status.reason);
+    return;
+  }
+  done();
+}
+
+function sendMaintenanceBlocked(request: FastifyRequest, reply: FastifyReply, reason?: string): void {
+  const message = `decrypts are paused for maintenance${reason ? ` - ${reason}` : ''}`;
+  reply.code(503).send({ error: message, code: 'maintenance_mode', message, requestId: request.id, retryable: true, remediation: { maintenance: true } });
 }

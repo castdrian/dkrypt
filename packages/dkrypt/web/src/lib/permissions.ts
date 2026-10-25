@@ -36,8 +36,6 @@ export const PermissionFlag = {
   manageTestFlightSubscriptions: 1n << 35n,
   viewBilling: 1n << 36n,
   manageBilling: 1n << 37n,
-  viewProjects: 1n << 38n,
-  manageProjects: 1n << 39n,
   viewDiagnosticReports: 1n << 40n,
   viewIncidents: 1n << 41n,
   manageIncidents: 1n << 42n,
@@ -76,7 +74,7 @@ export function parseBits(value: string | undefined | null): bigint {
   }
 }
 
-export type PermissionGroup = 'General' | 'API Keys' | 'Automation & Devices' | 'Members & Roles' | 'Projects' | 'Backups';
+export type PermissionGroup = 'General' | 'API Keys' | 'Automation & Devices' | 'Members & Roles' | 'Backups';
 
 export interface PermissionMeta {
   key: PermissionFlagKey;
@@ -91,12 +89,10 @@ export const PERMISSION_META = [
   { key: 'viewLogs', label: 'View operational logs', description: 'Read live service and job logs plus webhook delivery records. This does not grant permission to change integrations or webhook settings.', group: 'General' },
   { key: 'viewBilling', label: 'View billing subscriptions', description: 'Read member subscription plans, billing providers, statuses, renewal dates, and safe payment identifiers without exposing provider secrets.', group: 'General' },
   { key: 'manageBilling', label: 'Manage billing setup', description: 'View billing subscriptions and provider readiness, including operational billing configuration checks.', group: 'General' },
-  { key: 'viewProjects', label: 'View all projects', description: 'View every project, its membership, and its usage limits. Members can always see projects they belong to.', group: 'Projects' },
-  { key: 'manageProjects', label: 'Manage projects', description: 'Create and archive projects, assign members, and configure project quotas.', group: 'Projects' },
-  { key: 'viewDiagnosticReports', label: 'View diagnostic reports', description: 'Read user-submitted redacted support reports and their project context.', group: 'General' },
-  { key: 'viewIncidents', label: 'View incidents', description: 'Read actionable incidents in accessible projects.', group: 'General' },
-  { key: 'manageIncidents', label: 'Manage incidents', description: 'Assign, snooze, and resolve incidents in accessible projects.', group: 'General' },
-  { key: 'notifyFailedJobOwners', label: 'Notify failed-job requesters', description: 'Send a manual resolution notice to the requester of a failed job in an accessible project.', group: 'General' },
+  { key: 'viewDiagnosticReports', label: 'View diagnostic reports', description: 'Read user-submitted redacted support reports.', group: 'General' },
+  { key: 'viewIncidents', label: 'View incidents', description: 'Read actionable incidents across dkrypt.', group: 'General' },
+  { key: 'manageIncidents', label: 'Manage incidents', description: 'Assign, snooze, and resolve incidents across dkrypt.', group: 'General' },
+  { key: 'notifyFailedJobOwners', label: 'Notify failed-job requesters', description: 'Send a manual resolution notice to the requester of a failed job.', group: 'General' },
   { key: 'requestApiKeys', label: 'Request API keys', description: 'Submit a personal API-key request for approval. Requested keys remain unusable until someone with Manage API keys approves them.', group: 'API Keys' },
   { key: 'createApiKeys', label: 'Create API keys', description: 'Create, reveal, regenerate, revoke, and use personal API keys immediately. This bypasses the approval queue only for the account’s own keys.', group: 'API Keys' },
   { key: 'viewApiKeys', label: 'View API keys', description: 'Read every API key, including its owner, status, usage, and configuration. Key secrets are never exposed by this permission.', group: 'API Keys' },

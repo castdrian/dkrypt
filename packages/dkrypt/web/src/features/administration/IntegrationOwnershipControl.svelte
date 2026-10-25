@@ -65,7 +65,7 @@
       <option value={user.id}>{user.name}{user.id === sessionState.sub ? ' (you)' : ''}</option>
     {/each}
   </select>
-  {#if loading}<p class="mt-2 text-xs text-muted">Loading eligible members…</p>{:else if users.length === 0}<p class="mt-2 text-xs text-muted">A recipient needs project, integration, and decrypt access.</p>{/if}
+  {#if loading}<p class="mt-2 text-xs text-muted">Loading eligible members…</p>{:else if users.length === 0}<p class="mt-2 text-xs text-muted">A recipient needs integration and decrypt access.</p>{/if}
   <div class="mt-4 flex justify-end gap-2">
     <Button variant="secondary" disabled={saving} onclick={() => (open = false)}>Cancel</Button>
     <Button loading={saving} disabled={loading || !targetId} onclick={() => void save()}>{targetId === sessionState.sub ? 'Assign to me' : 'Request transfer'}</Button>

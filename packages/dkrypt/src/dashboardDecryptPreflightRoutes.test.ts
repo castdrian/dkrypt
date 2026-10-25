@@ -8,7 +8,7 @@ import { dashboardRouter } from '#routes/dashboard.js';
 import { createDashboardDecryptPreflightRoutes, type DashboardDecryptPreflightServices } from '#routes/dashboardDecryptPreflightRoutes.js';
 import { setSessionCookie } from '#session.js';
 import type { DeviceHealth } from '#deviceHealth.js';
-import type { DeviceRecord, ProjectRecord } from '#store/state.js';
+import type { DeviceRecord } from '#store/state.js';
 import { TestFlightCatalogUnavailableError, type TestFlightCatalogApp } from '#testflightSubscriptions.js';
 
 function sessionCookie(permissions: bigint): string {
@@ -16,19 +16,6 @@ function sessionCookie(permissions: bigint): string {
   const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as Response;
   setSessionCookie(response, { sub: 'root', permissions });
   return value.split(';', 1)[0]!;
-}
-
-function createProject(overrides: Partial<ProjectRecord> = {}): ProjectRecord {
-  return {
-    id: 'default',
-    name: 'Default',
-    memberIds: [],
-    isDefault: true,
-    createdBy: 'root',
-    createdAt: 1,
-    updatedAt: 1,
-    ...overrides,
-  };
 }
 
 function createDevice(id: string, overrides: Partial<DeviceRecord> = {}): DeviceRecord {
@@ -80,8 +67,6 @@ function createTestFlightApp(devices: TestFlightCatalogApp['devices']): TestFlig
 function build(overrides: Partial<DashboardDecryptPreflightServices> = {}) {
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   void server.register(createDashboardDecryptPreflightRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
-    getProject: () => createProject(),
     getEffectiveDevices: () => [],
     ...overrides,
   }));
@@ -93,15 +78,13 @@ test('dashboard decrypt preflight is not registered through the legacy router', 
   expect(routes).not.toContain('POST /v1/dashboard/decrypt/preflight');
 });
 
-test('decrypt preflight limits checks to enabled devices and returns project queue readiness', async () => {
+test('decrypt preflight limits checks to enabled devices and returns shared queue readiness', async () => {
   const devices = [createDevice('enabled-device', { name: 'Enabled iPad', isPrimary: true }), createDevice('disabled-device', { enabled: false }), createDevice('draining-device', { draining: true })];
   const checkedDevices: string[] = [];
   const server = build({
-    getProject: () => createProject({ id: 'workspace' }),
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'workspace',
     getEffectiveDevices: () => devices,
     getAverageJobDurationMs: () => 4_200,
-    getActiveJobs: () => [createJob('same-project-job', 'workspace'), createJob('other-project-job', 'other')],
+    getActiveJobs: () => [createJob('shared-job', 'default'), createJob('legacy-job', 'legacy-project')],
     getDeviceHealth: async (deviceId) => {
       checkedDevices.push(deviceId);
       return createHealth({
@@ -119,7 +102,7 @@ test('decrypt preflight limits checks to enabled devices and returns project que
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
-      payload: { bundleId: 'com.example.app', projectId: 'workspace', versionLabel: ' v2 ', installSizeBytes: 64 },
+      payload: { bundleId: 'com.example.app', versionLabel: ' v2 ', installSizeBytes: 64 },
     });
 
     expect(response.statusCode).toBe(200);
@@ -314,9 +297,8 @@ test('a failed device health lookup does not hide other ready devices', async ()
   }
 });
 
-test('decrypt preflight fails closed for archived projects and unavailable TestFlight verification', async () => {
+test('decrypt preflight reports unavailable TestFlight verification', async () => {
   const device = createDevice('enabled-device');
-  const archivedServer = build({ getProject: () => createProject({ archivedAt: 10 }) });
   const unavailableServer = build({
     getEffectiveDevices: () => [device],
     getVerifiedTestFlightCatalog: async () => { throw new TestFlightCatalogUnavailableError(); },
@@ -324,12 +306,6 @@ test('decrypt preflight fails closed for archived projects and unavailable TestF
 
   try {
     const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
-    const archived = await archivedServer.inject({
-      method: 'POST',
-      url: '/v1/dashboard/decrypt/preflight',
-      headers,
-      payload: { bundleId: 'com.example.app' },
-    });
     const unavailable = await unavailableServer.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
@@ -337,19 +313,15 @@ test('decrypt preflight fails closed for archived projects and unavailable TestF
       payload: { bundleId: 'com.example.app', testflight: true },
     });
 
-    expect(archived.statusCode).toBe(409);
-    expect(archived.json()).toMatchObject({ error: 'project is archived', retryable: false });
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.json()).toMatchObject({ code: 'testflight_catalog_unavailable', retryable: true });
   } finally {
-    await archivedServer.close();
     await unavailableServer.close();
   }
 });
 
-test('decrypt preflight enforces permission, project visibility, and enabled-device selection', async () => {
+test('decrypt preflight enforces permission and enabled-device selection without project scopes', async () => {
   const permissionServer = build();
-  const hiddenProjectServer = build({ getProject: () => undefined });
   const disabledDeviceServer = build({
     getDevice: (id) => id === 'disabled-device' ? createDevice(id, { enabled: false }) : undefined,
   });
@@ -364,7 +336,7 @@ test('decrypt preflight enforces permission, project visibility, and enabled-dev
       headers: { cookie: sessionCookie(0n) },
       payload: { bundleId: 'com.example.app' },
     });
-    const hiddenProject = await hiddenProjectServer.inject({
+    const unscoped = await permissionServer.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
@@ -385,15 +357,14 @@ test('decrypt preflight enforces permission, project visibility, and enabled-dev
 
     expect(denied.statusCode).toBe(403);
     expect(denied.json()).toMatchObject({ code: 'forbidden', requestId: expect.any(String), retryable: false });
-    expect(hiddenProject.statusCode).toBe(404);
-    expect(hiddenProject.json()).toMatchObject({ error: 'project not found', retryable: false });
+    expect(unscoped.statusCode).toBe(200);
+    expect(unscoped.json()).not.toHaveProperty('projectId');
     expect(disabledDevice.statusCode).toBe(400);
     expect(disabledDevice.json()).toMatchObject({ error: 'deviceId must refer to an enabled device accepting jobs', retryable: false });
     expect(drainingDevice.statusCode).toBe(400);
     expect(drainingDevice.json()).toMatchObject({ error: 'deviceId must refer to an enabled device accepting jobs', retryable: false });
   } finally {
     await permissionServer.close();
-    await hiddenProjectServer.close();
     await disabledDeviceServer.close();
     await drainingDeviceServer.close();
   }

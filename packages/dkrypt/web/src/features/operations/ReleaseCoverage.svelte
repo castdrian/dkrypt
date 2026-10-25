@@ -3,7 +3,6 @@
   import Card from '#lib/components/ui/Card.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import { fetchReleaseCoverage, refreshReleaseCoverage, type ReleaseCoverageItem } from '#lib/api';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
 
   let items = $state<ReleaseCoverageItem[]>([]);
   let loading = $state(false);
@@ -12,12 +11,12 @@
   let refreshMessage = $state('');
   let requestNumber = 0;
 
-  async function load(projectId: string): Promise<void> {
+  async function load(): Promise<void> {
     const current = ++requestNumber;
     loading = true;
     error = '';
     try {
-      const response = await fetchReleaseCoverage(projectId);
+      const response = await fetchReleaseCoverage();
       if (current === requestNumber) items = response.items;
     } catch {
       if (current === requestNumber) error = 'Release coverage is unavailable.';
@@ -27,12 +26,11 @@
   }
 
   async function refresh(bundleId: string): Promise<void> {
-    const projectId = projectSelectionState.id;
     const current = requestNumber;
     refreshing = bundleId;
     refreshMessage = '';
     try {
-      const response = await refreshReleaseCoverage(projectId, bundleId);
+      const response = await refreshReleaseCoverage(bundleId);
       if (current !== requestNumber) return;
       items = items.map((item) => item.bundleId === bundleId ? response.item : item);
       refreshMessage = response.failures.length ? response.failures.join(' · ') : `${response.item.name} updated`;
@@ -44,10 +42,7 @@
     }
   }
 
-  $effect(() => {
-    const projectId = projectSelectionState.id;
-    void load(projectId);
-  });
+  $effect(() => { void load(); });
 </script>
 
 <Card title="Release coverage" class="mt-4">
@@ -56,9 +51,9 @@
     <p class="text-sm text-muted">Loading coverage…</p>
   {:else if error}
     <p class="text-sm text-destructive">{error}</p>
-    <Button size="sm" variant="secondary" onclick={() => void load(projectSelectionState.id)}>Retry</Button>
+    <Button size="sm" variant="secondary" onclick={() => void load()}>Retry</Button>
   {:else if items.length === 0}
-    <p class="text-sm text-muted">No apps have jobs or artifacts in this project yet.</p>
+    <p class="text-sm text-muted">No apps have jobs or artifacts yet.</p>
   {:else}
     <div class="space-y-2">
       {#each items as item (item.bundleId)}

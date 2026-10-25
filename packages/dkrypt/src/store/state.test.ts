@@ -27,11 +27,9 @@ import {
   createBackupSnapshot,
   createDevice,
   createDiscordRolePerk,
-  createProject,
   createRole,
   createSessionRecord,
   createTestFlightSubscription,
-  deleteUserPersonalData,
   deleteDevice,
   deletePasskey,
   deleteBackupSnapshot,
@@ -56,7 +54,6 @@ import {
   getTestFlightSubscription,
   isSessionRecordActive,
   listSessionsForUser,
-  mergeUserAccounts,
   getWebhookDeliveryLog,
   importBackup,
   listAllowedUsers,
@@ -85,7 +82,6 @@ import {
   setNewBillingCheckoutsPaused,
   syncDiscordPerkRoles,
   updateAllowedUserRoles,
-  updateProject,
   userCanAccessProject,
   updateDevice,
   updateSettings,
@@ -422,88 +418,26 @@ test('session inventory reflects a recent session touch immediately', () => {
   }
 });
 
-describe('projects', () => {
-  test('limits project visibility to assigned members while keeping the default workspace shared', () => {
+describe('shared account scope', () => {
+  test('every authorized user uses the same account workspace', () => {
     const firstUser = `github:project-first-${randomUUID()}`;
     const secondUser = `github:project-second-${randomUUID()}`;
     addAllowedUser(firstUser, [], 'tester');
     addAllowedUser(secondUser, [], 'tester');
-    const created = createProject({ name: `Private ${randomUUID()}`, memberIds: [firstUser], dailyJobQuota: 25 }, 'root');
-    const project = created.project!;
-
-    expect(created.ok).toBe(true);
-    expect(project.memberIds).toContain(firstUser);
-    expect(listProjectsForUser(firstUser).map((entry) => entry.id)).toContain(project.id);
-    expect(listProjectsForUser(secondUser).map((entry) => entry.id)).not.toContain(project.id);
-    expect(listProjectsForUser(secondUser).some((project) => project.id === 'default')).toBe(true);
-    expect(userCanAccessProject(firstUser, project.id)).toBe(true);
-    expect(userCanAccessProject(secondUser, project.id)).toBe(false);
+    expect(listProjectsForUser(firstUser).map((entry) => entry.id)).toEqual(['default']);
+    expect(listProjectsForUser(secondUser).map((entry) => entry.id)).toEqual(['default']);
+    expect(userCanAccessProject(firstUser, 'legacy-workspace')).toBe(true);
+    expect(userCanAccessProject(secondUser, 'legacy-workspace')).toBe(true);
+    expect(getProject('legacy-workspace')?.id).toBe('default');
   });
 
-  test('validates project updates before mutating and prevents archiving the default workspace', () => {
-    const firstUser = `github:project-member-${randomUUID()}`;
-    addAllowedUser(firstUser, [], 'tester');
-    const created = createProject({ name: `Project ${randomUUID()}`, memberIds: [firstUser] }, 'root');
-    const project = created.project!;
-    const invalid = updateProject(project.id, { name: 'Should not persist', maxConcurrentJobs: 0 }, 'root');
-
-    expect(invalid.ok).toBe(false);
-    expect(getProject(project.id)?.name).toBe(project.name);
-    expect(updateProject('default', { archived: true }, 'root')).toMatchObject({ ok: false });
-    expect(updateProject(project.id, { archived: true }, 'root').ok).toBe(true);
-    expect(userCanAccessProject(firstUser, project.id)).toBe(false);
-  });
-
-  test('records project restoration as a distinct audit action', () => {
-    const project = createProject({ name: `Audited ${randomUUID()}` }, 'root').project!;
-    updateProject(project.id, { archived: true }, 'root');
-    updateProject(project.id, { archived: false }, 'root');
-
-    const actions = getAuditLog(10).filter((entry) => entry.target === project.id).map((entry) => entry.action);
-    expect(actions).toEqual(['project.restore', 'project.archive', 'project.add']);
-  });
-
-  test('project memberships and API key ownership follow account merge in SQLite', () => {
-    const sourceId = `project-source-${randomUUID()}`;
-    const targetId = `project-target-${randomUUID()}`;
-    addAllowedUser(sourceId, [], 'tester');
-    const project = createProject({ name: `Membership ${randomUUID()}`, memberIds: [sourceId] }, 'root').project!;
-    const apiKey = createApiKey(`Merged API key ${randomUUID()}`, sourceId);
-
-    try {
-      expect(mergeUserAccounts(targetId, sourceId, 'root')).toBe(true);
-      expect(getProject(project.id)?.memberIds).toContain(targetId);
-      expect(getProject(project.id)?.memberIds).not.toContain(sourceId);
-
-      const database = openStateDatabase({ stateDir: config.stateDir, filename: config.stateDatabaseFile });
-      try {
-        expect(readStateCollection(database.db, 'projects')).toContainEqual(expect.objectContaining({ id: project.id, memberIds: [targetId] }));
-        const apiKeyRepository = createApiKeyRepository(database.db);
-        expect(apiKeyRepository.listByOwner(targetId)).toContainEqual(expect.objectContaining({ id: apiKey.id, ownerId: targetId }));
-        expect(apiKeyRepository.listByOwner(sourceId)).toEqual([]);
-      } finally {
-        database.close();
-      }
-
-      expect(deleteUserPersonalData(targetId)).toBe(true);
-      expect(getProject(project.id)?.memberIds).not.toContain(targetId);
-    } finally {
-      revokeApiKey(apiKey.id, targetId, true);
-      deleteUserPersonalData(targetId);
-      deleteUserPersonalData(sourceId);
-    }
-  });
-
-  test('filters history to one project without leaking records from another', () => {
+  test('merges historical records from legacy workspace partitions', () => {
     const sharedBundleId = `com.example.workspace-history.${randomUUID()}`;
     const finishedAt = Date.now();
-    const projectA = createProject({ name: `History project A ${randomUUID()}` }, 'root').project!.id;
-    const projectB = createProject({ name: `History project B ${randomUUID()}` }, 'root').project!.id;
-    recordJobHistory({ id: `workspace-a-${randomUUID()}`, projectId: projectA, bundleId: sharedBundleId, status: 'done', source: 'manual', createdAt: finishedAt, finishedAt });
-    recordJobHistory({ id: `workspace-b-${randomUUID()}`, projectId: projectB, bundleId: sharedBundleId, status: 'done', source: 'manual', createdAt: finishedAt, finishedAt });
+    recordJobHistory({ id: `workspace-a-${randomUUID()}`, projectId: 'legacy-a', bundleId: sharedBundleId, status: 'done', source: 'manual', createdAt: finishedAt, finishedAt });
+    recordJobHistory({ id: `workspace-b-${randomUUID()}`, projectId: 'legacy-b', bundleId: sharedBundleId, status: 'done', source: 'manual', createdAt: finishedAt, finishedAt });
 
-    expect(getJobHistoryPage(0, 20, { projectId: projectA, bundleIdSearch: sharedBundleId }).entries).toHaveLength(1);
-    expect(getJobHistoryPage(0, 20, { projectId: projectA, bundleIdSearch: sharedBundleId }).entries[0]?.projectId).toBe(projectA);
+    expect(getJobHistoryPage(0, 20, { projectId: 'legacy-a', bundleIdSearch: sharedBundleId }).entries).toHaveLength(2);
   });
 });
 
@@ -659,18 +593,17 @@ describe('exportBackup / importBackup', () => {
   test('round-trips the allowlist through export and import', () => {
     const role = createRole({ name: 'Roundtrip Role', color: '#5865f2', permissions: serializeBits(PermissionFlag.requestDecrypt) }, 'tester');
     addAllowedUser('roundtrip-user', [role.id], 'tester');
-    const project = createProject({ name: `Roundtrip project ${randomUUID()}`, memberIds: ['roundtrip-user'] }, 'tester').project!;
     const backup = exportBackup();
 
-    expect(backup.backupVersion).toBe(10);
+    expect(backup.backupVersion).toBe(11);
     expect(backup.allowedUsers.some((u) => u.username === 'roundtrip-user')).toBe(true);
-    expect(backup.projects).toContainEqual(expect.objectContaining({ id: project.id, memberIds: expect.arrayContaining(['roundtrip-user']) }));
+    expect(backup).not.toHaveProperty('projects');
 
     const result = importBackup(backup, 'tester');
     expect(result.ok).toBe(true);
     expect(listAllowedUsers().some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(getRole(role.id)).toMatchObject({ id: role.id, name: 'Roundtrip Role' });
-    expect(getProject(project.id)?.memberIds).toContain('roundtrip-user');
+    expect(listProjectsForUser('roundtrip-user')).toEqual([expect.objectContaining({ id: 'default', name: 'dkrypt', memberIds: [] })]);
   });
 
   test('restoring an older backup does not carry quota usage from the current installation', () => {
@@ -685,7 +618,14 @@ describe('exportBackup / importBackup', () => {
     try {
       database.exec('DELETE FROM decrypt_quota_ledger');
       insert.run('quota-from-current-installation', 'quota-owner', Date.now(), 'consumed');
-      const olderBackup = { ...exportBackup(), backupVersion: 9 } as Record<string, unknown>;
+      const currentBackup = exportBackup();
+      const olderBackup = {
+        ...currentBackup,
+        backupVersion: 9,
+        projects: [{ id: 'default', name: 'Workspace', memberIds: [], isDefault: true, createdBy: 'system', createdAt: 1, updatedAt: 1 }],
+        artifactProjectLinks: [],
+        jobHistory: currentBackup.jobHistory.map((entry) => ({ ...entry, projectId: 'default' })),
+      } as Record<string, unknown>;
       delete olderBackup.decryptQuotaLedger;
 
       expect(importBackup(olderBackup, 'tester').ok).toBe(true);
@@ -717,8 +657,8 @@ describe('exportBackup / importBackup', () => {
     expect(result.error).toMatch(/watches/);
   });
 
-  test('preserves project records referenced by persisted jobs during backup import', () => {
-    const project = createProject({ name: `Persisted job project ${randomUUID()}` }, 'root').project!;
+  test('restores legacy project data into the shared account scope', () => {
+    const legacyProjectId = `legacy-${randomUUID()}`;
     const database = openStateCollectionDatabase({
       stateDir: config.stateDir,
       filename: config.stateDatabaseFile,
@@ -735,13 +675,22 @@ describe('exportBackup / importBackup', () => {
     try {
       replaceStateCollection(database, 'jobs', [
         ...previousRows,
-        { id: jobId, payload: { id: jobId, projectId: project.id, status: 'queued' }, updatedAt: Date.now() },
+        { id: jobId, payload: { id: jobId, projectId: legacyProjectId, status: 'queued' }, updatedAt: Date.now() },
       ]);
-      const backup = exportBackup();
-      backup.projects = backup.projects.filter((entry) => entry.id !== project.id);
+      const backup = {
+        ...exportBackup(),
+        backupVersion: 10,
+        projects: [
+          { id: 'default', name: 'dkrypt', memberIds: [], isDefault: true, createdBy: 'root', createdAt: Date.now(), updatedAt: Date.now() },
+          { id: legacyProjectId, name: 'Legacy', memberIds: [], isDefault: false, createdBy: 'root', createdAt: Date.now(), updatedAt: Date.now() },
+        ],
+        jobHistory: [{ id: jobId, projectId: legacyProjectId, bundleId: 'com.example.legacy', status: 'done', finishedAt: Date.now() }],
+        artifactProjectLinks: [],
+      } as unknown as ReturnType<typeof exportBackup>;
 
       expect(importBackup(backup, 'tester').ok).toBe(true);
-      expect(getProject(project.id)).toMatchObject({ id: project.id, name: project.name });
+      expect(listProjectsForUser('tester')).toEqual([expect.objectContaining({ id: 'default', name: 'dkrypt' })]);
+      expect(getJobHistoryEntryById(jobId)).toMatchObject({ id: jobId, projectId: 'default' });
     } finally {
       replaceStateCollection(database, 'jobs', previousRows);
       database.close();

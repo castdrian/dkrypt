@@ -53,7 +53,6 @@
 	import { cn } from "#lib/utils";
 	import { DISCORD_INVITE_URL, KOFI_URL } from "#lib/constants";
 	import { myDecryptsState } from "#lib/decrypts.svelte";
-	import { projectSelectionState, setProjectSelection } from "#lib/projectSelection.svelte";
 	import { connectLive, disconnectLive, liveState } from "#lib/live.svelte";
 	import {
 		registerServiceWorker,
@@ -96,6 +95,7 @@
 		initAccent,
 		initDensity,
 		initLargeTargets,
+		initOneThumbMode,
 		initScreenSharePrivacy,
 		initHighContrast,
 		initFormattingLocale,
@@ -147,6 +147,7 @@
 initTheme();
 initDensity();
 	initLargeTargets();
+	initOneThumbMode();
 	initScreenSharePrivacy();
 	initHighContrast();
 	initFormattingLocale();
@@ -508,8 +509,6 @@ initDensity();
 		const deepLinkKey = `${sessionState.sub}:${location.search}`;
 		if (deepLinkKey === appliedDeepLink) return;
 		appliedDeepLink = deepLinkKey;
-		const projectId = getQueryParam('projectId');
-		if (projectId && projectId !== projectSelectionState.id) setProjectSelection(projectId);
 		const jobId = getQueryParam('job');
 		const artifactId = getQueryParam('artifact');
 		if (jobId) {
@@ -733,7 +732,7 @@ initDensity();
 						</Button>
 					{/each}
 					{#if unpinnedTabs.length > 0 && pinnedTabs.length > 0}
-						{#if sidebarState.collapsed}<div class="my-2 border-t border-sidebar-border" role="separator" aria-label="Workspace"></div>{:else}<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">Workspace</div>{/if}
+						{#if sidebarState.collapsed}<div class="my-2 border-t border-sidebar-border" role="separator" aria-label="More navigation items"></div>{:else}<div class="mb-2 mt-3 px-3 text-[10px] font-semibold tracking-[0.14em] text-sidebar-foreground/65 uppercase">More</div>{/if}
 					{/if}
 					{#each unpinnedTabs as t (t.id)}
 						<Button
@@ -1314,9 +1313,10 @@ initDensity();
 					)}
 					onclick={() => setActiveTab(t.id)}
 					aria-current={tabState.active === t.id ? "page" : undefined}
+					aria-label={msg(t.label)}
 				>
 						<TabIcon id={t.id} class="size-5" />
-					{msg(t.label)}
+					<span class="mobile-tab-label">{msg(t.label)}</span>
 				</Button>
 			{/each}
 		</nav>

@@ -109,9 +109,9 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.get<DashboardJobListRoute>('/v1/dashboard/jobs', { schema: getRouteContract('GET', '/v1/dashboard/jobs') }, async (request, reply) => {
     const session = getFastifySession(request)!;
     const query = request.query;
-    const projectId = query.projectId ?? DEFAULT_PROJECT_ID;
+    const projectId = DEFAULT_PROJECT_ID;
     if (!canAccessProject(session.sub, session.permissions, projectId)) {
-      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
+      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'account data is unavailable'));
     }
     const limit = Math.min(query.limit ?? 15, 100);
     const cursor = query.cursor;

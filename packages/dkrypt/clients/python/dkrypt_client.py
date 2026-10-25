@@ -31,8 +31,48 @@ class DkryptClient:
     def download(self, path: str) -> bytes:
         return self._send("GET", path, None, "application/octet-stream")
 
-    def _send(self, method: str, path: str, payload: bytes | None, accept: str) -> bytes:
+    def decrypt(self, bundle_id: str, version: str | None = None, idempotency_key: str | None = None) -> object:
+        from uuid import uuid4
+        headers = {"Idempotency-Key": idempotency_key or str(uuid4())}
+        body = {"bundleId": bundle_id}
+        if version:
+            body["version"] = version
+        payload = json.dumps(body).encode("utf-8")
+        return json.loads(self._send("POST", "/v1/decrypts", payload, "application/json", headers).decode("utf-8"))
+
+    def get_job(self, job_id: str) -> object:
+        from urllib.parse import quote
+        return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}")
+
+    def wait_for_job(self, job_id: str, timeout_seconds: int = 25) -> object:
+        from urllib.parse import quote
+        from urllib.parse import urlencode
+        timeout = max(1, min(25, int(timeout_seconds)))
+        return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}/wait?{urlencode({'timeoutSeconds': timeout})}")
+
+    def follow_job(self, job_id: str):
+        while True:
+            job = self.wait_for_job(job_id)
+            yield job
+            if isinstance(job, dict) and job.get("status") in ("done", "failed"):
+                return
+
+    def list_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> object:
+        from urllib.parse import urlencode
+        params = {"limit": max(1, min(100, int(limit)))}
+        if query:
+            params["q"] = query
+        if cursor:
+            params["cursor"] = cursor
+        return self.request("GET", f"/v1/artifacts?{urlencode(params)}")
+
+    def download_artifact(self, artifact_id: str) -> bytes:
+        from urllib.parse import quote
+        return self.download(f"/v1/artifacts/{quote(artifact_id, safe='')}/file")
+
+    def _send(self, method: str, path: str, payload: bytes | None, accept: str, extra_headers: dict[str, str] | None = None) -> bytes:
         headers = {"Accept": accept}
+        headers.update(extra_headers or {})
         if payload is not None:
             headers["Content-Type"] = "application/json"
         request = Request(self._build_url(path), data=payload, headers=headers, method=method.upper())

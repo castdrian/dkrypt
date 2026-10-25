@@ -15,7 +15,6 @@
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasPermission } from '#lib/session.svelte';
   import { isServerQueryCancelled, mergeServerPage, serverQueryStatus } from '#lib/serverStateCache.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import VirtualizedList from '#components/VirtualizedList.svelte';
   import { artifactDetailJumpState, artifactLibraryPreferencesState, homeViewModesState } from '#lib/ui.svelte';
   import { pushHomeViewMode } from '#lib/session.svelte';
@@ -99,7 +98,7 @@
   }
 
   function currentArtifactQueryKey(): string {
-    return JSON.stringify([projectSelectionState.id, createArtifactQuery()]);
+    return JSON.stringify(createArtifactQuery());
   }
 
   async function load(force = false): Promise<void> {
@@ -191,7 +190,6 @@
   }
 
   $effect(() => {
-    projectSelectionState.id;
     if (canDecrypt) untrack(() => void load());
   });
 
@@ -369,7 +367,6 @@
 
   function currentSelectionFilter() {
     return {
-      projectId: projectSelectionState.id,
       q: query.trim() || undefined,
       channel: channelFilter === 'all' ? undefined : channelFilter,
       archived: archiveFilter === 'archived',
@@ -600,7 +597,7 @@
               {/each}
             </div>
           {:else}
-            <EmptyState message={query.trim() || channelFilter !== 'all' || archiveFilter === 'archived' ? 'No artifacts match these filters.' : 'No IPA artifacts have been saved in this project yet.'} />
+            <EmptyState message={query.trim() || channelFilter !== 'all' || archiveFilter === 'archived' ? 'No artifacts match these filters.' : 'No IPA artifacts have been saved yet.'} />
           {/if}
         {:else}
           {#if artifactLibraryPreferencesState.groupByApp}

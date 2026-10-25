@@ -65,7 +65,6 @@ export const dashboardTestFlightDecryptBodySchema = Type.Object({
   build: testFlightBuildInputSchema,
   deviceId: Type.Optional(identifierSchema),
   preferPrimary: Type.Optional(Type.Boolean()),
-  projectId: Type.Optional(identifierSchema),
 }, additionalProperties);
 
 export type DashboardTestFlightTrain = Static<typeof dashboardTestFlightTrainResponseSchema>;

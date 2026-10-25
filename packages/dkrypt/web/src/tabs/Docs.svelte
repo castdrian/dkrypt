@@ -7,7 +7,7 @@
   <div class="flex min-w-0 items-center justify-between gap-3">
     <div class="min-w-0">
       <h1 class="text-base font-semibold">API documentation</h1>
-      <p class="mt-1 text-muted text-sm">Browse dkrypt’s API reference without leaving the dashboard.</p>
+      <p class="mt-1 text-muted text-sm">Browse and try the public API on this dkrypt instance. Add an API key in Scalar’s authorization panel. Decrypt requests create real jobs and use your account’s allowance.</p>
     </div>
     <a href="/reference/" target="_blank" rel="noopener noreferrer" class={buttonVariants('secondary', 'sm')}>
       <ExternalLink class="h-4 w-4" />Open API reference in new tab

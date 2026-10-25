@@ -1,9 +1,7 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { ApiErrorEnvelope } from '#contracts.js';
-import { projectIdentifierSchema } from '#apiCommonContracts.js';
 
 export const dashboardIncidentQuerySchema = Type.Object({
-  projectId: Type.Optional(projectIdentifierSchema),
   since: Type.Optional(Type.Integer({ minimum: 0 })),
 }, { additionalProperties: false });
 
@@ -21,12 +19,11 @@ export const dashboardIncidentEventSchema = Type.Object({
 }, { additionalProperties: false });
 
 export const dashboardIncidentResponseSchema = Type.Object({
-  projectId: projectIdentifierSchema,
   events: Type.Array(dashboardIncidentEventSchema, { maxItems: 200 }),
   truncated: Type.Boolean(),
 }, { additionalProperties: false });
 
 export type DashboardIncidentRoute = {
   Querystring: Static<typeof dashboardIncidentQuerySchema>;
-  Reply: { 200: Static<typeof dashboardIncidentResponseSchema>; 404: ApiErrorEnvelope };
+  Reply: { 200: Static<typeof dashboardIncidentResponseSchema>; 403: ApiErrorEnvelope };
 };

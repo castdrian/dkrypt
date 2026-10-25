@@ -781,6 +781,31 @@ const migrations = [
       CREATE TABLE IF NOT EXISTS appstore_offline_authentication_operations (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
     `,
   },
+  {
+    version: 30,
+    sql: `
+      UPDATE jobs SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE job_history SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE artifacts SET payload = json_set(payload, '$.projectIds', json_array('default')) WHERE json_valid(payload) = 1;
+      DELETE FROM artifact_projects;
+      INSERT INTO artifact_projects (artifact_id, project_id) SELECT id, 'default' FROM artifacts;
+      UPDATE watches SET payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE watch_drafts SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE watch_revisions SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE operational_incidents SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE integration_policies SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      UPDATE diagnostic_reports SET project_id = 'default', payload = json_set(payload, '$.projectId', 'default') WHERE json_valid(payload) = 1;
+      DELETE FROM projects;
+      INSERT INTO projects (id, payload, updated_at)
+      SELECT 'default', json_object('id', 'default', 'name', 'dkrypt', 'memberIds', json('[]'), 'isDefault', 1, 'createdBy', 'system', 'createdAt', updated_at, 'updatedAt', updated_at), updated_at
+      FROM state_snapshots WHERE id = 1
+      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
+      DROP INDEX IF EXISTS jobs_active_exact_build;
+      DROP INDEX IF EXISTS jobs_completed_exact_build;
+      CREATE INDEX jobs_active_exact_build ON jobs(bundle_id, external_version_id, testflight_build_id, status);
+      CREATE INDEX jobs_completed_exact_build ON jobs(bundle_id, external_version_id, testflight_build_id, status, file_path);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

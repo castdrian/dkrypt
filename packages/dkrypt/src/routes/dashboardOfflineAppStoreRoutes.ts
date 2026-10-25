@@ -1,6 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type } from '@sinclair/typebox';
-import { getAppleAccountAuthenticationStatus, getOfflineAppStoreReadiness, refreshAppleAccountStorefrontCountry, resetAppleAccountAuthentication, startAppleAccountAuthentication } from '#offlineAppStore.js';
+import { checkAppleDownloaderNetwork, getAppleAccountAuthenticationStatus, getOfflineAppStoreReadiness, refreshAppleAccountStorefrontCountry, resetAppleAccountAuthentication, startAppleAccountAuthentication } from '#offlineAppStore.js';
 import { clearAppleAccountCredentials, saveAppleAccountCredentials, saveAppleAccountFairPlayCredential } from '#appleAccountVault.js';
 import type { AppleAccountAuthenticationStatus } from '#offlineAppStoreAuthOperation.js';
 import { PermissionFlag } from '#permissions.js';
@@ -21,6 +21,7 @@ interface DashboardOfflineAppStoreServices {
   getCredentialRetrievalStatus: typeof getFairPlayCredentialRetrievalStatus;
   retrieveCredential: typeof startFairPlayCredentialRetrieval;
   clear: typeof clearAppleAccountCredentials;
+  checkDownloaderNetwork: typeof checkAppleDownloaderNetwork;
 }
 
 const defaultServices: DashboardOfflineAppStoreServices = {
@@ -34,6 +35,7 @@ const defaultServices: DashboardOfflineAppStoreServices = {
   getCredentialRetrievalStatus: getFairPlayCredentialRetrievalStatus,
   retrieveCredential: startFairPlayCredentialRetrieval,
   clear: clearAppleAccountCredentials,
+  checkDownloaderNetwork: checkAppleDownloaderNetwork,
 };
 
 export function createDashboardOfflineAppStoreRoutes(
@@ -68,6 +70,18 @@ export function createDashboardOfflineAppStoreRoutes(
         { id: 'fairplay-key', ready: readiness.vault.credentialConfigured, detail: readiness.vault.credentialConfigured ? 'At least one device-derived FairPlay key is available' : 'No device-derived FairPlay key is configured' },
       ];
       return { ok: checks.every((check) => check.ready), checkedAt: new Date().toISOString(), purchaseMade: false, downloadStarted: false, checks };
+    });
+
+    server.post('/v1/dashboard/appstore-offline/network-check', {
+      schema: { hide: true },
+      preHandler: administrator,
+    }, async (request, reply) => {
+      try {
+        const result = await services.checkDownloaderNetwork();
+        return { ...result, checkedAt: new Date().toISOString() };
+      } catch {
+        return reply.code(502).send(createHttpErrorEnvelope(request.id, 502, 'The App Store downloader network check could not run'));
+      }
     });
 
     server.post('/v1/dashboard/appstore-offline/credential/retrieve', {

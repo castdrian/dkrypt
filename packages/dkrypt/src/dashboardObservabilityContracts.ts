@@ -71,7 +71,6 @@ const auditActionSchema = Type.Union([
 
 export const dashboardLogsQuerySchema = Type.Object({
   ...paginationQueryProperties,
-  projectId: Type.Optional(Type.String({ minLength: 1, maxLength: 80, pattern: '^[A-Za-z0-9_-]{1,80}$' })),
   scope: Type.Optional(Type.String({ maxLength: 100 })),
   level: Type.Optional(Type.Union([Type.Literal('info'), Type.Literal('warn'), Type.Literal('error')])),
   q: Type.Optional(Type.String({ maxLength: 100 })),

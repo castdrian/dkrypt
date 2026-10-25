@@ -129,6 +129,29 @@ test('no-purchase readiness check reports setup without starting account or pack
   }
 });
 
+test('App Store downloader network check is manager-only and reports only safe connectivity data', async () => {
+  let checks = 0;
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardOfflineAppStoreRoutes({
+    checkDownloaderNetwork: async () => {
+      checks += 1;
+      return { reachable: true, latencyMs: 42, endpoint: 'https://itunes.apple.com/lookup' };
+    },
+  }));
+
+  try {
+    const member = await server.inject({ method: 'POST', url: '/v1/dashboard/appstore-offline/network-check', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) } });
+    const result = await server.inject({ method: 'POST', url: '/v1/dashboard/appstore-offline/network-check', headers: { cookie: sessionCookie(PermissionFlag.administrator) } });
+    expect(member.statusCode).toBe(403);
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ reachable: true, latencyMs: 42, endpoint: 'https://itunes.apple.com/lookup', checkedAt: expect.any(String) });
+    expect(checks).toBe(1);
+    expect(result.body).not.toMatch(/password|credential|token|secret/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test('Apple Account verification returns its durable background status without awaiting Apple', async () => {
   const authentication = { state: 'running' as const, operationId: 'operation-1', startedAt: 123 };
   const overrides = {
@@ -203,6 +226,40 @@ test('FairPlay credential retrieval requires recent manager authentication and t
     expect(targets).toEqual(['ipad-exact-id']);
     expect(status.json().credentialRetrieval).toEqual({ state: 'running', deviceId: 'ipad-exact-id' });
     expect(status.body).not.toMatch(/credentialValue|ciphertext|password|fairPlayCredential/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('App Store downloader network check is manager-only and reports safe connectivity details', async () => {
+  let calls = 0;
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardOfflineAppStoreRoutes({
+    readiness,
+    checkDownloaderNetwork: async () => {
+      calls += 1;
+      return { reachable: true, latencyMs: 42, endpoint: 'itunes.apple.com' };
+    },
+  }));
+
+  try {
+    const member = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/appstore-offline/network-check',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+    });
+    const administrator = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/appstore-offline/network-check',
+      headers: { cookie: sessionCookie(PermissionFlag.administrator) },
+    });
+
+    expect(member.statusCode).toBe(403);
+    expect(administrator.statusCode).toBe(200);
+    expect(administrator.json()).toMatchObject({ reachable: true, latencyMs: 42, endpoint: 'itunes.apple.com' });
+    expect(administrator.json()).toHaveProperty('checkedAt');
+    expect(administrator.body).not.toMatch(/password|credential|token|account/i);
+    expect(calls).toBe(1);
   } finally {
     await server.close();
   }

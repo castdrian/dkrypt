@@ -33,7 +33,7 @@ export const signedTriggerRoutes: FastifyPluginAsyncTypebox = async (server) => 
     if (!Value.Check(triggerBody, input) || (input.version !== undefined && !VERSION_SELECTOR_RE.test(input.version))) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'invalid decrypt request'));
     if (!policy.bundleIds.includes(input.bundleId) || !policy.sources.includes(input.source)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'request is outside integration scope'));
     const project = getProject(policy.projectId);
-    if (!project || project.archivedAt) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'integration project is unavailable'));
+    if (!project || project.archivedAt) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'integration is unavailable'));
     if (policy.billingOwnerId && policy.billingOwnerId !== 'root' && !hasPermission(getUserEffectivePermissions(policy.billingOwnerId), PermissionFlag.requestDecrypt)) return reply.code(403).send({ ...createHttpErrorEnvelope(request.id, 403, 'automation owner no longer has decrypt access'), code: 'automation_owner_unavailable', remediation: { action: 'Restore the owner’s decrypt access or transfer automation ownership.' } });
     if (input.source === 'testflight' && !/^v?\d+(?:\.\d+)*_\d+$/i.test(input.version ?? '')) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'TestFlight requires an exact version and build number'));
     if (input.source === 'appstore' && input.version?.includes('_')) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'App Store versions cannot include a TestFlight build number'));

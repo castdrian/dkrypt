@@ -38,18 +38,6 @@ function findArtifact(database: Database, field: 'id' | 'artifact_key' | 'source
 function listArtifacts(database: Database, filter: ArtifactRepositoryFilter = {}): ArtifactRecord[] {
   const conditions = ['1 = 1'];
   const parameters: string[] = [];
-  if (filter.projectIds) {
-    if (filter.projectIds.length === 0) conditions.push('0 = 1');
-    else {
-      conditions.push(`EXISTS (
-        SELECT 1
-        FROM artifact_projects
-        WHERE artifact_id = artifacts.id
-          AND project_id IN (${filter.projectIds.map(() => '?').join(', ')})
-      )`);
-      parameters.push(...filter.projectIds);
-    }
-  }
   if (filter.bundleIds) {
     if (filter.bundleIds.length === 0) conditions.push('0 = 1');
     else {

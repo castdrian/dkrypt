@@ -8,18 +8,19 @@ import type {
   DashboardJobRetryRoute,
   DashboardManualDecryptRoute,
 } from '#dashboardJobContracts.js';
-import { projectIdentifierPattern } from '#apiCommonContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
-import { fastifyBlockDuringMaintenance } from '#maintenance.js';
+import { fastifyBlockDuringMaintenance, fastifyBlockManualMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
 import {
   cancelJob,
   enqueueDecryptJob,
   getJob,
+  pauseQueuedJob,
   prioritizeQueuedJob,
   reorderQueue,
+  resumePausedJob,
 } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
 import { PermissionFlag } from '#permissions.js';
@@ -127,22 +128,18 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
 
     server.post<DashboardManualDecryptRoute>('/v1/dashboard/decrypt', {
       schema: getRouteContract('POST', '/v1/dashboard/decrypt'),
-      preHandler: [canRequestDecrypt, fastifyBlockDuringMaintenance],
+      preHandler: [canRequestDecrypt, fastifyBlockManualMaintenance],
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
-      const projectId = request.body.projectId ?? DEFAULT_PROJECT_ID;
-      if (!projectIdentifierPattern.test(projectId)) {
-        reply.code(400);
-        return sendJobError(request.id, 400, 'projectId must be a valid project identifier');
-      }
+      const projectId = DEFAULT_PROJECT_ID;
       const project = services.getProject(projectId);
       if (!project || !hasProjectAccess(services, session.sub, session.permissions, projectId)) {
         reply.code(404);
-        return sendJobError(request.id, 404, 'project not found');
+        return sendJobError(request.id, 404, 'account data is unavailable');
       }
       if (project.archivedAt !== undefined) {
         reply.code(409);
-        return sendJobError(request.id, 409, 'project is archived');
+        return sendJobError(request.id, 409, 'decrypt operations are unavailable');
       }
       const bundleId = request.body.bundleId.trim();
       const externalVersionId = request.body.externalVersionId && externalVersionIdPattern.test(request.body.externalVersionId)
@@ -191,6 +188,40 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       return { ok: true };
     });
 
+    server.post<DashboardJobCancelRoute>('/v1/dashboard/jobs/:id/pause', {
+      schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/pause'),
+      preHandler: canRequestDecrypt,
+    }, (request, reply) => {
+      const session = getFastifySession(request)!;
+      const job = services.getJob(request.params.id);
+      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
+      if (!pauseQueuedJob(job.id, session.sub)) {
+        reply.code(409);
+        return sendJobError(request.id, 409, 'only an unpaused queued job can be paused');
+      }
+      return { ok: true };
+    });
+
+    server.post<DashboardJobCancelRoute>('/v1/dashboard/jobs/:id/resume', {
+      schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/resume'),
+      preHandler: canRequestDecrypt,
+    }, (request, reply) => {
+      const session = getFastifySession(request)!;
+      const job = services.getJob(request.params.id);
+      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
+      if (!resumePausedJob(job.id, session.sub)) {
+        reply.code(409);
+        return sendJobError(request.id, 409, 'only a paused queued job can be resumed');
+      }
+      return { ok: true };
+    });
+
     server.post<DashboardJobPrioritizeRoute>('/v1/dashboard/jobs/:id/prioritize', {
       schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/prioritize'),
       preHandler: canRequestDecrypt,
@@ -213,10 +244,10 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
       const session = getFastifySession(request)!;
-      const projectId = request.body.projectId ?? DEFAULT_PROJECT_ID;
+      const projectId = DEFAULT_PROJECT_ID;
       if (!hasProjectAccess(services, session.sub, session.permissions, projectId)) {
         reply.code(404);
-        return sendJobError(request.id, 404, 'project not found');
+        return sendJobError(request.id, 404, 'account data is unavailable');
       }
       const scopedJobs = request.body.ids.every((id) => {
         const job = services.getJob(id);
@@ -242,7 +273,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       }
       if (services.getProject(projectId)?.archivedAt !== undefined) {
         reply.code(409);
-        return sendJobError(request.id, 409, 'project is archived');
+        return sendJobError(request.id, 409, 'decrypt operations are unavailable');
       }
 
       const preferredDeviceId = request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;

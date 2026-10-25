@@ -6,11 +6,9 @@ import { getRecentLogs, type LogEntry } from '#logger.js';
 import { getAuthProfile } from '#identity.js';
 import { getActiveJobs } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
-import { logBelongsToProject } from '#dashboardLogPresentation.js';
 import { PermissionFlag, hasPermission } from '#permissions.js';
 import { fastifyRequireSession, getFastifySession } from '#session.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
-import { DEFAULT_PROJECT_ID, getAllJobHistory, getDeviceActivityPage, getEffectiveDevices, getProject, listAllowedUsers, listNotifications, recordAudit, userCanAccessProject, type DeviceActivityEntry, type DeviceRecord, type JobHistoryEntry, type NotificationRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getAllJobHistory, getDeviceActivityPage, getEffectiveDevices, listAllowedUsers, listNotifications, recordAudit, type DeviceActivityEntry, type DeviceRecord, type JobHistoryEntry, type NotificationRecord } from '#store/state.js';
 import { getOperationalIncidentStateAt, listOperationalIncidents, reconcileOperationalIncidents, updateOperationalIncident } from '#store/incidentRepository.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
@@ -28,8 +26,6 @@ type IncidentEvent = {
 };
 
 interface DashboardIncidentServices {
-  canAccessProject: typeof canAccessProject;
-  getProject: typeof getProject;
   getEffectiveDevices: typeof getEffectiveDevices;
   getDeviceActivityPage: typeof getDeviceActivityPage;
   getAllJobHistory: typeof getAllJobHistory;
@@ -39,8 +35,6 @@ interface DashboardIncidentServices {
 }
 
 const defaultServices: DashboardIncidentServices = {
-  canAccessProject,
-  getProject,
   getEffectiveDevices,
   getDeviceActivityPage,
   getAllJobHistory,
@@ -92,25 +86,22 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
     server.addHook('preHandler', recordFastifyDashboardActivity);
 
     server.get('/v1/dashboard/action-center', {
-      schema: { hide: true, querystring: Type.Object({ projectId: Type.Optional(Type.String()) }) },
+      schema: { hide: true },
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       if (!hasPermission(session.permissions, PermissionFlag.viewIncidents) && !hasPermission(session.permissions, PermissionFlag.manageIncidents)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'incident view permission required'));
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.getProject(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
       reconcileOperationalIncidents();
-      return { projectId, incidents: listOperationalIncidents(projectId).map((incident) => ({ ...incident, assignedToDisplayName: incident.assignedTo ? getAuthProfile(incident.assignedTo)?.displayName : undefined })) };
+      return { incidents: listOperationalIncidents(DEFAULT_PROJECT_ID).map((incident) => ({ ...incident, assignedToDisplayName: incident.assignedTo ? getAuthProfile(incident.assignedTo)?.displayName : undefined })) };
     });
 
     server.patch('/v1/dashboard/action-center/:id', {
-      schema: { hide: true, params: Type.Object({ id: Type.String() }), body: Type.Object({ projectId: Type.String(), status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('in_progress'), Type.Literal('snoozed'), Type.Literal('resolved')])), assignedTo: Type.Optional(Type.Union([Type.String(), Type.Null()])), snoozedUntil: Type.Optional(Type.Number()), resolutionNote: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) },
+      schema: { hide: true, params: Type.Object({ id: Type.String() }), body: Type.Object({ status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('in_progress'), Type.Literal('snoozed'), Type.Literal('resolved')])), assignedTo: Type.Optional(Type.Union([Type.String(), Type.Null()])), snoozedUntil: Type.Optional(Type.Number()), resolutionNote: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) },
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       if (!hasPermission(session.permissions, PermissionFlag.manageIncidents)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'incident management permission required'));
-      if (!services.getProject(request.body.projectId) || !services.canAccessProject(session.sub, session.permissions, request.body.projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
-      if (request.body.assignedTo && (!listAllowedUsers().some((user) => user.username === request.body.assignedTo) || !userCanAccessProject(request.body.assignedTo, request.body.projectId))) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'assignee must belong to this project'));
+      if (request.body.assignedTo && !listAllowedUsers().some((user) => user.username === request.body.assignedTo)) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'assignee must have a dkrypt account'));
       try {
-        const incident = updateOperationalIncident(request.params.id, request.body.projectId, session.sub, request.body);
+        const incident = updateOperationalIncident(request.params.id, DEFAULT_PROJECT_ID, session.sub, request.body);
         if (!incident) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'incident not found'));
         recordAudit(session.sub, 'incident.update', incident.id, `${incident.kind} · ${incident.status}`);
         return { incident: { ...incident, assignedToDisplayName: incident.assignedTo ? getAuthProfile(incident.assignedTo)?.displayName : undefined } };
@@ -120,31 +111,30 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
     });
 
     server.get('/v1/dashboard/incidents/state-at', {
-      schema: { hide: true, querystring: Type.Object({ projectId: Type.Optional(Type.String()), at: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }) },
+      schema: { hide: true, querystring: Type.Object({ at: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }) },
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       if (!hasPermission(session.permissions, PermissionFlag.viewIncidents) && !hasPermission(session.permissions, PermissionFlag.manageIncidents)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'incident view permission required'));
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.getProject(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'project not found'));
       if (request.query.at > Date.now()) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'time must not be in the future'));
       reconcileOperationalIncidents();
-      return { projectId, at: request.query.at, ...getOperationalIncidentStateAt(projectId, request.query.at) };
+      return { at: request.query.at, ...getOperationalIncidentStateAt(DEFAULT_PROJECT_ID, request.query.at) };
     });
 
     server.get<DashboardIncidentRoute>('/v1/dashboard/incidents', {
       schema: { hide: true, querystring: dashboardIncidentQuerySchema, response: { 200: dashboardIncidentResponseSchema } },
     }, (request, reply) => {
       const session = getFastifySession(request)!;
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      const project = services.getProject(projectId);
-      if (!project || !services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
+      const canViewIncidentRecords = hasPermission(session.permissions, PermissionFlag.viewIncidents) || hasPermission(session.permissions, PermissionFlag.manageIncidents);
+      const canViewDevices = hasPermission(session.permissions, PermissionFlag.viewDevices) || hasPermission(session.permissions, PermissionFlag.manageDevices);
+      const canViewJobs = hasPermission(session.permissions, PermissionFlag.requestDecrypt) || hasPermission(session.permissions, PermissionFlag.viewLogs);
+      if (!canViewIncidentRecords && !canViewDevices && !canViewJobs) {
+        reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'incident visibility permission required'));
+        return;
       }
       const since = Math.max(request.query.since ?? Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 90 * 24 * 60 * 60 * 1000);
       if (hasPermission(session.permissions, PermissionFlag.viewIncidents) || hasPermission(session.permissions, PermissionFlag.manageIncidents)) {
         reconcileOperationalIncidents();
-        const events = listOperationalIncidents(projectId).flatMap((incident) => incident.history.filter((change) => change.at >= since).map((change, index) => ({
+        const events = listOperationalIncidents(DEFAULT_PROJECT_ID).flatMap((incident) => incident.history.filter((change) => change.at >= since).map((change, index) => ({
           id: `incident:${incident.id}:${index}:${change.at}`,
           at: change.at,
           kind: incident.kind,
@@ -155,12 +145,10 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
           ...(incident.kind === 'device' ? { deviceId: incident.sourceId } : {}),
           ...(incident.kind === 'deployment' ? { deploymentId: incident.sourceId } : {}),
         }))).sort((left, right) => right.at - left.at);
-        return { projectId, events: events.slice(0, 200), truncated: events.length > 200 };
+        return { events: events.slice(0, 200), truncated: events.length > 200 };
       }
       const events: IncidentEvent[] = [];
-      const canViewDevices = hasPermission(session.permissions, PermissionFlag.viewDevices) || hasPermission(session.permissions, PermissionFlag.manageDevices);
-      const canViewJobs = hasPermission(session.permissions, PermissionFlag.requestDecrypt) || hasPermission(session.permissions, PermissionFlag.viewLogs);
-      if (canViewDevices && projectId === DEFAULT_PROJECT_ID) {
+      if (canViewDevices) {
         for (const device of services.getEffectiveDevices()) {
           const page = services.getDeviceActivityPage(device.id, 0, 1000);
           events.push(...page.entries.filter((entry) => entry.ts >= since).map((entry) => deviceEvent(entry, device)));
@@ -168,24 +156,22 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
       }
       if (canViewJobs) {
         for (const entry of services.getAllJobHistory()) {
-          if ((entry.projectId ?? DEFAULT_PROJECT_ID) === projectId) events.push(...jobEvents(entry, false, since));
+          events.push(...jobEvents(entry, false, since));
         }
         for (const entry of services.getActiveJobs()) {
-          if ((entry.projectId ?? DEFAULT_PROJECT_ID) === projectId) events.push(...jobEvents(entry, true, since));
+          events.push(...jobEvents(entry, true, since));
         }
       }
       const canViewDeployments = hasPermission(session.permissions, PermissionFlag.manageDevices) || hasPermission(session.permissions, PermissionFlag.viewLogs);
       if (canViewDeployments) {
-        const logs = services.getRecentLogs({ limit: 500 }).logs.filter((entry) => /deploy/i.test(entry.scope) && entry.ts >= since && logBelongsToProject(entry, projectId));
+        const logs = services.getRecentLogs({ limit: 500 }).logs.filter((entry) => /deploy/i.test(entry.scope) && entry.ts >= since);
         events.push(...logs.map(deploymentLogEvent));
-        if (projectId === DEFAULT_PROJECT_ID) {
-          events.push(...services.listNotifications(session.sub, 100).notifications.filter((entry) => entry.deploymentId && entry.createdAt >= since).map(deploymentEvent));
-        }
+        events.push(...services.listNotifications(session.sub, 100).notifications.filter((entry) => entry.deploymentId && entry.createdAt >= since).map(deploymentEvent));
       }
       const deduplicated = new Map<string, IncidentEvent>();
       for (const event of events) if (!deduplicated.has(event.id)) deduplicated.set(event.id, event);
       const sorted = [...deduplicated.values()].sort((left, right) => right.at - left.at || left.id.localeCompare(right.id));
-      return { projectId, events: sorted.slice(0, 200), truncated: sorted.length > 200 };
+      return { events: sorted.slice(0, 200), truncated: sorted.length > 200 };
     });
   };
 }

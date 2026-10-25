@@ -14,7 +14,7 @@ import { validArtifactFilenameTemplate } from '#artifactFilename.js';
 const homeModuleIds: HomeModuleId[] = ['artifacts', 'activeJobs', 'jobHistory'];
 const navigationIds = ['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'] as const;
 const artifactColumnIds = ['app', 'bundleId', 'version', 'source', 'size', 'created'] as const;
-const defaultArtifactLibrary = { groupByApp: false, columns: ['app', 'bundleId', 'version', 'source', 'size'] as const };
+const defaultArtifactLibrary = { groupByApp: false, columns: ['app', 'bundleId', 'version', 'source', 'size'] as const, layouts: [] as NonNullable<UserPrefs['artifactLibrary']>['layouts'] };
 const defaultHomeLayout: HomeLayoutPreference = {
   id: 'default',
   name: 'Default',
@@ -40,6 +40,8 @@ function normalizedPrefs(prefs: UserPrefs): UserPrefs {
     artifactLibrary: { ...defaultArtifactLibrary, columns: [...defaultArtifactLibrary.columns] },
     artifactFilenameTemplate: '{app}-{version}',
     largeTargets: false,
+    oneThumbMode: false,
+    decryptUsageAlertThresholds: [],
   };
   const homeLayouts = prefs.homeLayouts ?? [defaultHomeLayout];
   const activeHomeLayoutId = homeLayouts.some((layout) => layout.id === prefs.activeHomeLayoutId)
@@ -56,6 +58,7 @@ function normalizedPrefs(prefs: UserPrefs): UserPrefs {
     navigationOrder: prefs.navigationOrder ?? [...navigationIds],
     pinnedNavigation: prefs.pinnedNavigation ?? [],
     artifactLibrary: { ...defaultArtifactLibrary, ...prefs.artifactLibrary, columns: prefs.artifactLibrary?.columns ?? [...defaultArtifactLibrary.columns] },
+    decryptUsageAlertThresholds: prefs.decryptUsageAlertThresholds ?? [],
   };
 }
 
@@ -94,7 +97,17 @@ function validNavigationPreferences(order: string[], pinned: string[]): boolean 
 
 function validArtifactLibraryPreferences(value: UserPrefs['artifactLibrary']): boolean {
   if (!value || value.columns.length === 0 || value.columns.length > artifactColumnIds.length) return false;
-  return new Set(value.columns).size === value.columns.length && value.columns.every((id) => artifactColumnIds.includes(id));
+  if (new Set(value.columns).size !== value.columns.length || !value.columns.every((id) => artifactColumnIds.includes(id))) return false;
+  const layouts = value.layouts ?? [];
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const layout of layouts) {
+    const name = layout.name.trim().toLowerCase();
+    if (!layout.id || ids.has(layout.id) || !name || names.has(name) || layout.columns.length === 0 || layout.columns.length > artifactColumnIds.length || new Set(layout.columns).size !== layout.columns.length || !layout.columns.every((id) => artifactColumnIds.includes(id))) return false;
+    ids.add(layout.id);
+    names.add(name);
+  }
+  return value.activeLayoutId === undefined || ids.has(value.activeLayoutId);
 }
 
 export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) => {
@@ -141,6 +154,8 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
 
   server.put<DashboardPrefsUpdateRoute>('/v1/dashboard/me/prefs', { schema: getRouteContract('PUT', '/v1/dashboard/me/prefs') }, async (request, reply) => {
     const body = request.body;
+    const userId = getFastifySession(request)!.sub;
+    const current = normalizedPrefs(getUserPrefs(userId));
     const patch: Partial<UserPrefs> = {};
     if (body.shortcutBindings) {
       const validated = validateShortcutBindings(body.shortcutBindings);
@@ -170,12 +185,23 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
     }
     if (body.navigationOrder) patch.navigationOrder = body.navigationOrder;
     if (body.pinnedNavigation) patch.pinnedNavigation = body.pinnedNavigation;
-    if (body.artifactLibrary) patch.artifactLibrary = body.artifactLibrary;
+    if (body.artifactLibrary) patch.artifactLibrary = {
+      ...body.artifactLibrary,
+      layouts: body.artifactLibrary.layouts?.map((layout) => ({ ...layout, name: layout.name.trim() })) ?? current.artifactLibrary?.layouts ?? [],
+    };
     if (body.artifactFilenameTemplate !== undefined) {
       if (!validArtifactFilenameTemplate(body.artifactFilenameTemplate)) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'artifact filename template must use app, version, build, or source tokens and cannot contain path characters'));
       patch.artifactFilenameTemplate = body.artifactFilenameTemplate;
     }
     if (body.largeTargets !== undefined) patch.largeTargets = body.largeTargets;
+    if (body.oneThumbMode !== undefined) patch.oneThumbMode = body.oneThumbMode;
+    if (body.decryptUsageAlertThresholds) {
+      const thresholds = [...new Set(body.decryptUsageAlertThresholds)].sort((a, b) => a - b);
+      if (thresholds.some((threshold) => ![25, 50, 75, 90, 100].includes(threshold))) {
+        return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'decrypt usage alert thresholds must be 25, 50, 75, 90, or 100'));
+      }
+      patch.decryptUsageAlertThresholds = thresholds;
+    }
     if (typeof body.accent === 'string' && /^[a-z-]{1,32}$/.test(body.accent)) patch.accent = body.accent;
     if (typeof body.highContrast === 'boolean') patch.highContrast = body.highContrast;
     if (typeof body.sound === 'boolean') patch.sound = body.sound;
@@ -192,8 +218,6 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
       if (trimmed === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) patch.notifyEmail = trimmed;
     }
     if (typeof body.preferPrimaryDevice === 'boolean') patch.preferPrimaryDevice = body.preferPrimaryDevice;
-    const userId = getFastifySession(request)!.sub;
-    const current = normalizedPrefs(getUserPrefs(userId));
     const merged = { ...current, ...patch };
     if (merged.displayTimeZone && !validDisplayTimeZone(merged.displayTimeZone)) {
       return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'displayTimeZone must be system or a supported time zone'));

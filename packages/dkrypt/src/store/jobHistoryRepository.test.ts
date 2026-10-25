@@ -20,7 +20,7 @@ function historyEntry(overrides: Partial<JobHistoryEntry> = {}): JobHistoryEntry
   };
 }
 
-test('job history repository filters scoped results and orders them newest first', async () => {
+test('job history repository presents one shared history and orders it newest first', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-history-repository-'));
   const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
   const repository = createJobHistoryRepository(database.db);
@@ -33,7 +33,7 @@ test('job history repository filters scoped results and orders them newest first
   try {
     database.writeState({ version: 18, jobHistory: [older, newer, failed, other, wildcard] });
 
-    expect(repository.list({ projectId: 'project-a', status: 'done' })).toEqual([wildcard, newer, older]);
+    expect(repository.list({ projectId: 'project-a', status: 'done' })).toEqual([wildcard, other, newer, older]);
     expect(repository.list({ bundleIdSearch: 'PERCENT_%' })).toEqual([wildcard]);
     expect(repository.list({ errorSearch: 'APP STORE', deviceId: 'device-a' })).toEqual([failed]);
     expect(repository.listForUser('MEMBER@example.com')).toEqual([wildcard, failed, newer, older]);

@@ -5,7 +5,6 @@ import type {
   DashboardTestFlightDiagnosticsRoute,
   DashboardTestFlightTrainsRoute,
 } from '#dashboardTestFlightContracts.js';
-import { projectIdentifierPattern } from '#apiCommonContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
@@ -103,21 +102,16 @@ function sendUpstreamError(
 function resolveProjectId(
   request: import('fastify').FastifyRequest,
   reply: import('fastify').FastifyReply,
-  rawProjectId: unknown,
 ): string | undefined {
-  if (rawProjectId !== undefined && (typeof rawProjectId !== 'string' || !projectIdentifierPattern.test(rawProjectId))) {
-    sendError(request, reply, 400, 'projectId must be a valid project identifier');
-    return undefined;
-  }
-  const projectId = typeof rawProjectId === 'string' ? rawProjectId : DEFAULT_PROJECT_ID;
+  const projectId = DEFAULT_PROJECT_ID;
   const project = getProject(projectId);
   const session = getFastifySession(request);
   if (!project || !session || !canAccessProject(session.sub, session.permissions, projectId)) {
-    sendError(request, reply, 404, 'project not found');
+    sendError(request, reply, 404, 'account configuration is unavailable');
     return undefined;
   }
   if (project.archivedAt !== undefined) {
-    sendError(request, reply, 409, 'project is archived');
+    sendError(request, reply, 409, 'TestFlight operations are unavailable');
     return undefined;
   }
   return projectId;
@@ -198,7 +192,7 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
       schema: getRouteContract('POST', '/v1/dashboard/testflight/decrypt'),
       preHandler: [canDecrypt, fastifyBlockDuringMaintenance],
     }, async (request, reply) => {
-      const projectId = resolveProjectId(request, reply, request.body.projectId);
+      const projectId = resolveProjectId(request, reply);
       if (!projectId) return;
       const bundleId = request.body.bundleId.trim();
       const appId = Number.parseInt(String(request.body.appId), 10);

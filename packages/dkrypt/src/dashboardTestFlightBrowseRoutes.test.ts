@@ -147,7 +147,7 @@ test('TestFlight decrypt queues only for a device with verified access', async (
   }));
 
   try {
-    const cookie = sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewProjects);
+    const cookie = sessionCookie(PermissionFlag.requestDecrypt);
     const accepted = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
@@ -209,7 +209,7 @@ test('TestFlight decrypt rejects stale per-device access without requiring every
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewProjects) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
       payload: { bundleId: build.bundleId, appId: 12345, build, deviceId: device.id },
     });
 
@@ -237,7 +237,7 @@ test('TestFlight decrypt rejects build mismatches and returns retryable unavaila
   }));
 
   try {
-    const cookie = sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewProjects);
+    const cookie = sessionCookie(PermissionFlag.requestDecrypt);
     const mismatch = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',

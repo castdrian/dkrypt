@@ -11,7 +11,7 @@ function createArtifact(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord
   return {
     id: 'artifact-1',
     key: 'com.example.app|appstore|version:1.0',
-    projectIds: ['workspace-a'],
+    projectIds: ['default'],
     bundleId: 'com.example.app',
     channel: 'appstore',
     versionLabel: '1.0',
@@ -27,7 +27,7 @@ function createArtifact(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord
   };
 }
 
-test('artifact repository upgrades legacy metadata and supports indexed lookups', async () => {
+test('artifact repository migrates legacy records into the shared account scope', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-artifact-repository-migration-'));
   const databasePath = path.join(stateDir, 'state.sqlite');
   const legacyDatabase = new Database(databasePath, { create: true, strict: true });
@@ -48,7 +48,7 @@ test('artifact repository upgrades legacy metadata and supports indexed lookups'
   }
 });
 
-test('artifact repository keeps records and indexed lookups across restart', async () => {
+test('artifact repository keeps account-wide records and indexed lookups across restart', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-artifact-repository-restart-'));
   const options = { stateDir, filename: 'state.sqlite' };
   let repository: ReturnType<typeof createArtifactRepository> | undefined;
@@ -56,12 +56,12 @@ test('artifact repository keeps records and indexed lookups across restart', asy
   try {
     repository = createArtifactRepository(openStateCollectionDatabase(options, ['artifacts']));
     const first = createArtifact();
-    const second = createArtifact({ id: 'artifact-2', key: 'com.example.app|testflight|42', projectIds: ['workspace-b'], channel: 'testflight', testflightBuildId: 42, buildNumber: '42', sourceJobId: 'job-2', lastAccessedAt: 130 });
+    const second = createArtifact({ id: 'artifact-2', key: 'com.example.app|testflight|42', channel: 'testflight', testflightBuildId: 42, buildNumber: '42', sourceJobId: 'job-2', lastAccessedAt: 130 });
     const wildcardText = createArtifact({ id: 'artifact-3', key: 'com.example.percent_%|appstore|1', bundleId: 'com.example.percent_%', versionLabel: '1' });
     repository.replace([first, second, wildcardText]);
     expect(repository.findById('artifact-2')).toEqual(second);
     expect(repository.findByKey(first.key)).toEqual(first);
-    expect(repository.list({ projectIds: ['workspace-a'] })).toEqual([wildcardText, first]);
+    expect(repository.list()).toEqual([wildcardText, second, first]);
     expect(repository.list({ channel: 'testflight', query: '42' })).toEqual([second]);
     expect(repository.list({ query: 'percent_%' })).toEqual([wildcardText]);
     expect(repository.list({ bundleIds: [] })).toEqual([]);
@@ -72,7 +72,7 @@ test('artifact repository keeps records and indexed lookups across restart', asy
     expect(repository.findBySourceJobId('job-2')).toEqual(second);
     expect(repository.load().sort((left, right) => left.id.localeCompare(right.id))).toEqual([first, second, wildcardText]);
     repository.replace([second]);
-    expect(repository.list({ projectIds: ['workspace-a'] })).toEqual([]);
+    expect(repository.list()).toEqual([second]);
   } finally {
     repository?.close();
     await rm(stateDir, { recursive: true, force: true });

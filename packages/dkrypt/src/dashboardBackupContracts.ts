@@ -31,21 +31,6 @@ const Role = Type.Object({
   createdAt: Type.Optional(Type.Number()),
   updatedAt: Type.Optional(Type.Number()),
 }, { additionalProperties: true });
-const Project = Type.Object({
-  id: identifierSchema,
-  name: Type.String({ minLength: 1 }),
-  description: Type.Optional(Type.String()),
-  memberIds: Type.Array(identifierSchema),
-  isDefault: Type.Boolean(),
-  archivedAt: Type.Optional(Type.Number()),
-  storageQuotaBytes: Type.Optional(Type.Integer({ minimum: 1 })),
-  dailyJobQuota: Type.Optional(Type.Integer({ minimum: 1 })),
-  maxConcurrentJobs: Type.Optional(Type.Integer({ minimum: 1 })),
-  createdBy: identifierSchema,
-  createdAt: Type.Number(),
-  updatedAt: Type.Number(),
-}, { additionalProperties: true });
-const ArtifactProjectLink = Type.Object({ artifactId: identifierSchema, projectIds: Type.Array(identifierSchema) }, { additionalProperties: true });
 const ApiKey = Type.Object({
   id: identifierSchema,
   name: Type.String(),
@@ -66,7 +51,6 @@ const Watch = Type.Object({
   id: identifierSchema,
   bundleId: bundleIdSchema,
   enabled: Type.Boolean(),
-  projectId: Type.Optional(identifierSchema),
 }, { additionalProperties: true });
 const backupDeviceProperties = {
   id: identifierSchema,
@@ -92,10 +76,6 @@ const jobHistoryProperties = {
   finishedAt: Type.Number(),
 };
 const JobHistory = Type.Object(jobHistoryProperties, { additionalProperties: true });
-const JobHistoryWithProject = Type.Object({
-  ...jobHistoryProperties,
-  projectId: identifierSchema,
-}, { additionalProperties: true });
 const BackupAuditLogEntry = Type.Object({
   id: identifierSchema,
   ts: Type.Number(),
@@ -217,31 +197,30 @@ const BackupV6Fields = {
 };
 const BackupV7Fields = {
   ...BackupV6Fields,
-  projects: Type.Array(Project),
 };
 const BackupV8Fields = {
   ...BackupV7Fields,
-  jobHistory: Type.Array(JobHistoryWithProject),
 };
 const BackupV9Fields = {
   ...BackupV8Fields,
-  artifactProjectLinks: Type.Array(ArtifactProjectLink),
 };
 const BackupV10Fields = {
   ...BackupV9Fields,
   decryptQuotaLedger: Type.Array(Type.Object({ jobId: identifierSchema, ownerId: identifierSchema, admittedAt: Type.Number(), state: Type.Union([Type.Literal('reserved'), Type.Literal('consumed')]) }, { additionalProperties: false })),
 };
+const BackupV11Fields = {
+  ...BackupV6Fields,
+  decryptQuotaLedger: Type.Array(Type.Object({ jobId: identifierSchema, ownerId: identifierSchema, admittedAt: Type.Number(), state: Type.Union([Type.Literal('reserved'), Type.Literal('consumed')]) }, { additionalProperties: false })),
+};
 
 const optionalVersionedProperties = {
-  projects: Type.Optional(Type.Array(Project)),
-  artifactProjectLinks: Type.Optional(Type.Array(ArtifactProjectLink)),
   testFlightSubscriptions: Type.Optional(Type.Array(TestFlightSubscription)),
   billing: Type.Optional(JsonObject),
   identities: Type.Optional(JsonObject),
   decryptQuotaLedger: Type.Optional(Type.Array(JsonObject)),
 };
 
-function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
+function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
   return Type.Object({
     backupVersion: Type.Literal(version),
     ...commonBackupProperties,
@@ -258,11 +237,12 @@ const BackupV7 = backupVersionSchema(7, BackupV7Fields);
 const BackupV8 = backupVersionSchema(8, BackupV8Fields);
 const BackupV9 = backupVersionSchema(9, BackupV9Fields);
 const BackupV10 = backupVersionSchema(10, BackupV10Fields);
+const BackupV11 = backupVersionSchema(11, BackupV11Fields);
 
-export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10]);
+export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11]);
 
 export const backupExportResponseSchema = Type.Object({
-  ...BackupV10.properties,
+  ...BackupV11.properties,
   exportedAt: Type.Number(),
 }, { additionalProperties: true });
 

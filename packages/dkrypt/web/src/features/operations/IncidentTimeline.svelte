@@ -5,7 +5,6 @@
   import Card from '#lib/components/ui/Card.svelte';
   import { fetchActionCenter, fetchDashboardIncidents, fetchIncidentStateAtTime, updateActionCenterIncident, type DashboardIncidentEvent, type IncidentStateAtTime, type OperationalIncident } from '#lib/api';
   import { fmtDateTime, fmtTime } from '#lib/format.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { deviceDetailJumpState, jobDetailJumpState, logSearchJumpState, setActiveTab, setSettingsSubtab } from '#lib/ui.svelte';
   import { promptDialog, showToast } from '#lib/ui.svelte';
   import { PermissionFlag } from '#lib/permissions';
@@ -15,7 +14,6 @@
   let loading = $state(false);
   let loaded = $state(false);
   let truncated = $state(false);
-  let activeProject = '';
   let incidents = $state<OperationalIncident[]>([]);
   let scrubOpen = $state(false);
   let scrubMaxAt = $state(Date.now());
@@ -29,18 +27,12 @@
 
   async function load(): Promise<void> {
     loading = true;
-    if (activeProject && activeProject !== projectSelectionState.id) {
-      scrubOpen = false;
-      scrubState = null;
-      scrubRequest += 1;
-    }
     try {
-      const result = await fetchDashboardIncidents(projectSelectionState.id);
+      const result = await fetchDashboardIncidents();
       events = result.events;
       truncated = result.truncated;
-      activeProject = result.projectId;
       loaded = true;
-      if (canViewIncidents) incidents = (await fetchActionCenter(projectSelectionState.id)).incidents;
+      if (canViewIncidents) incidents = (await fetchActionCenter()).incidents;
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Could not load the incident timeline', 'error');
     } finally {
@@ -50,11 +42,10 @@
 
   async function loadStateAtTime(at: number): Promise<void> {
     const token = ++scrubRequest;
-    const projectId = projectSelectionState.id;
     scrubLoading = true;
     try {
-      const result = await fetchIncidentStateAtTime(at, projectId);
-      if (token === scrubRequest && projectId === projectSelectionState.id) scrubState = result;
+      const result = await fetchIncidentStateAtTime(at);
+      if (token === scrubRequest) scrubState = result;
     } catch (error) {
       if (token === scrubRequest) showToast(error instanceof Error ? error.message : 'Could not inspect recorded incident state', 'error');
     } finally {
@@ -70,10 +61,7 @@
     void loadStateAtTime(scrubAt);
   }
 
-  $effect(() => {
-    const projectId = projectSelectionState.id;
-    if (projectId !== activeProject) void load();
-  });
+  $effect(() => { void load(); });
 
   function openEvent(event: DashboardIncidentEvent): void {
     if (event.kind === 'job' && event.jobId) {
@@ -98,7 +86,7 @@
     if (status === 'resolved' && !resolutionNote?.trim()) return;
     const snoozedUntil = status === 'snoozed' ? Date.now() + 60 * 60 * 1000 : undefined;
     try {
-      const result = await updateActionCenterIncident(incident.id, { projectId: projectSelectionState.id, status, resolutionNote: resolutionNote ?? undefined, snoozedUntil });
+      const result = await updateActionCenterIncident(incident.id, { status, resolutionNote: resolutionNote ?? undefined, snoozedUntil });
       incidents = incidents.map((entry) => entry.id === incident.id ? result.incident : entry);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Could not update incident', 'error');
@@ -109,7 +97,7 @@
     const assignedTo = await promptDialog('Assign to account name, or leave blank to unassign', { value: incident.assignedTo ?? '', confirmLabel: 'Save assignment' });
     if (assignedTo === null) return;
     try {
-      const result = await updateActionCenterIncident(incident.id, { projectId: projectSelectionState.id, assignedTo: assignedTo.trim() || null });
+      const result = await updateActionCenterIncident(incident.id, { assignedTo: assignedTo.trim() || null });
       incidents = incidents.map((entry) => entry.id === incident.id ? result.incident : entry);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Could not assign incident', 'error');
@@ -120,7 +108,7 @@
 {#if canViewIncidents}
   <Card title="Action Center" class="mb-4">
     {#if incidents.length === 0}
-      <p class="text-sm text-muted">No actionable incidents in this project.</p>
+      <p class="text-sm text-muted">No actionable incidents.</p>
     {:else}
       <ol class="divide-y divide-border/70">
         {#each incidents as incident (incident.id)}
@@ -171,7 +159,7 @@
   {#if loading && !loaded}
     <div role="status" class="py-5 text-sm text-muted">Loading recent activity…</div>
   {:else if events.length === 0}
-    <EmptyState icon={Activity} message="No recent incidents or activity for this project." />
+    <EmptyState icon={Activity} message="No recent incidents or activity." />
   {:else}
     <ol class="divide-y divide-border/70">
       {#each events as event (event.id)}

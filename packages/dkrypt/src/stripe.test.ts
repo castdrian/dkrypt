@@ -19,7 +19,7 @@ import { clearStripeWebhookHealthCache } from '#stripeWebhookHealth.js';
 import { getAuditLog, getUserEffectivePermissions } from '#store/state.js';
 import { flushTelemetry } from '#telemetry.js';
 import { setSessionCookie } from '#session.js';
-import { claimWebhook, getWebhookInboxRecord, markWebhookProcessed, quarantineWebhook, receiveWebhook, releaseWebhookClaim } from '#webhookInbox.js';
+import { claimWebhook, getWebhookInboxRecord, markWebhookFailed, markWebhookProcessed, quarantineWebhook, receiveWebhook, releaseWebhookClaim } from '#webhookInbox.js';
 
 const webhookSecret = 'whsec_dkrypt_test';
 
@@ -650,6 +650,42 @@ describe('Stripe billing webhooks', () => {
         lastError: expect.stringContaining(unknownPriceId),
       }));
       expect(getBillingEntitlements(userId).planId).toBe('viewer');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('billing reconciliation queue groups received and failed events by newest first', async () => {
+    const failedEventId = `evt_reconcile_failed_${crypto.randomUUID()}`;
+    const receivedEventId = `evt_reconcile_received_${crypto.randomUUID()}`;
+    const processedEventId = `evt_reconcile_processed_${crypto.randomUUID()}`;
+    const quarantinedEventId = `evt_reconcile_quarantined_${crypto.randomUUID()}`;
+    const failed = receiveWebhook('stripe', failedEventId, JSON.stringify({ id: failedEventId }));
+    markWebhookFailed(failed.record.id, 'retry required');
+    const received = receiveWebhook('stripe', receivedEventId, JSON.stringify({ id: receivedEventId }));
+    const processed = receiveWebhook('stripe', processedEventId, JSON.stringify({ id: processedEventId }));
+    markWebhookProcessed(processed.record.id);
+    const quarantined = receiveWebhook('stripe', quarantinedEventId, JSON.stringify({ id: quarantinedEventId }));
+    quarantineWebhook(quarantined.record.id, 'held for review');
+    const server = await buildTestServer({ includePublicRoutes: false });
+
+    try {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/v1/billing/webhooks/inbox?provider=stripe&status=needs_attention&limit=200',
+        headers: { cookie: createSessionCookie(PermissionFlag.manageBilling | PermissionFlag.viewLogs) },
+      });
+
+      const body = response.json();
+      const eventIds = body.inbox.map((record: { eventId: string }) => record.eventId);
+      expect(response.statusCode).toBe(200);
+      expect(eventIds).toContain(failedEventId);
+      expect(eventIds).toContain(receivedEventId);
+      expect(eventIds).not.toContain(processedEventId);
+      expect(eventIds).not.toContain(quarantinedEventId);
+      expect(body.total).toBeGreaterThanOrEqual(2);
+      expect(body.inbox.find((record: { eventId: string }) => record.eventId === receivedEventId).receivedAt).toBe(received.record.receivedAt);
+      expect(body.inbox[0].receivedAt).toBeGreaterThanOrEqual(body.inbox.at(-1).receivedAt);
     } finally {
       await server.close();
     }

@@ -2,19 +2,14 @@ import { getAuthProfile } from '#identity.js';
 import { jobFileAvailable } from '#jobs/http.js';
 import { getJob } from '#jobs/store.js';
 import { artifactFileAvailable, getArtifactById, getArtifactBySourceJobId, getArtifactForJob } from '#artifacts.js';
-import { hasPermission, PermissionFlag } from '#permissions.js';
-import { getProject, userCanAccessProject, type JobHistoryEntry } from '#store/state.js';
+import { type JobHistoryEntry } from '#store/state.js';
 
-export function canViewAllProjects(permissions: bigint): boolean {
-  return hasPermission(permissions, PermissionFlag.viewProjects) || hasPermission(permissions, PermissionFlag.manageProjects);
-}
-
-export function canAccessProject(userId: string, permissions: bigint, projectId: string): boolean {
-  if (!getProject(projectId)) return false;
-  return canViewAllProjects(permissions) || userCanAccessProject(userId, projectId);
+export function canAccessProject(_userId: string, _permissions: bigint, _projectId: string): boolean {
+  return true;
 }
 
 export function dashboardHistoryEntry(entry: JobHistoryEntry) {
+  const { projectId: _projectId, ...visibleEntry } = entry;
   const job = getJob(entry.id);
   const artifact =
     (entry.artifactId ? getArtifactById(entry.artifactId) : undefined) ??
@@ -22,7 +17,7 @@ export function dashboardHistoryEntry(entry: JobHistoryEntry) {
     getArtifactBySourceJobId(entry.id);
   const fileAvailable = artifact ? artifactFileAvailable(artifact) : jobFileAvailable(job);
   return {
-    ...entry,
+    ...visibleEntry,
     requester: dashboardJobRequester(entry),
     downloadUrl: artifact && fileAvailable ? `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file` : undefined,
     fileAvailable,

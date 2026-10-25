@@ -55,7 +55,9 @@ test('backup routes validate access, versioned payloads, and restore workflows',
     const exported = await server.inject({ method: 'GET', url: '/v1/dashboard/backup/export', headers: { cookie: managerCookie } });
     expect(exported.statusCode).toBe(200);
     expect(exported.headers['content-disposition']).toContain('dkrypt-backup.json');
-    expect(exported.json()).toMatchObject({ backupVersion: 10, projects: expect.any(Array), artifactProjectLinks: expect.any(Array), decryptQuotaLedger: expect.any(Array) });
+    expect(exported.json()).toMatchObject({ backupVersion: 11, decryptQuotaLedger: expect.any(Array) });
+    expect(exported.json()).not.toHaveProperty('projects');
+    expect(exported.json()).not.toHaveProperty('artifactProjectLinks');
 
     const invalidPreview = await server.inject({ method: 'POST', url: '/v1/dashboard/backup/preview', headers: { cookie: managerCookie }, payload: legacyPayload });
     expect(invalidPreview.statusCode).toBe(400);
@@ -67,7 +69,12 @@ test('backup routes validate access, versioned payloads, and restore workflows',
     expect(preview.json()).toMatchObject({ incoming: { users: expect.any(Number), roles: expect.any(Number) }, current: { users: expect.any(Number), roles: expect.any(Number) } });
 
     const historyEntry = { id: 'backup-schema-test-job', bundleId: 'com.example.backup', status: 'done', finishedAt: 100, projectId: 'default' };
-    const validV8Backup: Record<string, unknown> = { ...body, backupVersion: 8, jobHistory: [historyEntry] };
+    const validV8Backup: Record<string, unknown> = {
+      ...body,
+      backupVersion: 8,
+      projects: [{ id: 'default', name: 'Workspace', memberIds: [], isDefault: true, createdBy: 'system', createdAt: 1, updatedAt: 1 }],
+      jobHistory: [historyEntry],
+    };
     delete validV8Backup.artifactProjectLinks;
     const validV8Preview = await server.inject({ method: 'POST', url: '/v1/dashboard/backup/preview', headers: { cookie: managerCookie }, payload: validV8Backup });
     expect(validV8Preview.statusCode).toBe(200);
@@ -76,7 +83,7 @@ test('backup routes validate access, versioned payloads, and restore workflows',
     const invalidV8Preview = await server.inject({ method: 'POST', url: '/v1/dashboard/backup/preview', headers: { cookie: managerCookie }, payload: invalidV8Backup });
     expect(invalidV8Preview.statusCode).toBe(400);
 
-    const invalidV9Backup = { ...body, jobHistory: [{ id: historyEntry.id, bundleId: historyEntry.bundleId, status: historyEntry.status, finishedAt: historyEntry.finishedAt }] };
+    const invalidV9Backup = { ...validV8Backup, backupVersion: 10, artifactProjectLinks: [], jobHistory: [{ id: historyEntry.id, bundleId: historyEntry.bundleId, status: historyEntry.status, finishedAt: historyEntry.finishedAt }] };
     const invalidV9Preview = await server.inject({ method: 'POST', url: '/v1/dashboard/backup/preview', headers: { cookie: managerCookie }, payload: invalidV9Backup });
     expect(invalidV9Preview.statusCode).toBe(400);
 
@@ -118,7 +125,7 @@ test('backup snapshots can be created, downloaded, and deleted through native ro
     const download = await server.inject({ method: 'GET', url: `/v1/dashboard/backup/history/${snapshotId}/download`, headers: { cookie: viewerCookie } });
     expect(download.statusCode).toBe(200);
     expect(download.headers['content-disposition']).toContain('dkrypt-backup.json');
-    expect(JSON.parse(download.body)).toMatchObject({ backupVersion: 10 });
+    expect(JSON.parse(download.body)).toMatchObject({ backupVersion: 11 });
 
     const viewerDrill = await server.inject({ method: 'POST', url: `/v1/dashboard/backup/history/${snapshotId}/drill`, headers: { cookie: viewerCookie } });
     expect(viewerDrill.statusCode).toBe(403);

@@ -36,8 +36,6 @@ export const PermissionFlag = {
   manageTestFlightSubscriptions: 1n << 35n,
   viewBilling: 1n << 36n,
   manageBilling: 1n << 37n,
-  viewProjects: 1n << 38n,
-  manageProjects: 1n << 39n,
   viewDiagnosticReports: 1n << 40n,
   viewIncidents: 1n << 41n,
   manageIncidents: 1n << 42n,

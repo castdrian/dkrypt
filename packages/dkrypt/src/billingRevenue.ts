@@ -21,6 +21,12 @@ export interface BillingRevenueSummary {
   updatedAt: string;
   complete: boolean;
   totals: BillingRevenueCurrencyTotal[];
+  retention: {
+    activeAccounts: number;
+    paymentIssues: number;
+    cancellationsUpdatedLast30Days: number;
+    recentCancellationRatePercent: number;
+  };
   providers: {
     stripe: BillingRevenueProviderSummary;
     nowpayments: BillingRevenueProviderSummary;
@@ -53,6 +59,36 @@ interface StripeRevenueResult {
   summary: BillingRevenueProviderSummary;
   complete: boolean;
   warnings: string[];
+}
+
+function accountKey(subscription: BillingSubscription): string {
+  if (subscription.userId) return `user:${subscription.userId.toLowerCase()}`;
+  if (subscription.customerId) return `${subscription.provider}:${subscription.customerId}`;
+  return `${subscription.provider}:${subscription.subscriptionId}`;
+}
+
+function summarizeRetention(subscriptions: BillingSubscription[], now: number): BillingRevenueSummary['retention'] {
+  const latestByAccount = new Map<string, BillingSubscription>();
+  for (const subscription of subscriptions) {
+    const key = accountKey(subscription);
+    const current = latestByAccount.get(key);
+    if (!current || Date.parse(subscription.updatedAt) >= Date.parse(current.updatedAt)) latestByAccount.set(key, subscription);
+  }
+  const latest = [...latestByAccount.values()];
+  const activeAccounts = latest.filter((subscription) => ['active', 'trialing'].includes(String(subscription.status ?? '').toLowerCase())).length;
+  const paymentIssues = latest.filter((subscription) => ['past_due', 'unpaid'].includes(String(subscription.status ?? '').toLowerCase())).length;
+  const cancellationsUpdatedLast30Days = latest.filter((subscription) =>
+    ['canceled', 'cancelled'].includes(String(subscription.status ?? '').toLowerCase()) &&
+    Number.isFinite(Date.parse(subscription.updatedAt)) &&
+    Date.parse(subscription.updatedAt) >= now - 30 * 24 * 60 * 60 * 1000,
+  ).length;
+  const denominator = activeAccounts + cancellationsUpdatedLast30Days;
+  return {
+    activeAccounts,
+    paymentIssues,
+    cancellationsUpdatedLast30Days,
+    recentCancellationRatePercent: denominator === 0 ? 0 : Number((cancellationsUpdatedLast30Days / denominator * 100).toFixed(1)),
+  };
 }
 
 const CACHE_TTL_MS = 60_000;
@@ -331,6 +367,7 @@ export function createBillingRevenueReader(overrides: Partial<BillingRevenueRead
         updatedAt: new Date(dependencies.now()).toISOString(),
         complete,
         totals: combineTotals(stripe.summary.totals, crypto.totals),
+        retention: summarizeRetention(subscriptions, dependencies.now()),
         providers: { stripe: stripe.summary, nowpayments: crypto },
         warnings,
       };

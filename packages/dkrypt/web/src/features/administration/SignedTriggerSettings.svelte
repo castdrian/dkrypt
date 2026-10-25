@@ -5,7 +5,6 @@
   import Input from '#lib/components/ui/Input.svelte';
   import { createSignedTriggerIntegration, fetchSignedTriggerIntegrations, revokeSignedTriggerIntegration, rotateSignedTriggerIntegration, type SignedTriggerIntegration } from '#lib/api';
   import IntegrationOwnershipControl from '#features/administration/IntegrationOwnershipControl.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { confirmDialog, showToast } from '#lib/ui.svelte';
 
   let integrations = $state<SignedTriggerIntegration[]>([]);
@@ -28,7 +27,7 @@
     if (!bundleIds.length || !sources.length) return;
     busy = true;
     try {
-      const result = await createSignedTriggerIntegration({ projectId: projectSelectionState.id, bundleIds, sources });
+      const result = await createSignedTriggerIntegration({ bundleIds, sources });
       revealed = { id: result.integration.id, secret: result.secret };
       bundles = '';
       await load();
@@ -56,7 +55,7 @@
 </script>
 
 <Card title="Signed decrypt triggers" class="mt-4">
-  <p class="mb-3 text-xs text-muted">Use an HMAC-signed request to start a decrypt in one project. Each integration is limited to its listed apps and sources. The secret is shown only when created or rotated.</p>
+  <p class="mb-3 text-xs text-muted">Use an HMAC-signed request to start a decrypt. Each integration is limited to its listed apps and sources. The secret is shown only when created or rotated.</p>
   <label class="block text-xs text-muted" for="signed-trigger-bundles">Bundle IDs, separated by commas</label>
   <Input id="signed-trigger-bundles" bind:value={bundles} placeholder="com.example.app" />
   <div class="mt-2 flex gap-4 text-xs"><label><input type="checkbox" bind:checked={appStore} /> App Store</label><label><input type="checkbox" bind:checked={testFlight} /> TestFlight</label></div>
@@ -68,7 +67,7 @@
     {#each integrations as integration (integration.id)}
       <div class="py-2 text-xs">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div><div class="font-medium">{integration.projectId} · {integration.bundleIds.join(', ')}</div><div class="text-muted">{integration.id} · {integration.sources.join(' / ')} · {integration.enabled ? 'Active' : 'Revoked'}</div></div>
+          <div><div class="font-medium">{integration.bundleIds.join(', ')}</div><div class="text-muted">{integration.id} · {integration.sources.join(' / ')} · {integration.enabled ? 'Active' : 'Revoked'}</div></div>
           {#if integration.enabled}<div class="flex gap-1"><Button size="sm" variant="secondary" disabled={busy} onclick={() => void rotate(integration.id)}>Rotate</Button><Button size="sm" variant="secondary" disabled={busy} onclick={() => void revoke(integration.id)}>Revoke</Button></div>{/if}
         </div>
         <IntegrationOwnershipControl integrationId={integration.id} ownerName={integration.billingOwnerDisplayName} transferName={integration.billingOwnerTransferDisplayName} onSaved={load} />

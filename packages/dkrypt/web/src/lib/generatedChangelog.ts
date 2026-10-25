@@ -1,42 +1,42 @@
 export const GENERATED_CHANGELOG = [
   {
-    "date": "2026-10-24",
-    "title": "fix(appstore): keep first attempts server-side",
-    "description": "Released in 273154b."
+    "date": "2026-10-25",
+    "title": "fix: align deployment smoke checks with public API allowlist",
+    "description": "Released in 556c1fa."
   },
   {
-    "date": "2026-10-24",
-    "title": "fix(appstore): surface safe sign-in failure causes",
-    "description": "Released in e6dd7fc."
+    "date": "2026-10-25",
+    "title": "feat: add offline-first processing and workflow tools",
+    "description": "Released in 8eaaf15."
   },
   {
-    "date": "2026-10-24",
-    "title": "feat(appstore): replace external downloader with Rust client",
-    "description": "Released in ee7dd18."
+    "date": "2026-10-25",
+    "title": "fix(offline): persist device fallback timing state",
+    "description": "Released in 2b42d43."
   },
   {
-    "date": "2026-10-24",
-    "title": "fix(ui): remove retired scheduler history filter",
-    "description": "Released in cc5e4ef."
+    "date": "2026-10-25",
+    "title": "fix(offline): count device fallback handoff once",
+    "description": "Released in a099fe1."
   },
   {
-    "date": "2026-10-24",
-    "title": "fix(security): pin SSH identity per paired device",
-    "description": "Released in 5bce18f."
+    "date": "2026-10-25",
+    "title": "feat(offline): measure server decrypt fallback path",
+    "description": "Released in c9da9e9."
   },
   {
-    "date": "2026-10-24",
-    "title": "fix(security): verify paired FairPlay tunnel",
-    "description": "Released in 8d5512e."
+    "date": "2026-10-25",
+    "title": "fix(appstore): restore numeric license app id",
+    "description": "Released in 880aaf8."
   },
   {
-    "date": "2026-10-24",
-    "title": "chore(config): remove stale comment",
-    "description": "Released in 92b5670."
+    "date": "2026-10-25",
+    "title": "fix(appstore): encode free license app id as string",
+    "description": "Released in edce27c."
   },
   {
-    "date": "2026-10-24",
-    "title": "fix(security): redact offline App Store diagnostics",
-    "description": "Released in 2d054fe."
+    "date": "2026-10-25",
+    "title": "fix(appstore): resolve account storefront and auth diagnostics",
+    "description": "Released in 7eda3e4."
   }
 ] as const;

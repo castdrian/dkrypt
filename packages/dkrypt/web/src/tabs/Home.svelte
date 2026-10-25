@@ -2,7 +2,6 @@
   import { ChevronRight } from 'lucide-svelte';
   import DonationNudge from '#components/DonationNudge.svelte';
   import ArtifactInspector from '#components/ArtifactInspector.svelte';
-  import ProjectSelector from '#components/ProjectSelector.svelte';
   import DecryptCompletion from '#components/DecryptCompletion.svelte';
   import OnboardingBanner from '#components/OnboardingBanner.svelte';
   import Button from '#lib/components/ui/Button.svelte';
@@ -64,7 +63,6 @@
 </script>
 
 <div class="flex flex-col gap-4">
-  <ProjectSelector />
   <OnboardingBanner />
   <DecryptPanel bind:this={decryptPanel} />
   <DonationNudge />

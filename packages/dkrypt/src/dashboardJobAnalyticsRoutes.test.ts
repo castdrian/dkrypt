@@ -25,11 +25,10 @@ test('job analytics routes are not registered through the legacy dashboard route
   expect(routes).not.toContain('GET /v1/dashboard/jobs/volume');
 });
 
-test('job statistics and daily volume preserve scoped response data', async () => {
+test('job statistics and daily volume use shared account data', async () => {
   const calls: Array<[string, number, string]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardJobAnalyticsRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getBundleStats: (bundleId, _projectId) => ({
       bundleId,
       totalRuns: 2,
@@ -48,14 +47,14 @@ test('job statistics and daily volume preserve scoped response data', async () =
 
   try {
     const headers = { cookie: sessionCookie() };
-    const stats = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/stats/com.example.app?projectId=default', headers });
-    const volume = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/volume?days=3&projectId=default', headers });
+    const stats = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/stats/com.example.app', headers });
+    const volume = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/volume?days=3', headers });
 
     expect(stats.statusCode).toBe(200);
     expect(JSON.parse(stats.body)).toMatchObject({ bundleId: 'com.example.app', totalRuns: 2, successRate: 0.5 });
     expect(volume.statusCode).toBe(200);
     expect(JSON.parse(volume.body)).toEqual({ days: [{ date: '2026-09-24', count: 2 }] });
-    expect(calls).toEqual([['volume', 3, 'default']]);
+    expect(calls).toEqual([['volume', 3, '']]);
   } finally {
     await server.close();
   }
@@ -78,8 +77,8 @@ test('queue SLO data remains manager-gated and includes the active queue objecti
     bundleId: 'com.example.app',
     status: 'done',
     source: 'manual',
-    createdAt: now - 2_000,
-    startedAt: now - 1_000,
+    createdAt: now - 20,
+    startedAt: now - 10,
     finishedAt: now,
   }];
   const active: Job[] = [{
@@ -95,7 +94,6 @@ test('queue SLO data remains manager-gated and includes the active queue objecti
   }];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardJobAnalyticsRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getAllJobHistory: () => completed,
     getActiveJobs: () => active,
     getQueueInfo: () => ({ position: 1, total: 1 }),
@@ -122,11 +120,10 @@ test('queue SLO data remains manager-gated and includes the active queue objecti
   }
 });
 
-test('job ETA uses the selected project and hides inaccessible project data', async () => {
+test('job ETA uses the shared account history', async () => {
   const calls: Array<[string, string]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardJobAnalyticsRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getAverageJobDurationMs: (bundleId, projectId) => {
       calls.push([bundleId, projectId ?? '']);
       return 1_250;
@@ -135,20 +132,14 @@ test('job ETA uses the selected project and hides inaccessible project data', as
 
   try {
     const headers = { cookie: sessionCookie() };
-    const allowed = await server.inject({
+    const response = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/jobs/eta/com.example.app?projectId=default',
-      headers,
-    });
-    const denied = await server.inject({
-      method: 'GET',
-      url: '/v1/dashboard/jobs/eta/com.example.app?projectId=another-project',
+      url: '/v1/dashboard/jobs/eta/com.example.app',
       headers,
     });
 
-    expect(allowed.statusCode).toBe(200);
-    expect(JSON.parse(allowed.body)).toEqual({ avgMs: 1_250 });
-    expect(denied.statusCode).toBe(404);
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ avgMs: 1_250 });
     expect(calls).toEqual([['com.example.app', 'default']]);
   } finally {
     await server.close();

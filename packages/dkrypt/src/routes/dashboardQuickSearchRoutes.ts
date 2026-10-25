@@ -1,20 +1,16 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { Type, type Static } from '@sinclair/typebox';
-import { ErrorEnvelope, type ApiErrorEnvelope } from '#contracts.js';
 import { getAllJobHistory } from '#store/state.js';
 import { getActiveJobs } from '#jobs/store.js';
 import { listArtifacts } from '#artifacts.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { listAuthProfiles } from '#identity.js';
 import { PermissionFlag, hasPermission } from '#permissions.js';
 import { fastifyRequireSession, getFastifySession } from '#session.js';
-import { DEFAULT_PROJECT_ID, getEffectiveDevices, getProject, listAllowedUsers, searchAppCatalogEntries, type AppCatalogEntry, type DeviceRecord, type JobHistoryEntry, type ProjectRecord } from '#store/state.js';
+import { getEffectiveDevices, listAllowedUsers, searchAppCatalogEntries, type AppCatalogEntry, type DeviceRecord, type JobHistoryEntry } from '#store/state.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 
 const quickSearchQuerySchema = Type.Object({
   q: Type.String({ maxLength: 120 }),
-  projectId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
 }, { additionalProperties: false });
 
 const quickSearchResultSchema = Type.Object({
@@ -29,7 +25,6 @@ const quickSearchResultSchema = Type.Object({
   id: Type.String({ minLength: 1, maxLength: 200 }),
   title: Type.String({ minLength: 1, maxLength: 200 }),
   subtitle: Type.Optional(Type.String({ maxLength: 300 })),
-  projectId: Type.Optional(Type.String({ maxLength: 100 })),
 }, { additionalProperties: false });
 
 const quickSearchResponseSchema = Type.Object({
@@ -41,8 +36,6 @@ type QuickSearchResult = Static<typeof quickSearchResultSchema>;
 type QuickSearchPermissions = bigint;
 
 interface QuickSearchServices {
-  canAccessProject: typeof canAccessProject;
-  getProject: typeof getProject;
   searchAppCatalogEntries: (query: string, limit: number) => AppCatalogEntry[];
   getAllJobHistory: typeof getAllJobHistory;
   getActiveJobs: typeof getActiveJobs;
@@ -53,8 +46,6 @@ interface QuickSearchServices {
 }
 
 const defaultServices: QuickSearchServices = {
-  canAccessProject,
-  getProject,
   searchAppCatalogEntries,
   getAllJobHistory,
   getActiveJobs,
@@ -72,10 +63,6 @@ function matches(query: string, values: Array<string | undefined>): boolean {
   return values.some((value) => value?.toLowerCase().includes(normalizedQuery));
 }
 
-function projectMatches(projectId: string, recordProjectId: string | undefined): boolean {
-  return (recordProjectId ?? DEFAULT_PROJECT_ID) === projectId;
-}
-
 function visibleSettings(permissions: QuickSearchPermissions): Array<{ id: string; title: string; keywords: string; any: bigint[]; all?: bigint[] }> {
   return [
     { id: 'personalization', title: 'Personalization', keywords: 'timezone time zone touch targets navigation favorites artifact columns appearance density', any: [] },
@@ -85,7 +72,6 @@ function visibleSettings(permissions: QuickSearchPermissions): Array<{ id: strin
     { id: 'doctor', title: 'System', keywords: 'diagnostics health configuration', any: [PermissionFlag.manageDevices] },
     { id: 'users', title: 'Users', keywords: 'members accounts access', any: [PermissionFlag.viewUsers, PermissionFlag.manageUsers] },
     { id: 'roles', title: 'Roles', keywords: 'permissions access', any: [PermissionFlag.viewRoles, PermissionFlag.manageRoles] },
-    { id: 'projects', title: 'Projects', keywords: 'scope members', any: [PermissionFlag.viewProjects, PermissionFlag.manageProjects] },
     { id: 'backup', title: 'Backup', keywords: 'restore export', any: [PermissionFlag.viewBackup, PermissionFlag.manageBackup] },
     { id: 'testflight', title: 'TestFlight', keywords: 'subscriptions invites', any: [PermissionFlag.manageTestFlightSubscriptions] },
     { id: 'billing', title: 'Billing', keywords: 'subscription payment stripe crypto', any: [PermissionFlag.viewBilling, PermissionFlag.manageBilling] },
@@ -93,14 +79,13 @@ function visibleSettings(permissions: QuickSearchPermissions): Array<{ id: strin
   ].filter((section) => (section.any.length === 0 || section.any.some((permission) => hasPermission(permissions, permission))) && (section.all ?? []).every((permission) => hasPermission(permissions, permission)));
 }
 
-function jobResult(entry: JobHistoryEntry, catalog: Map<string, AppCatalogEntry>, project: ProjectRecord | undefined): QuickSearchResult {
+function jobResult(entry: JobHistoryEntry, catalog: Map<string, AppCatalogEntry>): QuickSearchResult {
   const app = catalog.get(entry.bundleId);
   return {
     kind: 'job',
     id: entry.id,
     title: app?.displayName ?? entry.bundleId,
-    subtitle: [entry.versionLabel, entry.status, project?.name].filter(Boolean).join(' · '),
-    projectId: entry.projectId ?? DEFAULT_PROJECT_ID,
+    subtitle: [entry.versionLabel, entry.status].filter(Boolean).join(' · '),
   };
 }
 
@@ -110,17 +95,12 @@ export function createDashboardQuickSearchRoutes(overrides: Partial<QuickSearchS
     server.addHook('preHandler', fastifyRequireSession);
     server.addHook('preHandler', recordFastifyDashboardActivity);
 
-    server.get<{ Querystring: QuickSearchQuery; Reply: { 200: Static<typeof quickSearchResponseSchema>; 404: ApiErrorEnvelope } }>('/v1/dashboard/quick-search', {
-      schema: { hide: true, querystring: quickSearchQuerySchema, response: { 200: quickSearchResponseSchema, 404: ErrorEnvelope } },
-    }, (request, reply) => {
+    server.get<{ Querystring: QuickSearchQuery; Reply: { 200: Static<typeof quickSearchResponseSchema> } }>('/v1/dashboard/quick-search', {
+      schema: { hide: true, querystring: quickSearchQuerySchema, response: { 200: quickSearchResponseSchema } },
+    }, (request) => {
       const session = getFastifySession(request)!;
       const query = request.query.q.trim();
       if (query.length < 2) return { results: [] };
-      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
-      if (!services.getProject(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'project not found');
-      }
 
       const catalogEntries = services.searchAppCatalogEntries(query, MAX_RESULTS_PER_KIND);
       const catalog = new Map(catalogEntries.map((entry) => [entry.bundleId, entry]));
@@ -133,28 +113,25 @@ export function createDashboardQuickSearchRoutes(overrides: Partial<QuickSearchS
       const canSearchJobs = hasPermission(session.permissions, PermissionFlag.requestDecrypt) || hasPermission(session.permissions, PermissionFlag.viewLogs);
       if (canSearchJobs) {
         const historicalJobs = services.getAllJobHistory()
-          .filter((entry) => projectMatches(projectId, entry.projectId))
           .filter((entry) => matches(query, [entry.id, entry.bundleId, entry.versionLabel, catalog.get(entry.bundleId)?.displayName]))
           .slice(0, MAX_RESULTS_PER_KIND)
-          .map((entry) => jobResult(entry, catalog, services.getProject(projectId)));
+          .map((entry) => jobResult(entry, catalog));
         const activeJobs = services.getActiveJobs()
-          .filter((entry) => projectMatches(projectId, entry.projectId))
           .filter((entry) => matches(query, [entry.id, entry.bundleId, entry.versionLabel, catalog.get(entry.bundleId)?.displayName]))
           .slice(0, MAX_RESULTS_PER_KIND)
           .map((entry) => ({
             kind: 'job' as const,
             id: entry.id,
             title: catalog.get(entry.bundleId)?.displayName ?? entry.bundleId,
-            subtitle: [entry.versionLabel, entry.status, services.getProject(projectId)?.name].filter(Boolean).join(' · '),
-            projectId,
+            subtitle: [entry.versionLabel, entry.status].filter(Boolean).join(' · '),
           }));
         append([...activeJobs, ...historicalJobs]);
       }
 
       if (hasPermission(session.permissions, PermissionFlag.requestDecrypt)) {
-        const directArtifacts = services.listArtifacts({ query, projectIds: [projectId], archived: false, limit: 100 }).artifacts;
+        const directArtifacts = services.listArtifacts({ query, archived: false, limit: 100 }).artifacts;
         const appArtifacts = catalogEntries.length > 0
-          ? services.listArtifacts({ bundleIds: catalogEntries.map((entry) => entry.bundleId), projectIds: [projectId], archived: false, limit: 100 }).artifacts
+          ? services.listArtifacts({ bundleIds: catalogEntries.map((entry) => entry.bundleId), archived: false, limit: 100 }).artifacts
           : [];
         const seenArtifactIds = new Set<string>();
         append([...directArtifacts, ...appArtifacts]
@@ -168,8 +145,7 @@ export function createDashboardQuickSearchRoutes(overrides: Partial<QuickSearchS
             kind: 'artifact' as const,
             id: artifact.id,
             title: catalog.get(artifact.bundleId)?.displayName ?? artifact.bundleId,
-            subtitle: [artifact.versionLabel, artifact.channel === 'testflight' ? 'TestFlight' : 'App Store', services.getProject(projectId)?.name].filter(Boolean).join(' · '),
-            projectId,
+            subtitle: [artifact.versionLabel, artifact.channel === 'testflight' ? 'TestFlight' : 'App Store'].filter(Boolean).join(' · '),
           })));
       }
 

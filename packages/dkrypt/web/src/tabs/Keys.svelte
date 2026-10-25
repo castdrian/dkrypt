@@ -39,7 +39,6 @@
   import { scrollFade } from '#lib/scrollFade';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#lib/session.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { confirmDialog, keyUsageJumpState, showToast } from '#lib/ui.svelte';
 
   const PAGE_SIZE = 25;
@@ -208,7 +207,6 @@
     try {
       simulation = await simulateApiKeyScope({
         keyId: simulateKeyId || undefined,
-        projectId: projectSelectionState.id,
         bundleId: simulateBundleId.trim(),
         source: simulateSource,
         allowedBundleIds: simulateKeyId ? simulateClearScope ? [] : parseScope(simulateScope) : parseScope(keyScope),

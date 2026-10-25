@@ -58,7 +58,7 @@ test('every versioned route is represented in generated OpenAPI', async () => {
   }
 });
 
-test('retired app-watch and GitHub browsing endpoints are absent from dashboard OpenAPI', async () => {
+test('retired project, app-watch, and GitHub browsing endpoints are absent from dashboard OpenAPI', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   try {
     await server.ready();
@@ -67,6 +67,9 @@ test('retired app-watch and GitHub browsing endpoints are absent from dashboard 
       '/v1/dashboard/github/rate-limit',
       '/v1/dashboard/github/repos',
       '/v1/dashboard/github/workflows',
+      '/v1/dashboard/projects',
+      '/v1/dashboard/projects/members',
+      '/v1/dashboard/projects/{id}',
       '/v1/dashboard/watches',
       '/v1/dashboard/watches/calendar',
     ]) expect(document.paths?.[path]).toBeUndefined();
@@ -152,7 +155,7 @@ test('job history, exports, and diagnostics expose structured queue failure deta
   })).toBe(false);
 });
 
-test('dashboard overview project identifiers publish validation constraints', async () => {
+test('dashboard overview does not expose project identifiers', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   try {
     await server.ready();
@@ -160,7 +163,7 @@ test('dashboard overview project identifiers publish validation constraints', as
       paths?: Record<string, Record<string, { parameters?: Array<{ name?: string; in?: string; schema?: { pattern?: string; minLength?: number; maxLength?: number } }> }>>;
     };
     const projectId = document.paths?.['/v1/dashboard/overview']?.get?.parameters?.find((parameter) => parameter.name === 'projectId' && parameter.in === 'query');
-    expect(projectId?.schema).toMatchObject({ pattern: '^[A-Za-z0-9_-]{1,80}$', minLength: 1, maxLength: 80 });
+    expect(projectId).toBeUndefined();
   } finally {
     await server.close();
   }
@@ -548,7 +551,7 @@ test('administrative, notification, and diagnostic contracts publish structured 
       ['/v1/dashboard/discord/status', 'get', '200', ['botEnabled', 'guilds']],
       ['/v1/dashboard/discord/perks', 'get', '200', ['perks']],
       ['/v1/dashboard/discord/perks', 'post', '201', ['id', 'guildId', 'discordRoleId', 'appRoleId']],
-      ['/v1/dashboard/backup/export', 'get', '200', ['backupVersion', 'allowedUsers', 'projects', 'artifactProjectLinks', 'devices', 'billing', 'identities']],
+      ['/v1/dashboard/backup/export', 'get', '200', ['backupVersion', 'allowedUsers', 'devices', 'billing', 'identities']],
       ['/v1/dashboard/keys/bulk-revoke', 'post', '200', ['revoked']],
       ['/v1/dashboard/keys/bulk-extend-expiry', 'post', '200', ['extended']],
       ['/v1/dashboard/keys/bulk-set-daily-limit', 'post', '200', ['updated']],
@@ -567,6 +570,9 @@ test('administrative, notification, and diagnostic contracts publish structured 
       expect(schema).toBeDefined();
       for (const field of fields) expect(Object.keys(schema?.properties ?? {})).toContain(field);
     }
+    const backupFields = Object.keys(document.paths?.['/v1/dashboard/backup/export']?.get?.responses?.['200']?.content?.['application/json']?.schema?.properties ?? {});
+    expect(backupFields).not.toContain('projects');
+    expect(backupFields).not.toContain('artifactProjectLinks');
     const jobsSchema = document.paths?.['/v1/dashboard/support-bundle']?.get?.responses?.['200']?.content?.['application/json']?.schema?.properties?.jobs as {
       items?: { additionalProperties?: boolean; properties?: Record<string, unknown> };
     } | undefined;

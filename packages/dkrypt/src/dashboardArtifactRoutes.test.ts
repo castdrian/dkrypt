@@ -65,7 +65,7 @@ test('artifact listing and pinning use native dashboard routes', async () => {
     const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.manageAutomation) };
     const listed = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/artifacts?projectId=default&limit=5&offset=2&q=example&channel=appstore&archived=true',
+      url: '/v1/dashboard/artifacts?limit=5&offset=2&q=example&channel=appstore&archived=true',
       headers,
     });
     const pinned = await server.inject({
@@ -74,12 +74,14 @@ test('artifact listing and pinning use native dashboard routes', async () => {
       headers,
       payload: { pinned: true },
     });
-    const detail = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1?projectId=default', headers });
+    const detail = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1', headers });
+
+    const { projectIds: _projectIds, ...visibleRecord } = record;
 
     expect(listed.statusCode).toBe(200);
     expect(JSON.parse(listed.body)).toEqual({
       artifacts: [{
-        ...record,
+        ...visibleRecord,
         filePath: undefined,
         fileUrl: '/v1/dashboard/artifacts/artifact-1/file',
         createdAt: '1970-01-01T00:00:00.001Z',
@@ -111,7 +113,7 @@ test('artifact listing and pinning use native dashboard routes', async () => {
   }
 });
 
-test('artifact package contents are paginated, filterable, and project-scoped', async () => {
+test('artifact package contents are paginated and filterable without a project selector', async () => {
   const record = artifact({ projectIds: ['default'] });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
@@ -127,22 +129,23 @@ test('artifact package contents are paginated, filterable, and project-scoped', 
 
   try {
     const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
-    const firstPage = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=default&limit=1', headers });
-    const filtered = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=default&q=info', headers });
-    const hidden = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=private', headers });
+    const firstPage = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?limit=1', headers });
+    const filtered = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?q=info', headers });
+    const hidden = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents', headers });
 
     expect(firstPage.statusCode).toBe(200);
     expect(firstPage.json()).toMatchObject({ total: 3, nextOffset: 1, entries: [{ path: 'Payload/App.app/App' }] });
     expect(filtered.statusCode).toBe(200);
     expect(filtered.json()).toMatchObject({ total: 1, entries: [{ path: 'Payload/App.app/Info.plist' }] });
-    expect(hidden.statusCode).toBe(404);
+    expect(hidden.statusCode).toBe(200);
+    expect(hidden.json()).toMatchObject({ total: 3 });
   } finally {
     await server.close();
   }
 });
 
-test('artifact listing and pinning keep their permission and project boundaries', async () => {
-  const record = artifact({ projectIds: ['private'] });
+test('artifact listing and pinning keep their permission boundaries across the shared account library', async () => {
+  const record = artifact();
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
     canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
@@ -155,7 +158,7 @@ test('artifact listing and pinning keep their permission and project boundaries'
     const missingDecryptPermission = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts', headers: { cookie: sessionCookie() } });
     const inaccessibleProject = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/artifacts?projectId=private',
+      url: '/v1/dashboard/artifacts',
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
     });
     const missingPinPermission = await server.inject({
@@ -171,15 +174,15 @@ test('artifact listing and pinning keep their permission and project boundaries'
       payload: { pinned: true },
     });
     const missingDetailPermission = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1', headers: { cookie: sessionCookie() } });
-    const inaccessibleDetail = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1?projectId=private', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) } });
+    const inaccessibleDetail = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) } });
 
     expect(unauthenticated.statusCode).toBe(401);
     expect(missingDecryptPermission.statusCode).toBe(403);
-    expect(inaccessibleProject.statusCode).toBe(404);
+    expect(inaccessibleProject.statusCode).toBe(200);
     expect(missingPinPermission.statusCode).toBe(403);
     expect(inaccessibleArtifact.statusCode).toBe(404);
     expect(missingDetailPermission.statusCode).toBe(403);
-    expect(inaccessibleDetail.statusCode).toBe(404);
+    expect(inaccessibleDetail.statusCode).toBe(200);
   } finally {
     await server.close();
   }
@@ -213,10 +216,10 @@ test('single artifact mutations report no-op state so clients do not offer undo'
   }
 });
 
-test('bulk pinning updates only artifacts in projects the manager can access', async () => {
+test('bulk pinning updates artifacts across the shared account library', async () => {
   const records = new Map([
     ['artifact-a', artifact({ id: 'artifact-a' })],
-    ['artifact-b', artifact({ id: 'artifact-b', projectIds: ['private'] })],
+    ['artifact-b', artifact({ id: 'artifact-b' })],
   ]);
   const calls: Array<{ ids: string[]; pinned: boolean }> = [];
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
@@ -246,7 +249,7 @@ test('bulk pinning updates only artifacts in projects the manager can access', a
       headers: { cookie: sessionCookie(PermissionFlag.manageAutomation) },
       payload: { ids: ['artifact-a'], pinned: true },
     });
-    const inaccessible = await server.inject({
+    const sharedLibrary = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/artifacts/bulk-pin',
       headers: { cookie: sessionCookie(PermissionFlag.manageAutomation) },
@@ -260,9 +263,9 @@ test('bulk pinning updates only artifacts in projects the manager can access', a
       changedIds: ['artifact-a'],
       artifacts: [{ artifactId: 'artifact-a', pinned: true, pinnedAt: '1970-01-01T00:00:00.004Z' }],
     });
-    expect(inaccessible.statusCode).toBe(404);
-    expect(calls).toEqual([{ ids: ['artifact-a'], pinned: true }]);
-    expect(audits).toEqual([['root', 'artifact.pin', 'artifact-a']]);
+    expect(sharedLibrary.statusCode).toBe(200);
+    expect(calls).toEqual([{ ids: ['artifact-a'], pinned: true }, { ids: ['artifact-a', 'artifact-b'], pinned: true }]);
+    expect(audits).toEqual([['root', 'artifact.pin', 'artifact-a'], ['root', 'artifact.pin', 'artifact-a'], ['root', 'artifact.pin', 'artifact-b']]);
   } finally {
     await server.close();
   }
@@ -309,10 +312,10 @@ test('bulk pinning requires storage permission and rejects oversized selections'
   }
 });
 
-test('archive and restore require storage permission, project access, and record audit events', async () => {
+test('archive and restore require storage permission and record audit events across the shared library', async () => {
   const records = new Map([
     ['artifact-a', artifact({ id: 'artifact-a' })],
-    ['artifact-b', artifact({ id: 'artifact-b', projectIds: ['private'] })],
+    ['artifact-b', artifact({ id: 'artifact-b' })],
   ]);
   const calls: Array<{ ids: string[]; archived: boolean }> = [];
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
@@ -356,7 +359,7 @@ test('archive and restore require storage permission, project access, and record
       headers,
       payload: { ids: ['artifact-a'], archived: false },
     });
-    const inaccessible = await server.inject({
+    const sharedArtifact = await server.inject({
       method: 'PUT',
       url: '/v1/dashboard/artifacts/artifact-b/archive',
       headers,
@@ -378,12 +381,17 @@ test('archive and restore require storage permission, project access, and record
       changedIds: ['artifact-a'],
       artifacts: [{ artifactId: 'artifact-a', archived: false, previousArchivedAt: 4 }],
     });
-    expect(inaccessible.statusCode).toBe(404);
+    expect(sharedArtifact.statusCode).toBe(200);
     expect(denied.statusCode).toBe(403);
-    expect(calls).toEqual([{ ids: ['artifact-a'], archived: true }, { ids: ['artifact-a'], archived: false }]);
+    expect(calls).toEqual([
+      { ids: ['artifact-a'], archived: true },
+      { ids: ['artifact-a'], archived: false },
+      { ids: ['artifact-b'], archived: true },
+    ]);
     expect(audits).toEqual([
       ['root', 'artifact.archive', 'artifact-a'],
       ['root', 'artifact.restore', 'artifact-a'],
+      ['root', 'artifact.archive', 'artifact-b'],
     ]);
   } finally {
     await server.close();

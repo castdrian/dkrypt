@@ -9,7 +9,6 @@
   import { fetchDashboardArtifact, fetchDashboardArtifactContents, type ArtifactPackageEntry, type ArtifactRecord } from '#lib/api';
   import { appDisplayName, appIconUrl } from '#lib/appCatalog.svelte';
   import { fmtSize, fmtTime } from '#lib/format.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { artifactDetailJumpState } from '#lib/ui.svelte';
   import { setQueryParams } from '#lib/urlState';
   import { showToast } from '#lib/ui.svelte';
@@ -27,20 +26,20 @@
   let contentsTotal = $state(0);
   let requestVersion = 0;
 
-  async function loadArtifact(id: string, projectId: string): Promise<void> {
+  async function loadArtifact(id: string): Promise<void> {
     const version = ++requestVersion;
     loading = true;
     error = '';
     open = true;
     try {
-      const result = await fetchDashboardArtifact(id, projectId);
+      const result = await fetchDashboardArtifact(id);
       if (version === requestVersion) {
         artifact = result;
         contentsOpen = false;
         contentsEntries = [];
         contentsNextOffset = undefined;
         contentsQuery = '';
-        setQueryParams({ artifact: id, projectId });
+        setQueryParams({ artifact: id });
       }
     } catch (cause) {
       if (version === requestVersion) error = cause instanceof Error ? cause.message : 'Could not load artifact details';
@@ -51,14 +50,13 @@
 
   $effect(() => {
     const id = artifactDetailJumpState.id;
-    const projectId = projectSelectionState.id;
     if (id === '') {
       closeInspector(false);
       return;
     }
     if (!id) return;
     artifactDetailJumpState.id = null;
-    void loadArtifact(id, projectId);
+    void loadArtifact(id);
   });
 
   function closeInspector(next: boolean): void {
@@ -79,7 +77,6 @@
   async function copyDeepLink(): Promise<void> {
     const url = new URL(location.href);
     url.searchParams.set('artifact', artifact?.id ?? '');
-    url.searchParams.set('projectId', projectSelectionState.id);
     await navigator.clipboard.writeText(url.toString());
     showToast('Artifact link copied', 'success');
   }
@@ -87,7 +84,6 @@
   async function shareArtifact(): Promise<void> {
     const url = new URL(location.href);
     url.searchParams.set('artifact', artifact?.id ?? '');
-    url.searchParams.set('projectId', projectSelectionState.id);
     try {
       const nativeShare = Reflect.get(navigator, 'share');
       const shared = typeof nativeShare === 'function';
@@ -106,7 +102,6 @@
     contentsError = '';
     try {
       const page = await fetchDashboardArtifactContents(artifact.id, {
-        projectId: projectSelectionState.id,
         q: contentsQuery.trim() || undefined,
         offset: reset ? 0 : contentsNextOffset ?? 0,
         limit: 100,

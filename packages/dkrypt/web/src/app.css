@@ -479,6 +479,22 @@ summary:focus-visible {
 	padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
 }
 
+:root[data-one-thumb='true'] .mobile-primary-nav {
+	left: auto;
+	right: 0.5rem;
+	width: min(22rem, calc(100vw - 1rem));
+	border-radius: 1rem;
+}
+
+:root[data-one-thumb='true'] .mobile-tab-label {
+	display: none;
+}
+
+:root[data-one-thumb='true'] .mobile-primary-nav [data-slot='button'] {
+	min-width: 2.75rem;
+	min-height: 2.75rem;
+}
+
 .account-menu {
 	position: fixed !important;
 	top: calc(env(safe-area-inset-top) + 3.5rem) !important;

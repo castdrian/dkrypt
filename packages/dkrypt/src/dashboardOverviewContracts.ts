@@ -1,6 +1,6 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { ApiErrorEnvelope } from '#contracts.js';
-import { bundleIdSchema as BundleId, identifierSchema, projectIdentifierSchema } from '#apiCommonContracts.js';
+import { bundleIdSchema as BundleId, identifierSchema } from '#apiCommonContracts.js';
 import { jobFailureClassSchema as JobFailureClass } from '#util/failureCategory.js';
 import {
   dashboardDeviceResponseSchema,
@@ -10,10 +10,9 @@ import {
 } from '#dashboardModelsContracts.js';
 
 const Identifier = identifierSchema;
-export const dashboardOverviewQuerySchema = Type.Object({ projectId: Type.Optional(projectIdentifierSchema) }, { additionalProperties: true });
+export const dashboardOverviewQuerySchema = Type.Object({}, { additionalProperties: true });
 
 export const dashboardOverviewResponseSchema = Type.Object({
-  projectId: Identifier,
   settings: dashboardSettingsResponseSchema,
   devices: Type.Array(dashboardDeviceResponseSchema),
   statusDevices: Type.Array(Type.Object({

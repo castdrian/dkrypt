@@ -11,14 +11,15 @@ import { scopedLogger } from '#logger.js';
 const log = scopedLogger('jobs');
 import { sendMailToUser } from '#mail.js';
 import { sendPushToUser } from '#push.js';
-import { DEFAULT_PROJECT_ID, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getProject, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getProject, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { uninstallFromDevice } from '#appStoreInstall.js';
 import { getCachedDeviceHealth } from '#deviceHealthCache.js';
 import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
+import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
 import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, type ArtifactRecord } from '#artifacts.js';
-import { admitQuotaJob, closePersistedJobs, findPersistedActiveJobId, findPersistedReusableCompletedJobIds, loadPersistedJobs, mergeDecryptQuotaOwner, reconcileDecryptQuota, replacePersistedJobs, settleDecryptQuota, type JobBuildLookup } from '#jobs/repository.js';
+import { admitQuotaJob, closePersistedJobs, findPersistedActiveJobId, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, loadPersistedJobs, mergeDecryptQuotaOwner, reconcileDecryptQuota, replacePersistedJobs, settleDecryptQuota, type JobBuildLookup } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
@@ -162,7 +163,7 @@ export function recoverPersistedActiveJobs(saved: Job[], now = Date.now()): { qu
   for (const job of saved) {
     const restored = { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, executionStage: undefined, childProcess: undefined, waiters: [] };
     if (restored.status === 'queued') {
-      if (restored.source === 'scheduler') {
+      if (restored.source === 'scheduler' && restored.pausedAt === undefined) {
         const schedulerDeadlineAt = restored.createdAt + SCHEDULER_JOB_TIMEOUT_MS;
         restored.schedulerDeadlineAt ??= schedulerDeadlineAt;
         restored.deadlineAt = restored.schedulerDeadlineAt;
@@ -194,8 +195,10 @@ function loadActiveJobs(): void {
     const { queued, interrupted } = recoverPersistedActiveJobs(saved);
     for (const job of queued) {
       jobs.set(job.id, job);
-      insertByPriority(job.id, job.priority);
-      scheduleQueuedDeadline(job);
+      if (job.pausedAt === undefined) {
+        insertByPriority(job.id, job.priority);
+        scheduleQueuedDeadline(job);
+      }
     }
     for (const job of interrupted) recordJobHistory(toHistoryEntry(job));
     persistActiveJobs();
@@ -219,8 +222,10 @@ function loadDatabaseJobs(): boolean {
   for (const job of queued) {
     const restoredJob = { ...job, waiters: [] };
     jobs.set(restoredJob.id, restoredJob);
-    insertByPriority(restoredJob.id, restoredJob.priority);
-    scheduleQueuedDeadline(restoredJob);
+    if (restoredJob.pausedAt === undefined) {
+      insertByPriority(restoredJob.id, restoredJob.priority);
+      scheduleQueuedDeadline(restoredJob);
+    }
   }
   for (const job of interrupted) recordJobHistory(toHistoryEntry(job));
   replacePersistedJobs(jobs.values());
@@ -332,7 +337,12 @@ function createCachedJob(
 }
 
 function insertByPriority(id: string, priority: number): void {
-  const idx = queue.findIndex((qid) => (jobs.get(qid)?.priority ?? 0) < priority);
+  const target = jobs.get(id);
+  const targetScore = target ? effectiveQueuePriority(target) : priority;
+  const idx = queue.findIndex((qid) => {
+    const candidate = jobs.get(qid);
+    return candidate ? effectiveQueuePriority(candidate) < targetScore : false;
+  });
   if (idx === -1) queue.push(id);
   else queue.splice(idx, 0, id);
 }
@@ -470,9 +480,10 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     priority = 0,
     preferredDeviceId,
     apiKeyId,
-    projectId = DEFAULT_PROJECT_ID,
+    projectId: _requestedProjectId = DEFAULT_PROJECT_ID,
     minimumOsVersion,
   } = options;
+  const projectId = DEFAULT_PROJECT_ID;
   if (!acceptingJobs) throw new JobsShuttingDownError();
   if (options.billingOwnerId && options.billingOwnerId !== 'root' && !hasPermission(getUserEffectivePermissions(options.billingOwnerId), PermissionFlag.requestDecrypt)) throw new AutomationOwnerUnavailableError();
   const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId };
@@ -530,7 +541,18 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
 
   if (billingOwnerId) {
     const entitlement = getBillingEntitlements(billingOwnerId);
-    if (entitlement.planId !== 'viewer' && !entitlement.legacy) admitQuotaJob(job, billingOwnerId, entitlement.dailyDecryptLimit);
+    if (entitlement.planId !== 'viewer' && !entitlement.legacy) {
+      const previousUsage = entitlement.dailyDecryptLimit === undefined ? undefined : getDecryptQuotaUsage(billingOwnerId, entitlement.dailyDecryptLimit).used;
+      admitQuotaJob(job, billingOwnerId, entitlement.dailyDecryptLimit);
+      if (entitlement.dailyDecryptLimit !== undefined && previousUsage !== undefined) {
+        const nextUsage = getDecryptQuotaUsage(billingOwnerId, entitlement.dailyDecryptLimit).used;
+        for (const threshold of getUserPrefs(billingOwnerId).decryptUsageAlertThresholds ?? []) {
+          if (previousUsage * 100 < entitlement.dailyDecryptLimit * threshold && nextUsage * 100 >= entitlement.dailyDecryptLimit * threshold) {
+            recordDecryptQuotaThresholdNotice(billingOwnerId, nextUsage, entitlement.dailyDecryptLimit, threshold);
+          }
+        }
+      }
+    }
   }
 
   jobs.set(job.id, job);
@@ -560,7 +582,7 @@ class ProjectQuotaExceededError extends Error {
 function requireProjectAvailable(projectId: string): void {
   const project = getProject(projectId);
   if (!project || project.archivedAt !== undefined) {
-    const error = new Error('project is unavailable');
+    const error = new Error('account settings are unavailable');
     Object.assign(error, { statusCode: 404 });
     throw error;
   }
@@ -570,7 +592,7 @@ function enforceProjectQuotas(projectId: string): void {
   const project = getProject(projectId)!;
   const active = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId && (job.status === 'queued' || job.status === 'running'));
   if (project.maxConcurrentJobs && active.length >= project.maxConcurrentJobs) {
-    throw new ProjectQuotaExceededError('project concurrency limit reached');
+    throw new ProjectQuotaExceededError('account concurrency limit reached');
   }
   if (!project.dailyJobQuota) return;
   const now = new Date();
@@ -578,7 +600,7 @@ function enforceProjectQuotas(projectId: string): void {
   const knownIds = new Set([...jobs.values()].map((job) => job.id));
   const jobsToday = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId && job.createdAt >= dayStart).length;
   const historyToday = getAllJobHistory().filter((entry) => (entry.projectId ?? DEFAULT_PROJECT_ID) === projectId && entry.createdAt >= dayStart && !knownIds.has(entry.id)).length;
-  if (jobsToday + historyToday >= project.dailyJobQuota) throw new ProjectQuotaExceededError('project daily job limit reached');
+  if (jobsToday + historyToday >= project.dailyJobQuota) throw new ProjectQuotaExceededError('account daily job limit reached');
 }
 
 export function getJob(id: string): Job | undefined {
@@ -614,7 +636,7 @@ export function mergeActiveJobOwner(targetUserId: string, sourceUserId: string):
 
 export function getQueueInfo(jobId: string): { position: number; total: number } | undefined {
   const job = jobs.get(jobId);
-  if (!job || job.status === 'done' || job.status === 'failed') return undefined;
+  if (!job || job.status === 'done' || job.status === 'failed' || job.pausedAt !== undefined) return undefined;
 
   const runningIds = [...jobs.values()].filter((j) => j.status === 'running').map((j) => j.id);
   const ordered = [...runningIds, ...queue];
@@ -665,6 +687,7 @@ export function getJobQueueSummaries(sourceJobs: readonly Job[], now = Date.now(
 
 function getCurrentQueueReason(job: Job): string | undefined {
   if (job.status !== 'queued') return undefined;
+  if (job.pausedAt !== undefined) return 'Paused by you';
   const concurrencyBlocker = getJobConcurrencyBlocker(job);
   if (concurrencyBlocker) return concurrencyBlocker;
   if (requiresServerSideAppStoreAttempt(job)) {
@@ -804,6 +827,46 @@ export function cancelQueuedJob(id: string, cancelledBy: string): boolean {
   return true;
 }
 
+export function pauseQueuedJob(id: string, pausedBy: string): boolean {
+  const job = jobs.get(id);
+  if (!job || job.status !== 'queued' || job.pausedAt !== undefined) return false;
+  const now = Date.now();
+  const queueIndex = queue.indexOf(id);
+  if (queueIndex !== -1) queue.splice(queueIndex, 1);
+  clearQueuedDeadline(job.id);
+  job.pausedAt = now;
+  job.pausedRemainingMs = job.deadlineAt === undefined ? undefined : Math.max(0, job.deadlineAt - now);
+  job.deadlineAt = undefined;
+  job.progress = 'Paused by you';
+  job.queueReason = 'Paused by you';
+  appendJobTimelineEvent(job, 'Paused in queue', 'queued', now);
+  log.info('queued job paused', { jobId: id, bundleId: job.bundleId, pausedBy });
+  persistActiveJobs();
+  emitJobsChanged();
+  return true;
+}
+
+export function resumePausedJob(id: string, resumedBy: string): boolean {
+  const job = jobs.get(id);
+  if (!job || job.status !== 'queued' || job.pausedAt === undefined) return false;
+  const now = Date.now();
+  job.deadlineAt = job.pausedRemainingMs === undefined ? undefined : now + job.pausedRemainingMs;
+  if (job.schedulerDeadlineAt !== undefined && job.deadlineAt !== undefined) job.schedulerDeadlineAt = job.deadlineAt;
+  job.pausedAt = undefined;
+  job.pausedRemainingMs = undefined;
+  job.progress = 'queued';
+  job.queueReason = undefined;
+  job.lastQueueReason = undefined;
+  appendJobTimelineEvent(job, 'Resumed in queue', 'queued', now);
+  insertByPriority(job.id, job.priority);
+  scheduleQueuedDeadline(job);
+  log.info('queued job resumed', { jobId: id, bundleId: job.bundleId, resumedBy });
+  persistActiveJobs();
+  emitJobsChanged();
+  pumpWorkers();
+  return true;
+}
+
 export function cancelRunningJob(id: string, cancelledBy: string): boolean {
   const job = jobs.get(id);
   if (!job || job.status !== 'running') return false;
@@ -843,7 +906,7 @@ export function releasePinnedJobsForDevice(deviceId: string): number {
 
 export function prioritizeQueuedJob(id: string, projectId?: string): boolean {
   const job = jobs.get(id);
-  if (!job || job.status !== 'queued' || (projectId && (job.projectId ?? DEFAULT_PROJECT_ID) !== projectId)) return false;
+  if (!job || job.status !== 'queued' || job.pausedAt !== undefined || (projectId && (job.projectId ?? DEFAULT_PROJECT_ID) !== projectId)) return false;
 
   const targetProjectId = projectId ?? job.projectId ?? DEFAULT_PROJECT_ID;
   const scopedQueue = queue.filter((jobId) => (jobs.get(jobId)?.projectId ?? DEFAULT_PROJECT_ID) === targetProjectId);
@@ -1008,7 +1071,7 @@ function getJobConcurrencyBlocker(job: Job): string | undefined {
 function takeNextDispatchableJobId(device: DeviceRecord): string | undefined {
   for (let i = 0; i < queue.length; i++) {
     const job = jobs.get(queue[i]);
-    if (!job || !isJobDispatchable(job, device)) continue;
+    if (!job || job.pausedAt !== undefined || !isJobDispatchable(job, device)) continue;
     if (getJobConcurrencyBlocker(job)) continue;
     queue.splice(i, 1);
     return job.id;
@@ -1019,7 +1082,7 @@ function takeNextDispatchableJobId(device: DeviceRecord): string | undefined {
 function takeNextOfflineJobId(): string | undefined {
   for (let i = 0; i < queue.length; i++) {
     const job = jobs.get(queue[i]);
-    if (!job || !canStartOfflineAttempt(job) || getJobConcurrencyBlocker(job)) continue;
+    if (!job || job.pausedAt !== undefined || !canStartOfflineAttempt(job) || getJobConcurrencyBlocker(job)) continue;
     queue.splice(i, 1);
     return job.id;
   }
@@ -1056,6 +1119,11 @@ function pumpWorkers(): void {
   }
   captureQueuedBlockers();
   expireOverdueQueuedJobs();
+  const fairOrder = sortQueuedByEffectivePriority(queue.flatMap((id) => {
+    const job = jobs.get(id);
+    return job && job.pausedAt === undefined ? [job] : [];
+  }));
+  queue.splice(0, queue.length, ...fairOrder.map((job) => job.id));
   if (!acceptingJobs) return;
   while (busyOfflineWorkers.size < config.appStoreOfflineMaxWorkers) {
     const jobId = takeNextOfflineJobId();
@@ -1351,6 +1419,7 @@ async function monitorQueueSlo(): Promise<void> {
   const historicalP95ByProject = historicalDurationP95ByProject(active, completedHistory);
   const now = Date.now();
   for (const job of active) {
+    if (job.pausedAt !== undefined) continue;
     const projectId = job.projectId ?? DEFAULT_PROJECT_ID;
     const queue = job.status === 'queued' ? getQueueInfo(job.id) : undefined;
     const assessment = assessQueueServiceObjective({

@@ -48,18 +48,18 @@ test('job repository indexes existing JSON jobs after SQLite migration', async (
     repository = createJobRepository(database);
 
     expect(repository.findActiveId({
-      projectId: 'workspace-legacy',
+      projectId: 'default',
       bundleId: 'com.example.legacy',
       externalVersionId: 'legacy-build',
       testFlightBuildId: 501,
     })).toBe('legacy-job');
     expect(repository.findActiveId({
-      projectId: 'workspace-other',
+      projectId: 'other-scope',
       bundleId: 'com.example.legacy',
       externalVersionId: 'legacy-build',
       testFlightBuildId: 501,
     })).toBeUndefined();
-    expect(repository.load()).toMatchObject([{ id: 'legacy-job', projectId: 'workspace-legacy', status: 'queued' }]);
+    expect(repository.load()).toMatchObject([{ id: 'legacy-job', projectId: 'default', status: 'queued' }]);
   } finally {
     repository?.close();
     await rm(stateDir, { recursive: true, force: true });

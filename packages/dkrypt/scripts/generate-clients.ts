@@ -43,6 +43,25 @@ export interface DkryptRequestInit extends RequestInit {
   path: string;
 }
 
+export interface DkryptJob {
+  id: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  progress?: string;
+  error?: string;
+  artifactId?: string;
+}
+
+export interface DkryptDecryptOptions {
+  version?: string;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
+export interface DkryptArtifactPage {
+  artifacts: Array<{ id: string; bundleId: string; versionLabel?: string; fileSizeBytes?: number }>;
+  nextCursor?: string;
+}
+
 export class DkryptClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
@@ -75,6 +94,47 @@ export class DkryptClient {
     });
     if (!response.ok) throw new Error(await this.responseError(response));
     return response.arrayBuffer();
+  }
+
+  async decrypt(bundleId: string, options: DkryptDecryptOptions = {}): Promise<DkryptJob> {
+    const idempotencyKey = options.idempotencyKey ?? crypto.randomUUID();
+    const { version, signal } = options;
+    return this.request<DkryptJob>({
+      path: '/v1/decrypts',
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ bundleId, ...(version ? { version } : {}) }),
+      signal,
+    });
+  }
+
+  getJob(id: string, signal?: AbortSignal): Promise<DkryptJob> {
+    return this.request<DkryptJob>({ path: \`/v1/jobs/\${encodeURIComponent(id)}\`, signal });
+  }
+
+  waitForJob(id: string, timeoutSeconds = 25, signal?: AbortSignal): Promise<DkryptJob> {
+    const timeout = Math.max(1, Math.min(25, Math.floor(timeoutSeconds)));
+    return this.request<DkryptJob>({ path: \`/v1/jobs/\${encodeURIComponent(id)}/wait?timeoutSeconds=\${timeout}\`, signal });
+  }
+
+  async *followJob(id: string, signal?: AbortSignal): AsyncGenerator<DkryptJob> {
+    while (!signal?.aborted) {
+      const job = await this.waitForJob(id, 25, signal);
+      yield job;
+      if (job.status === 'done' || job.status === 'failed') return;
+    }
+  }
+
+  listArtifacts(options: { q?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<DkryptArtifactPage> {
+    const params = new URLSearchParams();
+    if (options.q) params.set('q', options.q);
+    params.set('limit', String(Math.max(1, Math.min(100, Math.floor(options.limit ?? 100)))));
+    if (options.cursor) params.set('cursor', options.cursor);
+    return this.request<DkryptArtifactPage>({ path: \`/v1/artifacts?\${params}\`, signal: options.signal });
+  }
+
+  downloadArtifact(id: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+    return this.download(\`/v1/artifacts/\${encodeURIComponent(id)}/file\`, { signal });
   }
 
   private createHeaders(headers: RequestInit['headers'] | undefined, accept: string): Headers {
@@ -134,8 +194,48 @@ class DkryptClient:
     def download(self, path: str) -> bytes:
         return self._send("GET", path, None, "application/octet-stream")
 
-    def _send(self, method: str, path: str, payload: bytes | None, accept: str) -> bytes:
+    def decrypt(self, bundle_id: str, version: str | None = None, idempotency_key: str | None = None) -> object:
+        from uuid import uuid4
+        headers = {"Idempotency-Key": idempotency_key or str(uuid4())}
+        body = {"bundleId": bundle_id}
+        if version:
+            body["version"] = version
+        payload = json.dumps(body).encode("utf-8")
+        return json.loads(self._send("POST", "/v1/decrypts", payload, "application/json", headers).decode("utf-8"))
+
+    def get_job(self, job_id: str) -> object:
+        from urllib.parse import quote
+        return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}")
+
+    def wait_for_job(self, job_id: str, timeout_seconds: int = 25) -> object:
+        from urllib.parse import quote
+        from urllib.parse import urlencode
+        timeout = max(1, min(25, int(timeout_seconds)))
+        return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}/wait?{urlencode({'timeoutSeconds': timeout})}")
+
+    def follow_job(self, job_id: str):
+        while True:
+            job = self.wait_for_job(job_id)
+            yield job
+            if isinstance(job, dict) and job.get("status") in ("done", "failed"):
+                return
+
+    def list_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> object:
+        from urllib.parse import urlencode
+        params = {"limit": max(1, min(100, int(limit)))}
+        if query:
+            params["q"] = query
+        if cursor:
+            params["cursor"] = cursor
+        return self.request("GET", f"/v1/artifacts?{urlencode(params)}")
+
+    def download_artifact(self, artifact_id: str) -> bytes:
+        from urllib.parse import quote
+        return self.download(f"/v1/artifacts/{quote(artifact_id, safe='')}/file")
+
+    def _send(self, method: str, path: str, payload: bytes | None, accept: str, extra_headers: dict[str, str] | None = None) -> bytes:
         headers = {"Accept": accept}
+        headers.update(extra_headers or {})
         if payload is not None:
             headers["Content-Type"] = "application/json"
         request = Request(self._build_url(path), data=payload, headers=headers, method=method.upper())

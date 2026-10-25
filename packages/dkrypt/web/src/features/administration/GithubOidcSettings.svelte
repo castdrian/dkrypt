@@ -4,7 +4,6 @@
   import Input from '#lib/components/ui/Input.svelte';
   import { createGithubOidcTrust, fetchGithubOidcPolicies, revokeGithubOidcTrust, type GithubOidcTrustPolicy } from '#lib/api';
   import IntegrationOwnershipControl from '#features/administration/IntegrationOwnershipControl.svelte';
-  import { projectSelectionState } from '#lib/projectSelection.svelte';
   import { confirmDialog, showToast } from '#lib/ui.svelte';
 
   let policies = $state<GithubOidcTrustPolicy[]>([]);
@@ -27,7 +26,7 @@
   async function create(): Promise<void> {
     busy = true;
     try {
-      await createGithubOidcTrust({ repositoryId: repositoryId.trim(), workflowRef: workflowRef.trim(), ...(ref.trim() ? { ref: ref.trim() } : {}), ...(environment.trim() ? { environment: environment.trim() } : {}), audience: audience.trim(), projectId: projectSelectionState.id, bundleIds: [...new Set(bundleIds.split(',').map((value) => value.trim()).filter(Boolean))], allowTestFlight });
+      await createGithubOidcTrust({ repositoryId: repositoryId.trim(), workflowRef: workflowRef.trim(), ...(ref.trim() ? { ref: ref.trim() } : {}), ...(environment.trim() ? { environment: environment.trim() } : {}), audience: audience.trim(), bundleIds: [...new Set(bundleIds.split(',').map((value) => value.trim()).filter(Boolean))], allowTestFlight });
       repositoryId = '';
       workflowRef = '';
       ref = '';
@@ -50,7 +49,7 @@
 </script>
 
 <Card title="GitHub Actions OIDC" class="mt-4">
-  <p class="mb-3 text-xs text-muted">Trust only an exact repository ID, workflow, ref or environment, and audience. Tokens can use the existing decrypt, job-status, and IPA routes only within the selected project and bundle scope. No dashboard access is granted.</p>
+  <p class="mb-3 text-xs text-muted">Trust only an exact repository ID, workflow, ref or environment, and audience. Tokens can use the existing decrypt, job-status, and IPA routes only for the configured bundles. No dashboard access is granted.</p>
   <div class="grid gap-2 sm:grid-cols-2">
     <label class="text-xs">Repository ID<Input id="oidc-repository-id" bind:value={repositoryId} placeholder="123456789" /></label>
     <label class="text-xs">Workflow ref<Input id="oidc-workflow-ref" bind:value={workflowRef} placeholder="owner/repo/.github/workflows/decrypt.yml@refs/heads/main" /></label>
@@ -64,7 +63,7 @@
   <div class="mt-4 divide-y divide-border/70">
     {#each policies as policy (policy.id)}
       <div class="flex flex-wrap items-center justify-between gap-2 py-2 text-xs">
-        <div class="min-w-0"><div class="font-medium">Repository {policy.repositoryId} · {policy.projectId} · {policy.enabled ? 'Active' : 'Revoked'}</div><div class="break-all text-muted">{policy.workflowRef} · {policy.ref ?? policy.environment} · {policy.bundleIds.join(', ')}</div></div>
+        <div class="min-w-0"><div class="font-medium">Repository {policy.repositoryId} · {policy.enabled ? 'Active' : 'Revoked'}</div><div class="break-all text-muted">{policy.workflowRef} · {policy.ref ?? policy.environment} · {policy.bundleIds.join(', ')}</div></div>
         {#if policy.enabled}<Button size="sm" variant="secondary" disabled={busy} onclick={() => void revoke(policy.id)}>Revoke</Button>{/if}
       </div>
       <IntegrationOwnershipControl integrationId={policy.id} ownerName={policy.billingOwnerDisplayName} transferName={policy.billingOwnerTransferDisplayName} onSaved={load} />

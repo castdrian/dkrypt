@@ -54,16 +54,6 @@
             "schema": {
               "minLength": 1,
               "maxLength": 200,
-              "type": "string"
-            },
-            "in": "query",
-            "name": "projectId",
-            "required": false
-          },
-          {
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string"
             },
@@ -119,11 +109,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"
@@ -723,11 +708,6 @@
                           "maxLength": 200,
                           "type": "string"
                         },
-                        "projectId": {
-                          "minLength": 1,
-                          "maxLength": 200,
-                          "type": "string"
-                        },
                         "bundleId": {
                           "minLength": 3,
                           "maxLength": 200,
@@ -1260,11 +1240,6 @@
                           "maxLength": 200,
                           "type": "string"
                         },
-                        "projectId": {
-                          "minLength": 1,
-                          "maxLength": 200,
-                          "type": "string"
-                        },
                         "bundleId": {
                           "minLength": 3,
                           "maxLength": 200,
@@ -1764,11 +1739,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"
@@ -2563,11 +2533,6 @@
                     "maxLength": 64,
                     "pattern": "^v?\\d+(?:\\.\\d+)*(?:_\\d+)?$",
                     "type": "string"
-                  },
-                  "projectId": {
-                    "minLength": 1,
-                    "maxLength": 200,
-                    "type": "string"
                   }
                 }
               }
@@ -2614,11 +2579,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"
@@ -3103,11 +3063,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"
@@ -4145,11 +4100,6 @@
                         "type": "number"
                       }
                     }
-                  },
-                  "projectId": {
-                    "minLength": 1,
-                    "maxLength": 200,
-                    "type": "string"
                   }
                 }
               }
@@ -4196,11 +4146,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"
@@ -5054,16 +4999,6 @@
           },
           {
             "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            },
-            "in": "query",
-            "name": "projectId",
-            "required": false
-          },
-          {
-            "schema": {
               "maxLength": 200,
               "type": "string"
             },
@@ -5629,16 +5564,6 @@
               "maxLength": 200,
               "type": "string"
             },
-            "in": "query",
-            "name": "projectId",
-            "required": false
-          },
-          {
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            },
             "in": "path",
             "name": "id",
             "required": true
@@ -6144,16 +6069,6 @@
           "public"
         ],
         "parameters": [
-          {
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            },
-            "in": "query",
-            "name": "projectId",
-            "required": false
-          },
           {
             "schema": {
               "minLength": 1,
@@ -6679,11 +6594,6 @@
                                 "type": "string"
                               },
                               "correlationId": {
-                                "minLength": 1,
-                                "maxLength": 200,
-                                "type": "string"
-                              },
-                              "projectId": {
                                 "minLength": 1,
                                 "maxLength": 200,
                                 "type": "string"
@@ -7514,11 +7424,6 @@
                       "maxLength": 200,
                       "type": "string"
                     },
-                    "projectId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
                     "bundleId": {
                       "minLength": 3,
                       "maxLength": 200,
@@ -7912,11 +7817,6 @@
                       "type": "string"
                     },
                     "correlationId": {
-                      "minLength": 1,
-                      "maxLength": 200,
-                      "type": "string"
-                    },
-                    "projectId": {
                       "minLength": 1,
                       "maxLength": 200,
                       "type": "string"

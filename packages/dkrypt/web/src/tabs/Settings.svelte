@@ -11,7 +11,6 @@
   import BillingSettings from '#features/billing/BillingManagement.svelte';
   import ArtifactStorageSettings from '#features/artifacts/ArtifactStorageSettings.svelte';
   import DevicesSettings from '#features/devices/DevicesSettings.svelte';
-  import ProjectsSettings from '#features/administration/ProjectsSettings.svelte';
   import RolesSettings from '#features/administration/RolesSettings.svelte';
   import NotificationsSettings from '#features/settings/NotificationsSettings.svelte';
   import SystemDoctorSettings from '#features/administration/SystemDoctorSettings.svelte';
@@ -29,7 +28,6 @@
     { id: 'doctor', label: 'System', requires: [PermissionFlag.manageDevices] },
     { id: 'users', label: 'Users', requires: [PermissionFlag.viewUsers, PermissionFlag.manageUsers] },
     { id: 'roles', label: 'Roles', requires: [PermissionFlag.viewRoles, PermissionFlag.manageRoles] },
-    { id: 'projects', label: 'Projects', requires: [PermissionFlag.viewProjects, PermissionFlag.manageProjects] },
     { id: 'backup', label: 'Backup', requires: [PermissionFlag.viewBackup, PermissionFlag.manageBackup] },
     { id: 'testflight', label: 'TestFlight', requires: [PermissionFlag.manageTestFlightSubscriptions] },
     { id: 'billing', label: 'Billing', requires: [PermissionFlag.viewBilling, PermissionFlag.manageBilling] },
@@ -38,7 +36,7 @@
   const SETTINGS_GROUPS = [
     { id: 'personal', label: 'Personal', subtabs: ['personalization'] },
     { id: 'operations', label: 'Operations', subtabs: ['notifications', 'storage', 'devices', 'testflight'] },
-    { id: 'team', label: 'Team', subtabs: ['users', 'roles', 'projects'] },
+    { id: 'team', label: 'Team', subtabs: ['users', 'roles'] },
     { id: 'system', label: 'System', subtabs: ['doctor', 'backup', 'reports'] },
     { id: 'billing', label: 'Billing', subtabs: ['billing'] },
   ];
@@ -58,7 +56,6 @@
     doctor: 'system diagnostics health configuration',
     users: 'members accounts access permissions',
     roles: 'permissions roles access',
-    projects: 'projects scope members',
     backup: 'backup restore export',
     testflight: 'testflight subscriptions invites',
     billing: 'billing subscription payment stripe crypto',
@@ -153,11 +150,6 @@
 {#if hasAccess([PermissionFlag.viewRoles, PermissionFlag.manageRoles]) && mountedSubtabs.roles}
   <div class:hidden={tabState.settingsSubtab !== 'roles'}>
     <RolesSettings />
-  </div>
-{/if}
-{#if hasAccess([PermissionFlag.viewProjects, PermissionFlag.manageProjects]) && mountedSubtabs.projects}
-  <div class:hidden={tabState.settingsSubtab !== 'projects'}>
-    <ProjectsSettings />
   </div>
 {/if}
 {#if hasAccess([PermissionFlag.viewBackup, PermissionFlag.manageBackup]) && mountedSubtabs.backup}

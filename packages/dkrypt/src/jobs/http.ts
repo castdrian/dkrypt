@@ -46,7 +46,6 @@ export function jobSummary(job: Job) {
   return {
     id: job.id,
     correlationId: job.correlationId ?? job.id,
-    projectId: job.projectId ?? 'default',
     bundleId: job.bundleId,
     externalVersionId: job.externalVersionId,
     testflight: job.testflight
@@ -74,12 +73,13 @@ export function jobSummary(job: Job) {
     deadlineExceeded: job.deadlineExceeded,
     failureClass: job.failureClass,
     status: job.status,
+    pausedAt: job.pausedAt,
     progress: job.progress,
     warnings: job.warnings,
     error: job.error,
     artifactId: job.artifactId,
     artifactUrl: job.artifactId
-      ? `/v1/artifacts/${encodeURIComponent(job.artifactId)}/file?projectId=${encodeURIComponent(job.projectId ?? 'default')}`
+      ? `/v1/artifacts/${encodeURIComponent(job.artifactId)}/file`
       : undefined,
     cacheHit: job.cacheHit,
     sizeBytes: job.fileSizeBytes,

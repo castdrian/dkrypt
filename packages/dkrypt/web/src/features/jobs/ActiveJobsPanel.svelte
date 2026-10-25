@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GripVertical, PackageOpen } from "lucide-svelte";
+	import { GripVertical, PackageOpen, Pause, Play } from "lucide-svelte";
 	import CopyButton from "#components/CopyButton.svelte";
 	import AppIcon from "#components/AppIcon.svelte";
 	import EmptyState from "#components/EmptyState.svelte";
@@ -7,8 +7,10 @@
 	import {
 		cancelJob,
 		fetchJobEta,
+		pauseJob,
 		prioritizeJob,
 		reorderQueue,
+		resumeJob,
 		type ActiveJob,
 	} from "#lib/api";
 	import {
@@ -44,6 +46,7 @@
 	let highlightedId = $state<string | null>(null);
 	let bulkCancelling = $state(false);
 	let bulkPrioritizing = $state(false);
+	let changingPauseState = $state<Set<string>>(new Set());
 	$effect(() => {
 		const liveIds = new Set(jobs.map((j) => j.id));
 		if ([...selected].some((id) => !liveIds.has(id))) {
@@ -150,8 +153,20 @@
 		}
 	}
 
+	async function changePauseState(job: ActiveJob): Promise<void> {
+		changingPauseState = new Set(changingPauseState).add(job.id);
+		try {
+			if (job.pausedAt !== undefined) await resumeJob(job.id);
+			else await pauseJob(job.id);
+		} finally {
+			const next = new Set(changingPauseState);
+			next.delete(job.id);
+			changingPauseState = next;
+		}
+	}
+
 	const queuedJobIds = $derived(
-		jobs.filter((j) => j.status === "queued").map((j) => j.id),
+		jobs.filter((j) => j.status === "queued" && j.pausedAt === undefined).map((j) => j.id),
 	);
 	let etaByBundle = $state<Record<string, number | null>>({});
 	const fetchedBundles = new Set<string>();
@@ -258,7 +273,7 @@
 		{:else if jobs.length > 1 && queueEtaMs !== null}
 			<span
 				class="text-xs text-muted"
-				title="Latest predicted completion among queued jobs, based on recent project job durations"
+				title="Latest predicted completion among queued jobs, based on recent completed decrypts"
 			>
 				Queue clears in {fmtDurationApprox(queueEtaMs)}
 			</span>
@@ -297,7 +312,7 @@
 							data-job-id={j.id}
 							class:job-highlight={j.id === highlightedId}
 							class:queue-drag-over={dragOverId === j.id}
-							draggable={canCancel && j.status === "queued"}
+							draggable={canCancel && j.status === "queued" && j.pausedAt === undefined}
 							ondragstart={() => onRowDragStart(j)}
 							ondragover={(e) => onRowDragOver(e, j)}
 							ondrop={(e) => onRowDrop(e, j)}
@@ -367,8 +382,8 @@
 								{/if}
 							</td>
 							<td data-label="Status"
-								><Badge variant={statusToBadgeVariant(j.status)}
-									>{j.status}</Badge
+								><Badge variant={statusToBadgeVariant(j.pausedAt !== undefined ? "paused" : j.status)}
+									>{j.pausedAt !== undefined ? "Paused" : j.status}</Badge
 								></td
 							>
 							<td
@@ -412,6 +427,10 @@
 								{#if canCancel && (j.status === "queued" || j.status === "running")}
 									<div class="flex justify-end gap-1.5">
 										{#if j.status === "queued"}
+											<Button size="sm" variant="secondary" loading={changingPauseState.has(j.id)} onclick={() => changePauseState(j)}>
+												{#if j.pausedAt !== undefined}<Play class="h-3.5 w-3.5" /> Resume{:else}<Pause class="h-3.5 w-3.5" /> Pause{/if}
+											</Button>
+										{#if j.pausedAt === undefined}
 											<Button
 												size="sm"
 												variant="secondary"
@@ -422,6 +441,7 @@
 											>
 												Bump to front
 											</Button>
+										{/if}
 										{/if}
 										<Button
 											size="sm"

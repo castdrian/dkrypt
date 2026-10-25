@@ -34,8 +34,6 @@ test('diagnostic reports require a reviewed redacted preview, consent, and expir
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardDiagnosticReportRoutes({
     repository,
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'project-a',
-    getProject: (projectId) => projectId === 'project-a' ? { id: projectId } as never : undefined,
   }));
 
   try {
@@ -43,7 +41,7 @@ test('diagnostic reports require a reviewed redacted preview, consent, and expir
       method: 'POST',
       url: '/v1/dashboard/diagnostic-reports/preview',
       headers: { cookie: sessionCookie() },
-      payload: { projectId: 'project-a', category: 'job', summary: 'Job failed for owner@example.com', details: 'Authorization: Bearer sensitive-value\nDevice 10.0.0.1 failed at 2001:db8::1 with UDID 0123456789abcdef0123456789abcdef01234567.' },
+      payload: { category: 'job', summary: 'Job failed for owner@example.com', details: 'Authorization: Bearer sensitive-value\nDevice 10.0.0.1 failed at 2001:db8::1 with UDID 0123456789abcdef0123456789abcdef01234567.' },
     });
     expect(preview.statusCode).toBe(200);
     expect(preview.json().summary).not.toContain('owner@example.com');
@@ -56,7 +54,7 @@ test('diagnostic reports require a reviewed redacted preview, consent, and expir
       method: 'POST',
       url: '/v1/dashboard/diagnostic-reports',
       headers: { cookie: sessionCookie() },
-      payload: { projectId: preview.json().projectId, category: preview.json().category, summary: preview.json().summary, details: preview.json().details, previewToken: preview.json().previewToken, consent: true },
+      payload: { category: preview.json().category, summary: preview.json().summary, details: preview.json().details, previewToken: preview.json().previewToken, consent: true },
     });
     expect(submission.statusCode).toBe(201);
     expect(submission.json().userId).toBeUndefined();
@@ -71,7 +69,7 @@ test('diagnostic reports require a reviewed redacted preview, consent, and expir
       method: 'POST',
       url: '/v1/dashboard/diagnostic-reports',
       headers: { cookie: sessionCookie() },
-      payload: { projectId: preview.json().projectId, category: preview.json().category, summary: 'changed after preview', details: preview.json().details, previewToken: preview.json().previewToken, consent: true },
+      payload: { category: preview.json().category, summary: 'changed after preview', details: preview.json().details, previewToken: preview.json().previewToken, consent: true },
     });
     expect(changedSubmission.statusCode).toBe(400);
   } finally {

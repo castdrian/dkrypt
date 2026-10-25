@@ -2,7 +2,6 @@ import { markLoggedOut, type Role } from '#lib/session.svelte';
 import { ApiError, apiErrorMessage } from '#lib/apiErrors.js';
 import { rateLimitState } from '#lib/rateLimit.svelte';
 import { showToast } from '#lib/ui.svelte';
-import { projectSelectionState } from '#lib/projectSelection.svelte';
 import { serverStateCache, type ServerQueryListener } from '#lib/serverStateCache.svelte';
 import { isUnauthenticatedResponse } from '#lib/apiAuthResponse.js';
 import { parseApiResponse } from '#lib/apiResponse.js';
@@ -127,7 +126,6 @@ export interface JobQueueSummary {
 
 export interface JobSummary {
   id: string;
-  projectId?: string;
   bundleId: string;
   externalVersionId?: string;
   testflight?: JobTestFlightSummary;
@@ -171,6 +169,7 @@ export interface ActiveJob {
   bundleId: string;
   source: 'manual' | 'scheduler';
   status: 'queued' | 'running';
+  pausedAt?: number;
   progress: string;
   versionLabel?: string;
   testflight?: JobTestFlightSummary;
@@ -328,7 +327,6 @@ export interface DiskUsage {
 }
 
 export interface OverviewPayload {
-  projectId?: string;
   settings: DashboardSettings;
   devices: DeviceRecord[];
   statusDevices?: Array<{ id: string; name: string; enabled: boolean; draining?: boolean; isPrimary?: boolean; reachable?: boolean }>;
@@ -356,7 +354,6 @@ export interface IpaMetadata {
 export interface JobHistoryEntry {
   id: string;
   correlationId?: string;
-  projectId?: string;
   bundleId: string;
   externalVersionId?: string;
   testflight?: { appId: number; build: TFBuild };
@@ -395,7 +392,6 @@ export interface CursorPage {
 
 export interface ArtifactRecord {
   id: string;
-  projectIds?: string[];
   bundleId: string;
   key: string;
   channel: 'appstore' | 'testflight';
@@ -422,11 +418,10 @@ export interface DashboardQuickSearchResult {
   id: string;
   title: string;
   subtitle?: string;
-  projectId?: string;
 }
 
-export function fetchDashboardQuickSearch(query: string, projectId = projectSelectionState.id): Promise<{ results: DashboardQuickSearchResult[] }> {
-  const params = new URLSearchParams({ q: query, projectId });
+export function fetchDashboardQuickSearch(query: string): Promise<{ results: DashboardQuickSearchResult[] }> {
+  const params = new URLSearchParams({ q: query });
   return apiJson(`/v1/dashboard/quick-search?${params}`);
 }
 
@@ -443,25 +438,23 @@ export interface DashboardIncidentEvent {
   correlationId?: string;
 }
 
-export function fetchDashboardIncidents(projectId = projectSelectionState.id): Promise<{ projectId: string; events: DashboardIncidentEvent[]; truncated: boolean }> {
-  return apiJson(`/v1/dashboard/incidents?projectId=${encodeURIComponent(projectId)}`);
+export function fetchDashboardIncidents(): Promise<{ events: DashboardIncidentEvent[]; truncated: boolean }> {
+  return apiJson('/v1/dashboard/incidents');
 }
 
 export interface IncidentStateAtTime {
-  projectId: string;
   at: number;
   coverage: 'recorded' | 'incomplete';
   coverageStartAt?: number;
   incidents: Array<{ id: string; kind: 'job' | 'watch' | 'device' | 'deployment'; title: string; sourceId: string; status: 'open' | 'in_progress' | 'snoozed' | 'resolved'; recovered: boolean }>;
 }
 
-export function fetchIncidentStateAtTime(at: number, projectId = projectSelectionState.id): Promise<IncidentStateAtTime> {
-  return apiJson(`/v1/dashboard/incidents/state-at?projectId=${encodeURIComponent(projectId)}&at=${Math.floor(at)}`);
+export function fetchIncidentStateAtTime(at: number): Promise<IncidentStateAtTime> {
+  return apiJson(`/v1/dashboard/incidents/state-at?at=${Math.floor(at)}`);
 }
 
-export function fetchDashboardArtifact(id: string, projectId = projectSelectionState.id): Promise<ArtifactRecord> {
-  const params = new URLSearchParams({ projectId });
-  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}?${params}`);
+export function fetchDashboardArtifact(id: string): Promise<ArtifactRecord> {
+  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}`);
 }
 
 export interface ArtifactPackageEntry {
@@ -477,8 +470,8 @@ export interface ArtifactPackageContentsPage {
   nextOffset?: number;
 }
 
-export function fetchDashboardArtifactContents(id: string, options: { projectId?: string; q?: string; offset?: number; limit?: number } = {}): Promise<ArtifactPackageContentsPage> {
-  const params = new URLSearchParams({ projectId: options.projectId ?? projectSelectionState.id });
+export function fetchDashboardArtifactContents(id: string, options: { q?: string; offset?: number; limit?: number } = {}): Promise<ArtifactPackageContentsPage> {
+  const params = new URLSearchParams();
   if (options.q) params.set('q', options.q);
   if (options.offset) params.set('offset', String(options.offset));
   if (options.limit) params.set('limit', String(options.limit));
@@ -495,10 +488,10 @@ export interface ArtifactStructureComparison {
   truncated: boolean;
 }
 
-export function compareDashboardArtifacts(ids: [string, string], projectId = projectSelectionState.id): Promise<ArtifactStructureComparison> {
+export function compareDashboardArtifacts(ids: [string, string]): Promise<ArtifactStructureComparison> {
   return apiJson('/v1/dashboard/artifacts/compare', {
     method: 'POST',
-    body: JSON.stringify({ ids, projectId }),
+    body: JSON.stringify({ ids }),
   });
 }
 
@@ -669,28 +662,6 @@ export interface AllowedUser {
 
 export type BillingPlanId = 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
 
-export interface ProjectRecord {
-  id: string;
-  name: string;
-  description?: string;
-  memberIds?: string[];
-  isDefault: boolean;
-  archivedAt?: number;
-  storageQuotaBytes?: number;
-  dailyJobQuota?: number;
-  maxConcurrentJobs?: number;
-  createdBy: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ProjectMember {
-  id: string;
-  username: string;
-  displayName: string;
-  avatarUrl?: string;
-}
-
 export interface AuditLogEntry {
   id: string;
   ts: number;
@@ -712,10 +683,6 @@ export interface AuditLogEntry {
     | 'role.update'
     | 'role.remove'
     | 'auth.session.new_context'
-    | 'project.add'
-    | 'project.update'
-    | 'project.archive'
-    | 'project.restore'
     | 'artifact.pin'
     | 'artifact.unpin'
     | 'artifact.archive'
@@ -816,7 +783,7 @@ export interface AppCatalogEntry {
 }
 
 export function fetchOverview(): Promise<OverviewPayload> {
-  return apiJson(`/v1/dashboard/overview?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson('/v1/dashboard/overview');
 }
 
 export interface DeviceHealth extends DeviceTransportStatus {
@@ -1030,7 +997,7 @@ export interface JobDiffResult {
 
 export function fetchJobDiff(bundleId: string, a: string, b: string): Promise<JobDiffResult> {
   return apiJson(
-    `/v1/dashboard/jobs/diff?bundleId=${encodeURIComponent(bundleId)}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&projectId=${encodeURIComponent(projectSelectionState.id)}`,
+    `/v1/dashboard/jobs/diff?bundleId=${encodeURIComponent(bundleId)}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
     undefined,
     'jobDiff',
   );
@@ -1044,7 +1011,7 @@ export interface JobAttemptComparison {
 }
 
 export function fetchJobAttemptComparison(a: string, b: string): Promise<JobAttemptComparison> {
-  const params = new URLSearchParams({ a, b, projectId: projectSelectionState.id });
+  const params = new URLSearchParams({ a, b });
   return apiJson(`/v1/dashboard/jobs/attempt-diff?${params}`, undefined, 'jobDiff');
 }
 
@@ -1084,7 +1051,7 @@ function jobHistoryPath({ cursorOrOffset, limit, q, source, status, opts }: JobH
   const failureCategoryQuery = opts?.failureCategory ? `&failureCategory=${encodeURIComponent(opts.failureCategory)}` : '';
   const fromTsQuery = Number.isFinite(opts?.fromTs) ? `&fromTs=${opts?.fromTs}` : '';
   const toTsQuery = Number.isFinite(opts?.toTs) ? `&toTs=${opts?.toTs}` : '';
-  return `/v1/dashboard/jobs?limit=${limit}&projectId=${encodeURIComponent(projectSelectionState.id)}${pageQuery}${query}${sourceQuery}${statusQuery}${queuedByQuery}${deviceIdQuery}${errorQuery}${failureCategoryQuery}${fromTsQuery}${toTsQuery}`;
+  return `/v1/dashboard/jobs?limit=${limit}${pageQuery}${query}${sourceQuery}${statusQuery}${queuedByQuery}${deviceIdQuery}${errorQuery}${failureCategoryQuery}${fromTsQuery}${toTsQuery}`;
 }
 
 const SERVER_QUERY_STALE_TIME_MS = 15_000;
@@ -1119,7 +1086,7 @@ function artifactsPath({ cursorOrOffset, limit, q, channel, archived }: Artifact
   const query = q ? `&q=${encodeURIComponent(q)}` : '';
   const channelQuery = channel ? `&channel=${channel}` : '';
   const archivedQuery = archived === undefined ? '' : `&archived=${archived}`;
-  return `/v1/dashboard/artifacts?limit=${limit}&projectId=${encodeURIComponent(projectSelectionState.id)}${pageQuery}${query}${channelQuery}${archivedQuery}`;
+  return `/v1/dashboard/artifacts?limit=${limit}${pageQuery}${query}${channelQuery}${archivedQuery}`;
 }
 
 export function fetchArtifacts(
@@ -1171,7 +1138,7 @@ export function setDashboardArtifactsPinned(ids: string[], pinned: boolean): Pro
   });
 }
 
-export function setDashboardArtifactsPinnedByQuery(filter: { projectId: string; q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }, pinned: boolean): Promise<{ ok: boolean; data: ArtifactBulkPinResult }> {
+export function setDashboardArtifactsPinnedByQuery(filter: { q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }, pinned: boolean): Promise<{ ok: boolean; data: ArtifactBulkPinResult }> {
   return apiAction('/v1/dashboard/artifacts/bulk-pin-query', {
     method: 'POST',
     body: JSON.stringify({ filter, pinned }),
@@ -1210,7 +1177,7 @@ export function setDashboardArtifactsArchived(ids: string[], archived: boolean):
   });
 }
 
-export function setDashboardArtifactsArchivedByQuery(filter: { projectId: string; q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }, archived: boolean): Promise<{ ok: boolean; data: ArtifactBulkArchiveResult }> {
+export function setDashboardArtifactsArchivedByQuery(filter: { q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }, archived: boolean): Promise<{ ok: boolean; data: ArtifactBulkArchiveResult }> {
   return apiAction('/v1/dashboard/artifacts/bulk-archive-query', {
     method: 'POST',
     body: JSON.stringify({ filter, archived }),
@@ -1272,11 +1239,19 @@ export interface BundleStats {
 }
 
 export function fetchBundleStats(bundleId: string): Promise<BundleStats> {
-  return apiJson(`/v1/dashboard/jobs/stats/${encodeURIComponent(bundleId)}?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson(`/v1/dashboard/jobs/stats/${encodeURIComponent(bundleId)}`);
 }
 
 export function cancelJob(id: string): Promise<{ ok: boolean }> {
   return apiAction(`/v1/dashboard/jobs/${id}/cancel`, { method: 'POST' }, 'Cancelled').then((r) => ({ ok: r.ok }));
+}
+
+export function pauseJob(id: string): Promise<{ ok: boolean }> {
+	return apiAction(`/v1/dashboard/jobs/${id}/pause`, { method: 'POST' }, 'Paused job').then((r) => ({ ok: r.ok }));
+}
+
+export function resumeJob(id: string): Promise<{ ok: boolean }> {
+	return apiAction(`/v1/dashboard/jobs/${id}/resume`, { method: 'POST' }, 'Resumed job').then((r) => ({ ok: r.ok }));
 }
 
 export function prioritizeJob(id: string): Promise<{ ok: boolean }> {
@@ -1284,7 +1259,7 @@ export function prioritizeJob(id: string): Promise<{ ok: boolean }> {
 }
 
 export function reorderQueue(ids: string[]): Promise<{ ok: boolean }> {
-  return apiAction('/v1/dashboard/jobs/reorder', { method: 'POST', body: JSON.stringify({ ids, projectId: projectSelectionState.id }) }).then((r) => ({ ok: r.ok }));
+  return apiAction('/v1/dashboard/jobs/reorder', { method: 'POST', body: JSON.stringify({ ids }) }).then((r) => ({ ok: r.ok }));
 }
 
 export interface ApiKeyUsageBucket {
@@ -1329,7 +1304,6 @@ export interface LogQuery {
 
 export function fetchLogs(query: LogQuery = {}): Promise<{ logs: LogEntry[]; total: number } & CursorPage> {
   const params = new URLSearchParams();
-  params.set('projectId', projectSelectionState.id);
   if (query.scope && query.scope !== 'all') params.set('scope', query.scope);
   if (query.level && query.level !== 'all') params.set('level', query.level);
   if (query.q?.trim()) params.set('q', query.q.trim());
@@ -1341,11 +1315,11 @@ export function fetchLogs(query: LogQuery = {}): Promise<{ logs: LogEntry[]; tot
 }
 
 export function jobHistoryExportUrl(format: 'csv' | 'json'): string {
-  return `/v1/dashboard/jobs/export?format=${format}&projectId=${encodeURIComponent(projectSelectionState.id)}`;
+  return `/v1/dashboard/jobs/export?format=${format}`;
 }
 
 export function fetchJobEta(bundleId: string): Promise<{ avgMs: number | null }> {
-  return apiJson(`/v1/dashboard/jobs/eta/${encodeURIComponent(bundleId)}?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson(`/v1/dashboard/jobs/eta/${encodeURIComponent(bundleId)}`);
 }
 
 export function fetchJobVolume(days = 14): Promise<{ days: { date: string; count: number }[] }> {
@@ -1368,7 +1342,7 @@ export function refreshJobVolume(days = 14): void {
 }
 
 function jobVolumePath(days: number): string {
-  return `/v1/dashboard/jobs/volume?days=${days}&projectId=${encodeURIComponent(projectSelectionState.id)}`;
+  return `/v1/dashboard/jobs/volume?days=${days}`;
 }
 
 export interface JobSloAssessment {
@@ -1389,7 +1363,7 @@ export interface JobSloSummary {
 }
 
 export function fetchJobSlo(): Promise<JobSloSummary> {
-  return apiJson(`/v1/dashboard/jobs/slo?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson('/v1/dashboard/jobs/slo');
 }
 
 export interface InsightsAppStats {
@@ -1438,13 +1412,12 @@ export interface ReleaseCoverageItem {
   testFlight?: { latestVersion?: string; buildId?: number; checkedAt?: number; verifiedAt?: number; artifactId?: string; stale: boolean };
 }
 
-export function fetchReleaseCoverage(projectId: string): Promise<{ projectId: string; items: ReleaseCoverageItem[] }> {
-  return apiJson(`/v1/dashboard/release-coverage?projectId=${encodeURIComponent(projectId)}`);
+export function fetchReleaseCoverage(): Promise<{ items: ReleaseCoverageItem[] }> {
+  return apiJson('/v1/dashboard/release-coverage');
 }
 
 export interface OperationalIncident {
   id: string;
-  projectId: string;
   sourceKey: string;
   kind: 'job' | 'watch' | 'device' | 'deployment';
   title: string;
@@ -1461,18 +1434,17 @@ export interface OperationalIncident {
   history: Array<{ at: number; actor: string; action: string; note?: string }>;
 }
 
-export function fetchActionCenter(projectId: string): Promise<{ projectId: string; incidents: OperationalIncident[] }> {
-  return apiJson(`/v1/dashboard/action-center?projectId=${encodeURIComponent(projectId)}`);
+export function fetchActionCenter(): Promise<{ incidents: OperationalIncident[] }> {
+  return apiJson('/v1/dashboard/action-center');
 }
 
-export function simulateApiKeyScope(input: { keyId?: string; projectId: string; bundleId: string; source: 'appstore' | 'testflight'; allowedBundleIds?: string[]; allowTestFlight?: boolean; dailyLimit?: number | null; maxConcurrent?: number | null }): Promise<{ allowed: boolean; reasons: string[]; warnings: string[]; routes: string[]; operations: Array<{ route: string; allowed: boolean; reasons: string[] }>; projectId: string; bundleId: string; source: string; limits: { daily: number | null; dailyUsed: number; dailyRemaining: number | null; concurrent: number | null; concurrentRunning: number; queueWait: boolean } }> {
+export function simulateApiKeyScope(input: { keyId?: string; bundleId: string; source: 'appstore' | 'testflight'; allowedBundleIds?: string[]; allowTestFlight?: boolean; dailyLimit?: number | null; maxConcurrent?: number | null }): Promise<{ allowed: boolean; reasons: string[]; warnings: string[]; routes: string[]; operations: Array<{ route: string; allowed: boolean; reasons: string[] }>; bundleId: string; source: string; limits: { daily: number | null; dailyUsed: number; dailyRemaining: number | null; concurrent: number | null; concurrentRunning: number; queueWait: boolean } }> {
   return apiJson('/v1/dashboard/keys/simulate', { method: 'POST', body: JSON.stringify(input) });
 }
 
 export interface SignedTriggerIntegration {
   id: string;
   kind: 'signed_decrypt';
-  projectId: string;
   bundleIds: string[];
   sources: Array<'appstore' | 'testflight'>;
   enabled: boolean;
@@ -1491,7 +1463,7 @@ export function fetchSignedTriggerIntegrations(): Promise<{ integrations: Signed
   return apiJson('/v1/dashboard/integrations/signed-triggers');
 }
 
-export function createSignedTriggerIntegration(input: { projectId: string; bundleIds: string[]; sources: Array<'appstore' | 'testflight'> }): Promise<{ integration: SignedTriggerIntegration; secret: string }> {
+export function createSignedTriggerIntegration(input: { bundleIds: string[]; sources: Array<'appstore' | 'testflight'> }): Promise<{ integration: SignedTriggerIntegration; secret: string }> {
   return apiJson('/v1/dashboard/integrations/signed-triggers', { method: 'POST', body: JSON.stringify(input) });
 }
 
@@ -1510,7 +1482,6 @@ export interface GithubOidcTrustPolicy {
   ref?: string;
   environment?: string;
   audience: string;
-  projectId: string;
   bundleIds: string[];
   allowTestFlight: boolean;
   enabled: boolean;
@@ -1524,7 +1495,6 @@ export interface GithubOidcTrustPolicy {
 export interface IntegrationOwnershipRequest {
   id: string;
   kind: 'signed_decrypt' | 'github_oidc';
-  projectId: string;
   bundleIds: string[];
   billingOwnerId?: string;
   billingOwnerDisplayName: string;
@@ -1562,16 +1532,16 @@ export function revokeGithubOidcTrust(id: string): Promise<{ ok: true }> {
   return apiJson(`/v1/dashboard/integrations/github-oidc/${encodeURIComponent(id)}/revoke`, { method: 'POST' });
 }
 
-export function updateActionCenterIncident(id: string, input: { projectId: string; status?: OperationalIncident['status']; assignedTo?: string | null; snoozedUntil?: number; resolutionNote?: string }): Promise<{ incident: OperationalIncident }> {
+export function updateActionCenterIncident(id: string, input: { status?: OperationalIncident['status']; assignedTo?: string | null; snoozedUntil?: number; resolutionNote?: string }): Promise<{ incident: OperationalIncident }> {
   return apiJson(`/v1/dashboard/action-center/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
 }
 
-export function refreshReleaseCoverage(projectId: string, bundleId: string): Promise<{ item: ReleaseCoverageItem; failures: string[] }> {
-  return apiJson(`/v1/dashboard/release-coverage/${encodeURIComponent(bundleId)}/refresh`, { method: 'POST', body: JSON.stringify({ projectId }) });
+export function refreshReleaseCoverage(bundleId: string): Promise<{ item: ReleaseCoverageItem; failures: string[] }> {
+  return apiJson(`/v1/dashboard/release-coverage/${encodeURIComponent(bundleId)}/refresh`, { method: 'POST' });
 }
 
 export function fetchInsights(trendDays = 14, topApps = 5): Promise<InsightsSummary> {
-  return apiJson(`/v1/dashboard/insights?trendDays=${trendDays}&topApps=${topApps}&projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson(`/v1/dashboard/insights?trendDays=${trendDays}&topApps=${topApps}`);
 }
 
 export interface FailurePattern {
@@ -1583,7 +1553,7 @@ export interface FailurePattern {
 }
 
 export function fetchFailurePatterns(): Promise<{ patterns: FailurePattern[] }> {
-  return apiJson(`/v1/dashboard/failure-patterns?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson('/v1/dashboard/failure-patterns');
 }
 
 export interface StorageForecast {
@@ -1594,11 +1564,11 @@ export interface StorageForecast {
 }
 
 export function fetchStorageForecast(): Promise<StorageForecast> {
-  return apiJson(`/v1/dashboard/storage-forecast?projectId=${encodeURIComponent(projectSelectionState.id)}`);
+  return apiJson('/v1/dashboard/storage-forecast');
 }
 
 export function supportBundleUrl(): string {
-  return `/v1/dashboard/support-bundle?projectId=${encodeURIComponent(projectSelectionState.id)}`;
+  return '/v1/dashboard/support-bundle';
 }
 
 export function searchApps(term: string): Promise<{ results: AppStoreSearchResult[] } | { error: string }> {
@@ -1643,14 +1613,14 @@ export function queueDecrypt(
 ): Promise<{ ok: boolean; data: JobSummary }> {
   return apiAction('/v1/dashboard/decrypt', {
     method: 'POST',
-    body: JSON.stringify({ bundleId, externalVersionId, versionLabel, preferPrimary, minimumOsVersion, projectId: projectSelectionState.id }),
+    body: JSON.stringify({ bundleId, externalVersionId, versionLabel, preferPrimary, minimumOsVersion }),
   }, undefined, suppressErrorToast);
 }
 
 export function fetchDecryptPreflight(input: { bundleId: string; versionLabel?: string; testflight?: boolean; installSizeBytes?: number; deviceId?: string }): Promise<DecryptPreflight> {
   return apiJson('/v1/dashboard/decrypt/preflight', {
     method: 'POST',
-    body: JSON.stringify({ ...input, projectId: projectSelectionState.id }),
+    body: JSON.stringify(input),
   });
 }
 
@@ -1774,6 +1744,18 @@ export interface OfflineAppStoreReadinessCheck {
   detail: string;
 }
 
+export interface AppStoreDownloaderNetworkCheck {
+  reachable: boolean;
+  latencyMs: number;
+  endpoint: string;
+  checkedAt: string;
+  diagnostic?: string;
+}
+
+export function checkAppStoreDownloaderNetwork(): Promise<AppStoreDownloaderNetworkCheck> {
+  return apiJson('/v1/dashboard/appstore-offline/network-check', { method: 'POST' });
+}
+
 export function verifyOfflineAppStoreReadiness(): Promise<{ ok: boolean; checkedAt: string; purchaseMade: false; downloadStarted: false; checks: OfflineAppStoreReadinessCheck[] }> {
   return apiJson('/v1/dashboard/appstore-offline/verify', { method: 'POST' });
 }
@@ -1825,7 +1807,7 @@ export function queueTestFlightDecrypt(
   deviceId?: string,
   suppressErrorToast = false,
 ): Promise<{ ok: boolean; data: JobSummary }> {
-  return apiAction('/v1/dashboard/testflight/decrypt', { method: 'POST', body: JSON.stringify({ bundleId, appId, build, preferPrimary, deviceId, projectId: projectSelectionState.id }) }, undefined, suppressErrorToast);
+  return apiAction('/v1/dashboard/testflight/decrypt', { method: 'POST', body: JSON.stringify({ bundleId, appId, build, preferPrimary, deviceId }) }, undefined, suppressErrorToast);
 }
 
 export function fetchTestFlightSubscriptions(cursor?: string, limit = 50): Promise<{ subscriptions: TestFlightSubscription[]; total: number } & CursorPage> {
@@ -1881,7 +1863,7 @@ export function sendJobResolutionNotice(id: string): Promise<JobResolutionNotice
 export function previewBulkJobReplay(ids: string[]): Promise<BulkJobPreview> {
   return apiJson('/v1/dashboard/jobs/bulk-preview', {
     method: 'POST',
-    body: JSON.stringify({ ids, projectId: projectSelectionState.id }),
+    body: JSON.stringify({ ids }),
   });
 }
 
@@ -2128,22 +2110,6 @@ export interface RoleImpactPreview {
 
 export function previewRoleImpact(id: string, permissions: string): Promise<RoleImpactPreview> {
   return apiJson(`/v1/dashboard/roles/${encodeURIComponent(id)}/impact-preview`, { method: 'POST', body: JSON.stringify({ permissions }) });
-}
-
-export function fetchProjects(): Promise<{ projects: ProjectRecord[] }> {
-  return apiJson('/v1/dashboard/projects');
-}
-
-export function fetchProjectMembers(): Promise<{ members: ProjectMember[] }> {
-  return apiJson('/v1/dashboard/projects/members');
-}
-
-export function createProject(input: Pick<ProjectRecord, 'name'> & Partial<Omit<ProjectRecord, 'id' | 'name' | 'isDefault' | 'createdBy' | 'createdAt' | 'updatedAt'>>): Promise<{ ok: boolean; data: ProjectRecord }> {
-  return apiAction<ProjectRecord>('/v1/dashboard/projects', { method: 'POST', body: JSON.stringify(input) }, `Project "${input.name}" created`);
-}
-
-export function updateProject(id: string, patch: { name?: string; description?: string | null; memberIds?: string[]; storageQuotaBytes?: number | null; dailyJobQuota?: number | null; maxConcurrentJobs?: number | null; archived?: boolean }): Promise<{ ok: boolean; data: ProjectRecord }> {
-  return apiAction<ProjectRecord>(`/v1/dashboard/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }, 'Project updated');
 }
 
 export function addUser(username: string, roleIds: string[]): Promise<{ ok: boolean }> {
@@ -2558,6 +2524,12 @@ export interface BillingRevenueSummary {
   updatedAt: string;
   complete: boolean;
   totals: BillingRevenueCurrencyTotal[];
+  retention: {
+    activeAccounts: number;
+    paymentIssues: number;
+    cancellationsUpdatedLast30Days: number;
+    recentCancellationRatePercent: number;
+  };
   providers: {
     stripe: BillingRevenueProviderSummary;
     nowpayments: BillingRevenueProviderSummary;
@@ -2600,7 +2572,6 @@ export function syncStripeBillingWebhookEvents(): Promise<{ ok: boolean; data: {
 export type DiagnosticReportCategory = 'bug' | 'device' | 'job' | 'other';
 
 export interface DiagnosticReportDraft {
-  projectId: string;
   category: DiagnosticReportCategory;
   summary: string;
   details: string;
@@ -2610,7 +2581,6 @@ export interface DiagnosticReport {
   id: string;
   userId?: string;
   userDisplayName?: string;
-  projectId: string;
   category: DiagnosticReportCategory;
   summary: string;
   details: string;
@@ -2630,7 +2600,6 @@ export function previewDiagnosticReport(draft: DiagnosticReportDraft): Promise<D
 
 export function submitDiagnosticReport(preview: DiagnosticReportPreview): Promise<DiagnosticReport> {
   return apiJson('/v1/dashboard/diagnostic-reports', { method: 'POST', body: JSON.stringify({
-    projectId: preview.projectId,
     category: preview.category,
     summary: preview.summary,
     details: preview.details,

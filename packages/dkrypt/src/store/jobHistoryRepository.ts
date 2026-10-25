@@ -31,10 +31,6 @@ export function createJobHistoryRepository(database: Database): JobHistoryReposi
     list(filter = {}) {
       const conditions = ['1 = 1'];
       const parameters: Array<string | number> = [];
-      if (filter.projectId) {
-        conditions.push('project_id = ?');
-        parameters.push(filter.projectId);
-      }
       addContainsFilter(conditions, parameters, 'bundle_id', filter.bundleIdSearch);
       if (filter.source) {
         conditions.push('source = ?');

@@ -36,7 +36,6 @@ test('insights is served through the typed dashboard API and preserves bounded q
   const calls: Array<[number, number, string | undefined]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardReportingRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getInsightsSummary: (topApps, trendDays, projectId) => {
       calls.push([topApps, trendDays, projectId]);
       return summary;
@@ -46,19 +45,13 @@ test('insights is served through the typed dashboard API and preserves bounded q
   try {
     const response = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/insights?topApps=invalid&trendDays=999&projectId=default',
-      headers: { cookie: sessionCookie() },
-    });
-    const deniedProject = await server.inject({
-      method: 'GET',
-      url: '/v1/dashboard/insights?projectId=private',
+      url: '/v1/dashboard/insights?topApps=invalid&trendDays=999',
       headers: { cookie: sessionCookie() },
     });
 
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual(summary);
     expect(calls).toEqual([[5, 90, 'default']]);
-    expect(deniedProject.statusCode).toBe(404);
     expect(getRouteContract('GET', '/v1/dashboard/insights')).toHaveProperty('response.200.properties.topApps.items.properties.bundleId');
     expect(dashboardRouter.routes.map((route) => `${route.method} ${route.path}`)).not.toContain('GET /v1/dashboard/insights');
   } finally {
@@ -66,7 +59,7 @@ test('insights is served through the typed dashboard API and preserves bounded q
   }
 });
 
-test('failure patterns remain permission-gated, project-scoped, and redact volatile secrets', async () => {
+test('failure patterns remain permission-gated and redact volatile secrets', async () => {
   const now = Date.now();
   const history: JobHistoryEntry[] = [
     {
@@ -89,28 +82,17 @@ test('failure patterns remain permission-gated, project-scoped, and redact volat
       finishedAt: now,
       error: 'install failed at https://two.example/path token=second 987654',
     },
-    {
-      id: 'foreign-failure',
-      projectId: 'private',
-      bundleId: 'com.example.private',
-      status: 'failed',
-      source: 'manual',
-      createdAt: now - 3,
-      finishedAt: now - 2,
-      error: 'private project failure',
-    },
   ];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardReportingRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getAllJobHistory: () => history,
   }));
 
   try {
-    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/failure-patterns?projectId=default', headers: { cookie: sessionCookie() } });
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/failure-patterns', headers: { cookie: sessionCookie() } });
     const response = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/failure-patterns?projectId=default',
+      url: '/v1/dashboard/failure-patterns',
       headers: { cookie: sessionCookie(PermissionFlag.viewAutomation) },
     });
 
@@ -131,7 +113,7 @@ test('failure patterns remain permission-gated, project-scoped, and redact volat
   }
 });
 
-test('storage forecast uses thirty-day project history and reports unavailable storage', async () => {
+test('storage forecast uses thirty-day account history and reports unavailable storage', async () => {
   const now = Date.now();
   const history: JobHistoryEntry[] = [
     {
@@ -155,8 +137,8 @@ test('storage forecast uses thirty-day project history and reports unavailable s
       sizeBytes: 90_000,
     },
     {
-      id: 'foreign-completed',
-      projectId: 'private',
+      id: 'second-completed',
+      projectId: 'default',
       bundleId: 'com.example.app',
       status: 'done',
       source: 'manual',
@@ -168,22 +150,21 @@ test('storage forecast uses thirty-day project history and reports unavailable s
   let diskReads = 0;
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardReportingRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getAllJobHistory: () => history,
     getDiskUsage: () => ++diskReads === 1 ? { totalBytes: 100_000, freeBytes: 30_000, usedBytes: 70_000, usedPercent: 0.7 } : undefined,
   }));
 
   try {
     const headers = { cookie: sessionCookie(PermissionFlag.viewAutomation) };
-    const response = await server.inject({ method: 'GET', url: '/v1/dashboard/storage-forecast?projectId=default', headers });
+    const response = await server.inject({ method: 'GET', url: '/v1/dashboard/storage-forecast', headers });
     const unavailable = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/storage-forecast?projectId=default',
+      url: '/v1/dashboard/storage-forecast',
       headers,
     });
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ freeBytes: 30_000, bytesPerDay: 1_000, daysRemaining: 30, sampleCount: 1 });
+    expect(JSON.parse(response.body)).toEqual({ freeBytes: 30_000, bytesPerDay: 3_000, daysRemaining: 10, sampleCount: 2 });
     expect(unavailable.statusCode).toBe(503);
     expect(dashboardRouter.routes.map((route) => `${route.method} ${route.path}`)).not.toContain('GET /v1/dashboard/storage-forecast');
   } finally {
@@ -277,21 +258,20 @@ test('support bundles require management permission and redact sensitive diagnos
   };
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardReportingRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     getAllJobHistory: () => [job, privateJob],
     getStateDatabaseStatus: () => ({ path: '/state/dkrypt.sqlite', schemaVersion: LATEST_SQLITE_SCHEMA_VERSION, integrity: 'ok' }),
     verifyLatestDatabaseBackup: () => ({ ok: true, detail: 'verified' }),
     getDiskUsage: () => ({ totalBytes: 100, freeBytes: 50, usedBytes: 50, usedPercent: 0.5 }),
     getAppCatalogStats: () => ({ entries: 1, icons: 1 }),
     getEffectiveDevices: () => [device],
-    getRecentLogs: (query) => ({ logs: [log, privateLog, transportLog].filter((entry) => query?.filter?.(entry)), total: 3 }),
+    getRecentLogs: () => ({ logs: [log, privateLog, transportLog], total: 3 }),
   }));
 
   try {
-    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/support-bundle?projectId=default', headers: { cookie: sessionCookie(PermissionFlag.viewAutomation) } });
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/support-bundle', headers: { cookie: sessionCookie(PermissionFlag.viewAutomation) } });
     const response = await server.inject({
       method: 'GET',
-      url: '/v1/dashboard/support-bundle?projectId=default',
+      url: '/v1/dashboard/support-bundle',
       headers: { cookie: sessionCookie(PermissionFlag.manageAutomation) },
     });
     const bundle = JSON.parse(response.body);
@@ -304,8 +284,8 @@ test('support bundles require management permission and redact sensitive diagnos
     expect(bundle).not.toHaveProperty('watches');
     expect(bundle).not.toHaveProperty('watchHealth');
     expect(bundle).not.toHaveProperty('schedulerRuns');
-    expect(bundle.logs).toHaveLength(2);
-    expect(bundle.jobs).toHaveLength(1);
+    expect(bundle.logs).toHaveLength(3);
+    expect(bundle.jobs).toHaveLength(2);
     expect(bundle.logs.find((entry: LogEntry) => entry.id === 'log-1')).toMatchObject({
       message: 'Authorization: Bearer [redacted] password=[redacted] access_token=[redacted] at [redacted-url]',
       meta: { authorization: '[redacted]', password: '[redacted]', token: '[redacted]', access_token: '[redacted]' },

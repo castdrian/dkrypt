@@ -1,12 +1,11 @@
 import { Type, type Static } from '@sinclair/typebox';
 import type { ApiErrorEnvelope } from '#contracts.js';
-import { bundleIdSchema, identifierSchema, paginationQueryProperties, projectIdentifierSchema } from '#apiCommonContracts.js';
+import { bundleIdSchema, identifierSchema, paginationQueryProperties } from '#apiCommonContracts.js';
 
 const additionalProperties = { additionalProperties: true } as const;
 
 export const dashboardArtifactListQuerySchema = Type.Object({
   ...paginationQueryProperties,
-  projectId: Type.Optional(projectIdentifierSchema),
   q: Type.Optional(Type.String({ maxLength: 200 })),
   channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])),
   archived: Type.Optional(Type.Boolean()),
@@ -44,9 +43,8 @@ export const dashboardArtifactListResponseSchema = Type.Object({
 }, additionalProperties);
 
 export const dashboardArtifactParamsSchema = Type.Object({ id: identifierSchema }, additionalProperties);
-export const dashboardArtifactDetailQuerySchema = Type.Object({ projectId: Type.Optional(projectIdentifierSchema) }, additionalProperties);
+export const dashboardArtifactDetailQuerySchema = Type.Object({}, additionalProperties);
 export const dashboardArtifactContentsQuerySchema = Type.Object({
-  projectId: Type.Optional(projectIdentifierSchema),
   q: Type.Optional(Type.String({ maxLength: 200 })),
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 100_000 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
@@ -105,7 +103,6 @@ export const dashboardArtifactBulkArchiveBodySchema = Type.Object({
 }, additionalProperties);
 
 const dashboardArtifactQuerySelectionSchema = Type.Object({
-  projectId: projectIdentifierSchema,
   q: Type.Optional(Type.String({ maxLength: 200 })),
   channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])),
   archived: Type.Boolean(),
@@ -127,7 +124,6 @@ export const dashboardArtifactZipBodySchema = Type.Object({
 
 export const dashboardArtifactCompareBodySchema = Type.Object({
   ids: Type.Array(identifierSchema, { minItems: 2, maxItems: 2, uniqueItems: true }),
-  projectId: projectIdentifierSchema,
 }, additionalProperties);
 
 export const dashboardArtifactCompareResponseSchema = Type.Object({

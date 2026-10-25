@@ -2,8 +2,8 @@
   import { ArrowDown, ArrowUp, Pin, PinOff } from 'lucide-svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import HomeLayoutSettings from '#features/settings/HomeLayoutSettings.svelte';
-  import { artifactFilenameTemplateState, artifactLibraryPreferencesState, displayTimeZoneState, largeTargetsState, navigationPreferencesState, type ArtifactColumnId, type TabId } from '#lib/ui.svelte';
-  import { pushArtifactFilenameTemplate, pushArtifactLibraryPreferences, pushDisplayTimeZonePref, pushLargeTargetsPref, pushNavigationPreferences, pushShortcutBindings } from '#lib/session.svelte';
+  import { artifactFilenameTemplateState, artifactLibraryPreferencesState, displayTimeZoneState, largeTargetsState, oneThumbModeState, navigationPreferencesState, type ArtifactColumnId, type TabId } from '#lib/ui.svelte';
+  import { pushArtifactFilenameTemplate, pushArtifactLibraryPreferences, pushDisplayTimeZonePref, pushLargeTargetsPref, pushOneThumbModePref, pushNavigationPreferences, pushShortcutBindings } from '#lib/session.svelte';
   import { DEFAULT_SHORTCUT_BINDINGS, shortcutBindingsState, type ShortcutAction, type ShortcutBindings } from '#lib/shortcuts.svelte';
   import { showToast } from '#lib/ui.svelte';
 
@@ -12,6 +12,7 @@
   let shortcutBusy = $state(false);
   let filenameDraft = $state('{app}-{version}');
   let filenameBusy = $state(false);
+  let artifactLayoutName = $state('');
 
   $effect(() => {
     filenameDraft = artifactFilenameTemplateState.value;
@@ -99,6 +100,35 @@
     [columns[index], columns[target]] = [columns[target]!, columns[index]!];
     void pushArtifactLibraryPreferences(artifactLibraryPreferencesState.groupByApp, columns);
   }
+
+  function saveArtifactLayout(): void {
+    const name = artifactLayoutName.trim();
+    if (!name) return;
+    const layouts = artifactLibraryPreferencesState.layouts.filter((layout) => layout.name.toLowerCase() !== name.toLowerCase());
+    if (layouts.length >= 10) {
+      showToast('You can save up to 10 artifact layouts.', 'error');
+      return;
+    }
+    const id = `layout-${crypto.randomUUID()}`;
+    const layout = { id, name, groupByApp: artifactLibraryPreferencesState.groupByApp, columns: [...artifactLibraryPreferencesState.columns] };
+    void pushArtifactLibraryPreferences(layout.groupByApp, layout.columns, [...layouts, layout], id).then(() => {
+      artifactLayoutName = '';
+      showToast('Artifact layout saved', 'success');
+    }).catch((error) => showToast(error instanceof Error ? error.message : 'Could not save artifact layout', 'error'));
+  }
+
+  function applyArtifactLayout(id: string): void {
+    const layout = artifactLibraryPreferencesState.layouts.find((entry) => entry.id === id);
+    if (!layout) return;
+    void pushArtifactLibraryPreferences(layout.groupByApp, layout.columns, artifactLibraryPreferencesState.layouts, layout.id);
+  }
+
+  function removeArtifactLayout(): void {
+    const id = artifactLibraryPreferencesState.activeLayoutId;
+    if (!id) return;
+    const layouts = artifactLibraryPreferencesState.layouts.filter((layout) => layout.id !== id);
+    void pushArtifactLibraryPreferences(artifactLibraryPreferencesState.groupByApp, artifactLibraryPreferencesState.columns, layouts);
+  }
 </script>
 
 <div class="grid gap-5 xl:grid-cols-2">
@@ -119,6 +149,10 @@
       <span>Larger touch targets</span>
       <input type="checkbox" class="size-5 accent-accent" checked={largeTargetsState.value} onchange={(event) => void pushLargeTargetsPref(event.currentTarget.checked)} />
     </label>
+    <label class="mt-2 flex min-h-11 items-center justify-between gap-3 text-sm">
+      <span><span class="block">One-thumb mobile mode</span><span class="mt-0.5 block text-xs text-muted">Moves mobile navigation to the lower right and uses icon-only tabs.</span></span>
+      <input type="checkbox" class="size-5 accent-accent" checked={oneThumbModeState.value} onchange={(event) => void pushOneThumbModePref(event.currentTarget.checked)} />
+    </label>
   </section>
 
   <section class="rounded-xl border border-border/70 bg-panel/40 p-4">
@@ -133,6 +167,20 @@
       <span>Group versions by app</span>
       <input type="checkbox" class="size-5 accent-accent" checked={artifactLibraryPreferencesState.groupByApp} onchange={(event) => void pushArtifactLibraryPreferences(event.currentTarget.checked, artifactLibraryPreferencesState.columns)} />
     </label>
+    <div class="mt-4 border-t border-border/70 pt-4">
+      <label for="artifact-layout-select" class="block text-xs font-medium">Saved column layouts</label>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <select id="artifact-layout-select" class="min-h-10 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-sm" value={artifactLibraryPreferencesState.activeLayoutId ?? ''} onchange={(event) => applyArtifactLayout(event.currentTarget.value)}>
+          <option value="">Current layout</option>
+          {#each artifactLibraryPreferencesState.layouts as layout (layout.id)}<option value={layout.id}>{layout.name}</option>{/each}
+        </select>
+        <Button size="sm" variant="secondary" disabled={!artifactLibraryPreferencesState.activeLayoutId} onclick={removeArtifactLayout}>Delete selected</Button>
+      </div>
+      <form class="mt-2 flex flex-wrap gap-2" onsubmit={(event) => { event.preventDefault(); saveArtifactLayout(); }}>
+        <input class="min-h-10 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-sm" maxlength="40" bind:value={artifactLayoutName} placeholder="Name this layout" aria-label="Saved artifact layout name" />
+        <Button size="sm" type="submit" disabled={!artifactLayoutName.trim() || artifactLibraryPreferencesState.layouts.length >= 10}>Save layout</Button>
+      </form>
+    </div>
     <div class="mt-3 text-xs font-medium text-muted">Visible columns</div>
     <div class="mt-1 divide-y divide-border/70">
         {#each Object.entries(columnLabels) as [id, label] (id)}

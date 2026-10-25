@@ -34,6 +34,7 @@
   let search = $state('');
   let planId = $state('');
   let statusFilter = $state('');
+  let paymentRecoveryCount = $state(0);
   let providerFilter = $state('');
   let from = $state('');
   let to = $state('');
@@ -48,7 +49,7 @@
   let webhookTotal = $state(0);
   let webhookAction = $state<string | undefined>(undefined);
   let webhookProviderFilter = $state('');
-  let webhookStatusFilter = $state('');
+  let webhookStatusFilter = $state('needs_attention');
   let checkoutPauseLoading = $state(false);
   let stripeWebhookSyncLoading = $state(false);
   let observedBillingRevision = liveState.billingRevision;
@@ -88,15 +89,17 @@
     const generation = ++loadGeneration;
     refreshing = true;
     try {
-      const [ledger, status] = await Promise.all([
+      const [ledger, status, recovery] = await Promise.all([
         fetchBillingSubscriptions(subscriptionFilters()),
         canManage ? fetchBillingProviderStatus(refreshProviderStatus) : Promise.resolve(null),
+        canManage ? fetchBillingSubscriptions({ status: 'needs_attention', limit: 1 }) : Promise.resolve(null),
       ]);
       if (generation !== loadGeneration) return;
       subscriptions = ledger.subscriptions;
       total = ledger.total;
       nextCursor = ledger.nextCursor;
       providerStatus = status;
+      paymentRecoveryCount = recovery?.total ?? 0;
       if (canManage) await loadWebhooks();
     } catch (error) {
       if (generation !== loadGeneration) return;
@@ -199,7 +202,7 @@
       webhookTotal = page.total;
       webhookNextCursor = page.nextCursor;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : "Couldn't load webhook inbox", 'error');
+      showToast(error instanceof Error ? error.message : "Couldn't load billing reconciliation queue", 'error');
     } finally {
       webhookLoading = false;
     }
@@ -333,6 +336,12 @@
           <div class="min-w-0 break-words"><span class="font-medium text-text">Stripe:</span> {revenue.providers.stripe.state === 'ready' ? `${revenue.providers.stripe.paymentCount} paid invoice payments` : revenue.providers.stripe.state === 'not_configured' ? 'Not configured' : 'History unavailable'}{#if revenue.providers.stripe.totals.length} · {revenue.providers.stripe.totals.map((total) => `${money(total.net, total.currency)} ${total.currency}`).join(', ')}{/if}</div>
           <div class="min-w-0 break-words"><span class="font-medium text-text">NOWPayments:</span> {revenue.providers.nowpayments.state === 'ready' ? `${revenue.providers.nowpayments.paymentCount} paid crypto payments` : 'History unavailable'}{#if revenue.providers.nowpayments.totals.length} · {revenue.providers.nowpayments.totals.map((total) => `${money(total.net, total.currency)} ${total.currency}`).join(', ')}{/if}</div>
         </div>
+        <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4" aria-label="Subscription retention summary">
+          <div class="rounded-lg border border-border/70 bg-panel/40 p-3"><div class="text-xs text-muted">Active accounts</div><div class="mt-1 text-xl font-semibold tabular-nums">{revenue.retention.activeAccounts}</div></div>
+          <div class="rounded-lg border border-border/70 bg-panel/40 p-3"><div class="text-xs text-muted">Payment issues</div><div class="mt-1 text-xl font-semibold tabular-nums">{revenue.retention.paymentIssues}</div></div>
+          <div class="rounded-lg border border-border/70 bg-panel/40 p-3"><div class="text-xs text-muted">Cancellations updated in 30 days</div><div class="mt-1 text-xl font-semibold tabular-nums">{revenue.retention.cancellationsUpdatedLast30Days}</div></div>
+          <div class="rounded-lg border border-border/70 bg-panel/40 p-3"><div class="text-xs text-muted" title="Recent cancellation records divided by active accounts plus those recent cancellations">Recent cancellation rate</div><div class="mt-1 text-xl font-semibold tabular-nums">{revenue.retention.recentCancellationRatePercent}%</div></div>
+        </div>
         {#if revenue.warnings.length || revenueError}
           <div class="mt-3 space-y-1 rounded-lg border border-warning/30 bg-panel-muted/50 p-3 text-xs text-muted">
             {#if revenueError}<div class="flex items-center gap-2"><AlertTriangle class="h-4 w-4 shrink-0 text-warning" /> Refresh failed: {revenueError}</div>{/if}
@@ -387,9 +396,15 @@
     <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_10rem_10rem_auto]">
       <Input bind:value={search} placeholder="Search member, email, plan, or subscription" aria-label="Search subscriptions" />
       <select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={providerFilter} onchange={() => void load()} aria-label="Filter by provider"><option value="">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option><option value="legacy">Historical records</option></select>
-      <select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={statusFilter} onchange={() => void load()} aria-label="Filter by status"><option value="">All statuses</option><option value="active">Active</option><option value="past_due">Past due</option><option value="cancelled">Canceled</option><option value="revoked">Revoked</option></select>
+      <select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={statusFilter} onchange={() => void load()} aria-label="Filter by status"><option value="">All statuses</option><option value="needs_attention">Payment needs attention</option><option value="active">Active</option><option value="past_due">Past due</option><option value="cancelled">Canceled</option><option value="revoked">Revoked</option></select>
       <Button variant="secondary" onclick={() => void load()}><RefreshCw class="h-4 w-4" /> Apply</Button>
     </div>
+    {#if canManage && paymentRecoveryCount > 0 && statusFilter !== 'needs_attention'}
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-panel-muted/50 p-3">
+        <div class="flex items-start gap-2 text-sm"><AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-warning" /><div><div class="font-medium">{paymentRecoveryCount} subscription{paymentRecoveryCount === 1 ? '' : 's'} need payment attention</div><p class="mt-0.5 text-xs text-muted">Review the latest charge, grace period, and entitlement before contacting the member.</p></div></div>
+        <Button size="sm" variant="secondary" onclick={() => { statusFilter = 'needs_attention'; void load(); }}>Open payment recovery</Button>
+      </div>
+    {/if}
     <details class="mt-3 rounded-lg border border-border/70 px-3 py-2">
       <summary class="cursor-pointer text-sm font-medium">More filters</summary>
       <div class="mt-3 grid gap-2 md:grid-cols-2 lg:grid-cols-5">
@@ -442,8 +457,8 @@
   </Card>
 
   {#if canManage}
-    <Card title="Webhook inbox">
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-2 text-sm text-muted"><span class="flex items-center gap-2"><ShieldAlert class="h-4 w-4" /> Signed payment events are retained for replay and quarantine.</span><div class="flex flex-wrap gap-2"><select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={webhookProviderFilter} onchange={() => void loadWebhooks()} aria-label="Filter webhook provider"><option value="">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option></select><select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={webhookStatusFilter} onchange={() => void loadWebhooks()} aria-label="Filter webhook status"><option value="">All statuses</option><option value="received">Received</option><option value="failed">Failed</option><option value="processed">Processed</option><option value="quarantined">Quarantined</option></select><Button size="sm" variant="secondary" loading={webhookLoading} onclick={() => void loadWebhooks()}><RefreshCw class="h-4 w-4" /> Refresh</Button></div></div>
+  <Card title="Billing reconciliation queue">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2 text-sm text-muted"><span class="flex items-center gap-2"><ShieldAlert class="h-4 w-4" /> Review, replay, reconcile, or quarantine payment events that need attention.</span><div class="flex flex-wrap gap-2"><select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={webhookProviderFilter} onchange={() => void loadWebhooks()} aria-label="Filter webhook provider"><option value="">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option></select><select class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={webhookStatusFilter} onchange={() => void loadWebhooks()} aria-label="Filter payment event status"><option value="needs_attention">Needs attention</option><option value="">All statuses</option><option value="received">Received</option><option value="failed">Failed</option><option value="processed">Processed</option><option value="quarantined">Quarantined</option></select><Button size="sm" variant="secondary" loading={webhookLoading} onclick={() => void loadWebhooks()}><RefreshCw class="h-4 w-4" /> Refresh</Button></div></div>
       {#if webhookLoading && webhooks.length === 0}
         <div class="flex min-h-24 items-center justify-center"><LoaderCircle class="h-5 w-5 animate-spin text-muted" /></div>
       {:else if webhooks.length === 0}

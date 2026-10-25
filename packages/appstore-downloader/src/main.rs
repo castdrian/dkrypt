@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{Duration, Instant};
 
 use dkrypt_appstore_core::api;
 use dkrypt_appstore_core::client::{AppleClient, is_trusted_apple_download_url};
@@ -15,11 +16,13 @@ use url::Url;
 
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 const MAX_APPSTORE_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024 * 1024;
+const MAX_DOWNLOAD_ATTEMPTS: usize = 3;
 
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 enum Request {
     Status,
+    NetworkCheck,
     Authenticate {
         apple_id: String,
         password: String,
@@ -50,6 +53,12 @@ struct Response {
     code: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_reachable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_endpoint: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +96,9 @@ impl Response {
             stage: None,
             code: None,
             diagnostic: None,
+            network_reachable: None,
+            network_latency_ms: None,
+            network_endpoint: None,
         }
     }
 
@@ -99,6 +111,9 @@ impl Response {
             stage: None,
             code: None,
             diagnostic: None,
+            network_reachable: None,
+            network_latency_ms: None,
+            network_endpoint: None,
         }
     }
 
@@ -111,6 +126,24 @@ impl Response {
             stage: Some(failure.stage),
             code: Some(failure.code),
             diagnostic: failure.diagnostic,
+            network_reachable: None,
+            network_latency_ms: None,
+            network_endpoint: None,
+        }
+    }
+
+    fn network_check(reachable: bool, latency_ms: u64, diagnostic: Option<String>) -> Self {
+        Self {
+            ok: true,
+            authenticated: None,
+            free_license_claimed: None,
+            storefront_country: None,
+            stage: Some("network_check"),
+            code: diagnostic.as_deref().map(|_| "apple_network_unavailable"),
+            diagnostic,
+            network_reachable: Some(reachable),
+            network_latency_ms: Some(latency_ms),
+            network_endpoint: Some("https://itunes.apple.com/lookup"),
         }
     }
 }
@@ -154,6 +187,7 @@ fn read_request() -> Result<Request, &'static str> {
 fn validate_request(request: &Request) -> Result<(), &'static str> {
     match request {
         Request::Status => Ok(()),
+        Request::NetworkCheck => Ok(()),
         Request::Authenticate {
             apple_id,
             password,
@@ -271,6 +305,7 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
         .ok_or_else(|| DownloaderFailure::new("environment", "invalid_environment"))?;
     let session_directory = home.join(".dkrypt-appstore");
     match request {
+        Request::NetworkCheck => Ok(check_network().await),
         Request::Status => load_account(&session_directory)
             .map(|account| {
                 let storefront_country = account.as_ref().and_then(|account| {
@@ -312,6 +347,60 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
             )
             .await
         }
+    }
+}
+
+async fn check_network() -> Response {
+    const ENDPOINT: &str = "https://itunes.apple.com/lookup?id=310633997&entity=software";
+    let started_at = Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .user_agent("dkrypt-appstore-network-check")
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 || !is_trusted_apple_download_url(attempt.url()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build();
+    let client = match client {
+        Ok(client) => client,
+        Err(_) => {
+            return Response::network_check(
+                false,
+                started_at.elapsed().as_millis() as u64,
+                Some("network_client_setup_failed".to_string()),
+            );
+        }
+    };
+    let response = client.get(ENDPOINT).send().await;
+    match response {
+        Ok(response)
+            if response.status().is_success() && is_trusted_apple_download_url(response.url()) =>
+        {
+            Response::network_check(true, started_at.elapsed().as_millis() as u64, None)
+        }
+        Ok(response) => Response::network_check(
+            false,
+            started_at.elapsed().as_millis() as u64,
+            Some(format!("apple_http_{}", response.status().as_u16())),
+        ),
+        Err(error) if error.is_timeout() => Response::network_check(
+            false,
+            started_at.elapsed().as_millis() as u64,
+            Some("apple_request_timed_out".to_string()),
+        ),
+        Err(error) if error.is_connect() => Response::network_check(
+            false,
+            started_at.elapsed().as_millis() as u64,
+            Some("apple_network_unavailable".to_string()),
+        ),
+        Err(_) => Response::network_check(
+            false,
+            started_at.elapsed().as_millis() as u64,
+            Some("apple_request_failed".to_string()),
+        ),
     }
 }
 
@@ -442,13 +531,27 @@ async fn download(
         external_version_id,
     )
     .map_err(|code| DownloaderFailure::new("version_validation", code))?;
-    let (temporary_path, temporary_file) = temporary_download_path(output_path)
+    let temporary_path = resumable_download_path(output_path)
         .map_err(|_| DownloaderFailure::new("download_staging", "download_file_failed"))?;
-    let mut temporary = TemporaryFile::new(temporary_path.clone());
+    let metadata_path = download_metadata_path(&temporary_path);
+    let mut temporary = TemporaryDownload::new(temporary_path.clone(), metadata_path.clone());
     let download_client = client
         .download_http()
         .map_err(|_| DownloaderFailure::new("download_client", "download_client_setup_failed"))?;
-    stream_download(&download_client, &item.url, temporary_file, max_bytes).await?;
+    if let Err(failure) = stream_download(
+        &download_client,
+        &item.url,
+        &temporary_path,
+        &metadata_path,
+        max_bytes,
+    )
+    .await
+    {
+        if has_resumable_download_state(&temporary_path, &metadata_path) {
+            temporary.keep();
+        }
+        return Err(failure);
+    }
     let mut output = TemporaryFile::new(output_path.to_path_buf());
     dkrypt_appstore_core::ipa::patch::patch_ipa(
         &temporary_path,
@@ -750,7 +853,8 @@ fn map_download_diagnostic(error: &ClientError) -> Option<String> {
 async fn stream_download(
     client: &dkrypt_appstore_core::client::DownloadHttpClient,
     url: &str,
-    destination: fs::File,
+    destination: &Path,
+    metadata_path: &Path,
     max_bytes: u64,
 ) -> Result<(), DownloaderFailure> {
     let parsed = Url::parse(url)
@@ -761,71 +865,244 @@ async fn stream_download(
             "download_url_rejected",
         ));
     }
-    let mut response = client.get(parsed).send().await.map_err(|error| {
-        DownloaderFailure::new(
-            "download_transfer",
-            map_transfer_error(error.is_timeout(), error.is_connect()),
-        )
-    })?;
-    if !is_trusted_apple_download_url(response.url()) {
-        return Err(DownloaderFailure::new(
-            "download_redirect",
-            "download_redirect_rejected",
-        ));
-    }
-    let status = response.status();
-    if !status.is_success() {
-        let code = if status.is_redirection() {
-            "download_redirect_rejected"
-        } else if status.as_u16() == 429 {
-            "apple_rate_limited"
-        } else {
-            "download_http_rejected"
-        };
-        return Err(DownloaderFailure::new("download_transfer", code));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > max_bytes)
-    {
-        return Err(DownloaderFailure::new(
-            "download_transfer",
-            "download_too_large",
-        ));
-    }
-    let mut output = tokio::fs::File::from_std(destination);
-    let mut downloaded = 0_u64;
-    while let Some(chunk) = response.chunk().await.map_err(|error| {
-        DownloaderFailure::new(
-            "download_transfer",
-            map_transfer_error(error.is_timeout(), error.is_connect()),
-        )
-    })? {
-        downloaded = downloaded
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| DownloaderFailure::new("download_transfer", "download_too_large"))?;
-        if downloaded > max_bytes {
+    for attempt in 0..MAX_DOWNLOAD_ATTEMPTS {
+        let saved_etag = load_download_etag(metadata_path);
+        let mut offset = fs::metadata(destination)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if offset > max_bytes {
             return Err(DownloaderFailure::new(
                 "download_transfer",
                 "download_too_large",
             ));
         }
-        tokio::io::AsyncWriteExt::write_all(&mut output, &chunk)
+        if offset > 0 && saved_etag.is_none() {
+            remove_download_partial(destination, metadata_path);
+            offset = 0;
+        }
+        let mut request = client.get(parsed.clone());
+        if offset > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+            if let Some(etag) = saved_etag.as_ref() {
+                request = request.header(reqwest::header::IF_RANGE, etag);
+            }
+        }
+        let mut response = request.send().await.map_err(|error| {
+            DownloaderFailure::new(
+                "download_transfer",
+                map_transfer_error(error.is_timeout(), error.is_connect()),
+            )
+        })?;
+        if !is_trusted_apple_download_url(response.url()) {
+            return Err(DownloaderFailure::new(
+                "download_redirect",
+                "download_redirect_rejected",
+            ));
+        }
+        let status = response.status();
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && offset > 0 {
+            let complete_length = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_unsatisfied_content_range);
+            if complete_length == Some(offset) {
+                return Ok(());
+            }
+        }
+        let (write_offset, total_size) =
+            if status == reqwest::StatusCode::PARTIAL_CONTENT && offset > 0 {
+                let content_range = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_content_range);
+                if content_range.is_none_or(|(start, end, total)| {
+                    start != offset || end < start || total.is_some_and(|size| size <= end)
+                }) {
+                    remove_download_partial(destination, metadata_path);
+                    if attempt + 1 < MAX_DOWNLOAD_ATTEMPTS {
+                        continue;
+                    }
+                    return Err(DownloaderFailure::new(
+                        "download_transfer",
+                        "download_range_invalid",
+                    ));
+                }
+                (offset, content_range.and_then(|(_, _, total)| total))
+            } else if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(DownloaderFailure::new(
+                    "download_transfer",
+                    "download_range_invalid",
+                ));
+            } else if status.is_success() {
+                offset = 0;
+                let total = response.content_length();
+                remove_download_partial(destination, metadata_path);
+                (0, total)
+            } else {
+                let code = if status.is_redirection() {
+                    "download_redirect_rejected"
+                } else if status.as_u16() == 429 {
+                    "apple_rate_limited"
+                } else {
+                    "download_http_rejected"
+                };
+                return Err(DownloaderFailure::new("download_transfer", code));
+            };
+        if total_size.is_some_and(|size| size > max_bytes) || write_offset > max_bytes {
+            return Err(DownloaderFailure::new(
+                "download_transfer",
+                "download_too_large",
+            ));
+        }
+        if let Some(etag) = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.starts_with("W/"))
+        {
+            save_download_etag(metadata_path, etag).map_err(|_| {
+                DownloaderFailure::new("download_staging", "download_disk_write_failed")
+            })?;
+        } else if write_offset == 0 {
+            let _ = fs::remove_file(metadata_path);
+        }
+        let mut output = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(write_offset > 0)
+            .truncate(write_offset == 0)
+            .mode(0o600)
+            .open(destination)
             .await
             .map_err(|_| {
                 DownloaderFailure::new("download_staging", "download_disk_write_failed")
             })?;
+        let mut downloaded = write_offset;
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            DownloaderFailure::new(
+                "download_transfer",
+                map_transfer_error(error.is_timeout(), error.is_connect()),
+            )
+        })? {
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| DownloaderFailure::new("download_transfer", "download_too_large"))?;
+            if downloaded > max_bytes || total_size.is_some_and(|size| downloaded > size) {
+                return Err(DownloaderFailure::new(
+                    "download_transfer",
+                    "download_too_large",
+                ));
+            }
+            tokio::io::AsyncWriteExt::write_all(&mut output, &chunk)
+                .await
+                .map_err(|_| {
+                    DownloaderFailure::new("download_staging", "download_disk_write_failed")
+                })?;
+        }
+        tokio::io::AsyncWriteExt::flush(&mut output)
+            .await
+            .map_err(|_| {
+                DownloaderFailure::new("download_staging", "download_disk_write_failed")
+            })?;
+        if total_size.is_some_and(|size| downloaded != size) {
+            if attempt + 1 < MAX_DOWNLOAD_ATTEMPTS && load_download_etag(metadata_path).is_some() {
+                continue;
+            }
+            return Err(DownloaderFailure::new(
+                "download_transfer",
+                "download_incomplete",
+            ));
+        }
+        if downloaded == 0 {
+            return Err(DownloaderFailure::new(
+                "download_transfer",
+                "download_empty",
+            ));
+        }
+        return Ok(());
     }
-    tokio::io::AsyncWriteExt::flush(&mut output)
-        .await
-        .map_err(|_| DownloaderFailure::new("download_staging", "download_disk_write_failed"))?;
-    if downloaded == 0 {
-        return Err(DownloaderFailure::new(
-            "download_transfer",
-            "download_empty",
-        ));
+    Err(DownloaderFailure::new(
+        "download_transfer",
+        "download_transfer_failed",
+    ))
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
+    let range = value.strip_prefix("bytes ")?;
+    let (range, total) = range.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    let total = if total == "*" {
+        None
+    } else {
+        Some(total.parse().ok()?)
+    };
+    if end < start || total.is_some_and(|size| size <= end) {
+        return None;
     }
-    Ok(())
+    Some((start, end, total))
+}
+
+fn parse_unsatisfied_content_range(value: &str) -> Option<u64> {
+    let total = value.strip_prefix("bytes */")?;
+    total.parse().ok()
+}
+
+fn resumable_download_path(output: &Path) -> Result<PathBuf, &'static str> {
+    let parent = output.parent().ok_or("invalid_request")?;
+    let filename = output
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("invalid_request")?;
+    let path = parent.join(format!(".{filename}.partial"));
+    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        || fs::symlink_metadata(download_metadata_path(&path))
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err("invalid_request");
+    }
+    Ok(path)
+}
+
+fn download_metadata_path(partial: &Path) -> PathBuf {
+    partial.with_extension("partial.json")
+}
+
+fn load_download_etag(metadata_path: &Path) -> Option<String> {
+    let metadata = fs::read(metadata_path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&metadata).ok()?;
+    value
+        .get("etag")?
+        .as_str()
+        .filter(|value| !value.starts_with("W/") && value.len() <= 512)
+        .map(str::to_owned)
+}
+
+fn save_download_etag(metadata_path: &Path, etag: &str) -> Result<(), &'static str> {
+    let bytes =
+        serde_json::to_vec(&serde_json::json!({ "etag": etag })).map_err(|_| "download_failed")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(metadata_path)
+        .map_err(|_| "download_failed")?;
+    file.write_all(&bytes).map_err(|_| "download_failed")?;
+    file.sync_all().map_err(|_| "download_failed")
+}
+
+fn has_resumable_download_state(partial: &Path, metadata_path: &Path) -> bool {
+    fs::metadata(partial).is_ok_and(|metadata| metadata.len() > 0)
+        && load_download_etag(metadata_path).is_some()
+}
+
+fn remove_download_partial(partial: &Path, metadata_path: &Path) {
+    let _ = fs::remove_file(partial);
+    let _ = fs::remove_file(metadata_path);
 }
 
 fn map_transfer_error(is_timeout: bool, is_connect: bool) -> &'static str {
@@ -851,11 +1128,6 @@ impl TemporaryFile {
     fn keep(&mut self) {
         self.keep = true;
     }
-
-    fn remove(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        self.keep = true;
-    }
 }
 
 impl Drop for TemporaryFile {
@@ -866,6 +1138,40 @@ impl Drop for TemporaryFile {
     }
 }
 
+struct TemporaryDownload {
+    path: PathBuf,
+    metadata_path: PathBuf,
+    keep: bool,
+}
+
+impl TemporaryDownload {
+    fn new(path: PathBuf, metadata_path: PathBuf) -> Self {
+        Self {
+            path,
+            metadata_path,
+            keep: false,
+        }
+    }
+
+    fn keep(&mut self) {
+        self.keep = true;
+    }
+
+    fn remove(&mut self) {
+        remove_download_partial(&self.path, &self.metadata_path);
+        self.keep = true;
+    }
+}
+
+impl Drop for TemporaryDownload {
+    fn drop(&mut self) {
+        if !self.keep {
+            remove_download_partial(&self.path, &self.metadata_path);
+        }
+    }
+}
+
+#[cfg(test)]
 fn temporary_download_path(output: &Path) -> Result<(PathBuf, fs::File), &'static str> {
     let parent = output.parent().ok_or("invalid_request")?;
     for _ in 0..8 {
@@ -1002,9 +1308,10 @@ mod tests {
     use super::{
         DownloaderFailure, Response, country_code_from_storefront, load_account,
         map_authentication_error, map_download_diagnostic, map_download_error,
-        map_license_claim_error, map_lookup_error, save_account, should_claim_free_license,
-        temporary_download_path, valid_bundle_id, valid_email, valid_verification_code,
-        verify_requested_version,
+        map_license_claim_error, map_lookup_error, parse_content_range,
+        parse_unsatisfied_content_range, resumable_download_path, save_account,
+        should_claim_free_license, temporary_download_path, valid_bundle_id, valid_email,
+        valid_verification_code, verify_requested_version,
     };
     use dkrypt_appstore_core::error::{ClientError, StoreError};
     use dkrypt_appstore_core::model::Account;
@@ -1385,6 +1692,40 @@ mod tests {
                 .mode()
                 & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn parses_content_ranges_for_safe_resume_offsets() {
+        assert_eq!(
+            parse_content_range("bytes 1024-2047/4096"),
+            Some((1024, 2047, Some(4096)))
+        );
+        assert_eq!(
+            parse_content_range("bytes 1024-2047/*"),
+            Some((1024, 2047, None))
+        );
+        assert_eq!(parse_content_range("bytes 0-9/10"), Some((0, 9, Some(10))));
+        assert_eq!(parse_content_range("items 1024-2047/4096"), None);
+        assert_eq!(parse_content_range("bytes 2048-1024/4096"), None);
+    }
+
+    #[test]
+    fn parses_unsatisfied_ranges_for_completed_partial_files() {
+        assert_eq!(parse_unsatisfied_content_range("bytes */4096"), Some(4096));
+        assert_eq!(parse_unsatisfied_content_range("bytes 1-4/5"), None);
+    }
+
+    #[test]
+    fn resumes_downloads_at_a_stable_private_partial_path() {
+        let directory = tempdir().expect("create temporary directory");
+        let output = directory.path().join("app.ipa");
+        let partial = resumable_download_path(&output).expect("get resumable path");
+        assert_eq!(partial, directory.path().join(".app.ipa.partial"));
+        std::fs::write(&partial, b"partial").expect("write prior partial");
+        assert_eq!(
+            resumable_download_path(&output).expect("reuse partial path"),
+            partial
         );
     }
 

@@ -4,7 +4,7 @@ import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { getAuthProfile } from '#identity.js';
-import { getProject, getUserEffectivePermissions, listAllowedUsers, recordAudit, userCanAccessProject } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getUserEffectivePermissions, listAllowedUsers, recordAudit, userCanAccessProject } from '#store/state.js';
 import { acceptIntegrationBillingOwnerTransfer, createGithubOidcPolicy, createSignedTriggerPolicy, getSignedTriggerPolicy, listGithubOidcPolicies, listSignedTriggerPolicies, publicSignedTriggerPolicy, requestIntegrationBillingOwnerTransfer, revokeGithubOidcPolicy, revokeSignedTriggerPolicy, rotateSignedTriggerSecret } from '#store/integrationRepository.js';
 
 const bundleIdSchema = Type.String({ minLength: 3, maxLength: 200, pattern: '^[A-Za-z0-9.-]+$' });
@@ -15,12 +15,15 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
   const administrator = fastifyRequirePermission(PermissionFlag.administrator);
   const integrationViewer = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation);
   const profileName = (userId: string | undefined): string => userId ? getAuthProfile(userId)?.displayName ?? userId : 'System-owned';
-  const serializeIntegration = <T extends { billingOwnerId?: string; billingOwnerTransfer?: { userId: string; requestedBy: string } }>(policy: T) => ({
-    ...policy,
+  const serializeIntegration = <T extends { projectId: string; billingOwnerId?: string; billingOwnerTransfer?: { userId: string; requestedBy: string } }>(policy: T) => {
+    const { projectId: _projectId, ...safePolicy } = policy;
+    return {
+    ...safePolicy,
     billingOwnerDisplayName: profileName(policy.billingOwnerId),
     billingOwnerTransferDisplayName: policy.billingOwnerTransfer ? profileName(policy.billingOwnerTransfer.userId) : undefined,
     billingOwnerTransferRequestorDisplayName: policy.billingOwnerTransfer ? profileName(policy.billingOwnerTransfer.requestedBy) : undefined,
-  });
+    };
+  };
   const eligibleOwners = (projectId: string) => listAllowedUsers()
     .filter((user) => userCanAccessProject(user.username, projectId))
     .filter((user) => hasPermission(getUserEffectivePermissions(user.username), PermissionFlag.requestDecrypt))
@@ -33,8 +36,8 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
 
   server.get('/v1/dashboard/integrations/ownership/pending', { schema: { hide: true }, preHandler: integrationViewer }, (request) => {
     const actor = getFastifySession(request)!.sub.toLowerCase();
-    const signed = listSignedTriggerPolicies().filter((policy) => policy.billingOwnerTransfer?.userId === actor).map((policy) => ({ ...serializeIntegration(policy), kind: policy.kind, label: `${policy.projectId} · ${policy.bundleIds.join(', ')}` }));
-    const oidc = listGithubOidcPolicies().filter((policy) => policy.billingOwnerTransfer?.userId === actor).map((policy) => ({ ...serializeIntegration(policy), kind: policy.kind, label: `GitHub Actions · ${policy.projectId} · ${policy.bundleIds.join(', ')}` }));
+    const signed = listSignedTriggerPolicies().filter((policy) => policy.billingOwnerTransfer?.userId === actor).map((policy) => ({ ...serializeIntegration(policy), kind: policy.kind, label: policy.bundleIds.join(', ') }));
+    const oidc = listGithubOidcPolicies().filter((policy) => policy.billingOwnerTransfer?.userId === actor).map((policy) => ({ ...serializeIntegration(policy), kind: policy.kind, label: `GitHub Actions · ${policy.bundleIds.join(', ')}` }));
     return { requests: [...signed, ...oidc] };
   });
 
@@ -55,7 +58,7 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
     const policy = getSignedTriggerPolicy(request.params.id) ?? listGithubOidcPolicies().find((candidate) => candidate.id === request.params.id);
     if (!policy || !policy.enabled) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     const userId = request.body.userId.trim().toLowerCase();
-    if (userId !== 'root' && !eligibleOwners(policy.projectId).some((user) => user.id === userId)) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'recipient needs project, integration, and decrypt access'));
+    if (userId !== 'root' && !eligibleOwners(policy.projectId).some((user) => user.id === userId)) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'recipient needs integration and decrypt access'));
     const result = requestIntegrationBillingOwnerTransfer(request.params.id, userId, actor);
     if (!result) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     recordAudit(actor, 'integration.billing-owner-request', result.id, userId);
@@ -77,15 +80,13 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
   });
 
   server.post('/v1/dashboard/integrations/github-oidc', {
-    schema: { hide: true, body: Type.Object({ repositoryId: Type.String({ pattern: '^[0-9]+$', maxLength: 32 }), workflowRef: Type.String({ minLength: 1, maxLength: 300 }), ref: Type.Optional(Type.String({ minLength: 1, maxLength: 250 })), environment: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), audience: Type.String({ minLength: 1, maxLength: 250 }), projectId: Type.String({ minLength: 1, maxLength: 80 }), bundleIds: Type.Array(bundleIdSchema, { minItems: 1, maxItems: 25, uniqueItems: true }), allowTestFlight: Type.Boolean() }, { additionalProperties: false }) },
+    schema: { hide: true, body: Type.Object({ repositoryId: Type.String({ pattern: '^[0-9]+$', maxLength: 32 }), workflowRef: Type.String({ minLength: 1, maxLength: 300 }), ref: Type.Optional(Type.String({ minLength: 1, maxLength: 250 })), environment: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), audience: Type.String({ minLength: 1, maxLength: 250 }), bundleIds: Type.Array(bundleIdSchema, { minItems: 1, maxItems: 25, uniqueItems: true }), allowTestFlight: Type.Boolean() }, { additionalProperties: false }) },
     preHandler: administrator,
   }, (request, reply) => {
     const input = request.body;
     if (Boolean(input.ref) === Boolean(input.environment) || [input.workflowRef, input.ref, input.environment, input.audience].some((value) => value?.includes('*'))) return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'configure one exact ref or environment with no wildcards'));
-    const project = getProject(input.projectId);
-    if (!project || project.archivedAt) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active project not found'));
-    const policy = createGithubOidcPolicy({ ...input, createdBy: getFastifySession(request)!.sub });
-    recordAudit(getFastifySession(request)!.sub, 'integration.create', policy.id, `${policy.projectId} · GitHub repository ${policy.repositoryId}`);
+    const policy = createGithubOidcPolicy({ ...input, projectId: DEFAULT_PROJECT_ID, createdBy: getFastifySession(request)!.sub });
+    recordAudit(getFastifySession(request)!.sub, 'integration.create', policy.id, `GitHub repository ${policy.repositoryId}`);
     return reply.code(201).send({ policy });
   });
 
@@ -96,27 +97,25 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
   });
 
   server.post('/v1/dashboard/integrations/signed-triggers', {
-    schema: { hide: true, body: Type.Object({ projectId: Type.String({ minLength: 1, maxLength: 80 }), bundleIds: Type.Array(bundleIdSchema, { minItems: 1, maxItems: 25, uniqueItems: true }), sources: Type.Array(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]), { minItems: 1, maxItems: 2, uniqueItems: true }) }, { additionalProperties: false }) },
+    schema: { hide: true, body: Type.Object({ bundleIds: Type.Array(bundleIdSchema, { minItems: 1, maxItems: 25, uniqueItems: true }), sources: Type.Array(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]), { minItems: 1, maxItems: 2, uniqueItems: true }) }, { additionalProperties: false }) },
     preHandler: administrator,
   }, (request, reply) => {
-    const project = getProject(request.body.projectId);
-    if (!project || project.archivedAt) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active project not found'));
-    const policy = createSignedTriggerPolicy({ ...request.body, createdBy: getFastifySession(request)!.sub });
-    recordAudit(getFastifySession(request)!.sub, 'integration.create', policy.id, `${policy.projectId} · ${policy.bundleIds.length} bundles`);
-    return reply.code(201).send({ integration: publicSignedTriggerPolicy(policy), secret: policy.secret });
+    const policy = createSignedTriggerPolicy({ ...request.body, projectId: DEFAULT_PROJECT_ID, createdBy: getFastifySession(request)!.sub });
+    recordAudit(getFastifySession(request)!.sub, 'integration.create', policy.id, `${policy.bundleIds.length} bundles`);
+    return reply.code(201).send({ integration: serializeIntegration(publicSignedTriggerPolicy(policy)), secret: policy.secret });
   });
 
   server.post('/v1/dashboard/integrations/signed-triggers/:id/rotate', { schema: { hide: true, params: Type.Object({ id: Type.String() }) }, preHandler: administrator }, (request, reply) => {
     const policy = rotateSignedTriggerSecret(request.params.id);
     if (!policy) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     recordAudit(getFastifySession(request)!.sub, 'integration.rotate', policy.id);
-    return { integration: publicSignedTriggerPolicy(policy), secret: policy.secret };
+    return { integration: serializeIntegration(publicSignedTriggerPolicy(policy)), secret: policy.secret };
   });
 
   server.post('/v1/dashboard/integrations/signed-triggers/:id/revoke', { schema: { hide: true, params: Type.Object({ id: Type.String() }) }, preHandler: administrator }, (request, reply) => {
     const policy = getSignedTriggerPolicy(request.params.id);
     if (!policy || !revokeSignedTriggerPolicy(policy.id)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     recordAudit(getFastifySession(request)!.sub, 'integration.revoke', policy.id);
-    return { integration: publicSignedTriggerPolicy(getSignedTriggerPolicy(policy.id)!) };
+    return { integration: serializeIntegration(publicSignedTriggerPolicy(getSignedTriggerPolicy(policy.id)!)) };
   });
 };

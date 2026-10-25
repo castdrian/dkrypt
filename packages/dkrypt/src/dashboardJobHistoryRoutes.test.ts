@@ -101,7 +101,7 @@ test('attempt comparison rejects records without stable build identity', async (
   }
 });
 
-test('job history export preserves project scoping, formats, and attachment names', async () => {
+test('job history export omits internal scope identifiers and preserves formats and attachment names', async () => {
   const entries = [
     historyEntry({ queuedBy: 'Doe, "A"', queueReason: 'Waiting for a compatible device' }),
     historyEntry({ id: 'other-job', projectId: 'other-project' }),
@@ -118,7 +118,10 @@ test('job history export preserves project scoping, formats, and attachment name
 
     expect(json.statusCode).toBe(200);
     expect(json.headers['content-disposition']).toBe('attachment; filename="dkrypt-job-history.json"');
-    expect(JSON.parse(json.body)).toEqual([entries[0]]);
+    const exported = JSON.parse(json.body) as Array<Record<string, unknown>>;
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toMatchObject({ id: entries[0]!.id, bundleId: entries[0]!.bundleId, status: entries[0]!.status });
+    expect(exported[0]).not.toHaveProperty('projectId');
     expect(csv.statusCode).toBe(200);
     expect(csv.headers['content-type']).toContain('text/csv');
     expect(csv.headers['content-disposition']).toBe('attachment; filename="dkrypt-job-history.csv"');
@@ -127,7 +130,7 @@ test('job history export preserves project scoping, formats, and attachment name
     expect(csv.body).toContain('Waiting for a compatible device');
     expect(unsupportedFormat.statusCode).toBe(200);
     expect(unsupportedFormat.headers['content-disposition']).toBe('attachment; filename="dkrypt-job-history.json"');
-    expect(deniedProject.statusCode).toBe(404);
+    expect(deniedProject.statusCode).toBe(200);
     expect(unauthenticated.statusCode).toBe(401);
   } finally {
     await server.close();

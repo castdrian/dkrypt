@@ -38,8 +38,6 @@
 		showToast,
 		themePrefState,
 	} from "#lib/ui.svelte";
-import { projectSelectionState } from "#lib/projectSelection.svelte";
-import { setProjectSelection } from "#lib/projectSelection.svelte";
 import { interfaceLanguageState, systemLocalesState } from "#lib/ui.svelte";
 import { resolveInterfaceLanguage } from "#lib/locale";
 	import { translateMessage } from "#lib/messages";
@@ -170,7 +168,6 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 
 	$effect(() => {
 		const q = query.trim();
-		const projectId = projectSelectionState.id;
 		const token = ++quickSearchToken;
 		if (!paletteState.open || q.length < 2) {
 			quickResults = [];
@@ -179,8 +176,8 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 		}
 		searchJobHistory(q);
 		const timer = setTimeout(() => {
-			void fetchDashboardQuickSearch(q, projectId).then((response) => {
-				if (token === quickSearchToken && paletteState.open && query.trim() === q && projectSelectionState.id === projectId) quickResults = response.results;
+			void fetchDashboardQuickSearch(q).then((response) => {
+				if (token === quickSearchToken && paletteState.open && query.trim() === q) quickResults = response.results;
 			}).catch(() => {
 				if (token === quickSearchToken) quickResults = [];
 			});
@@ -241,7 +238,6 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 	}
 
 	function navigateQuickResult(result: DashboardQuickSearchResult): void {
-		if (result.projectId) setProjectSelection(result.projectId);
 		if (result.kind === 'app') {
 			requestFocusSearch(result.id);
 			return;
@@ -296,7 +292,7 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 			base.push({
 				id: `quick-${result.kind}-${result.id}`,
 				label: result.title,
-				keywords: [result.id, result.subtitle, result.projectId].filter(Boolean).join(' '),
+				keywords: [result.id, result.subtitle].filter(Boolean).join(' '),
 				category,
 				subtitle: result.subtitle,
 				run: () => navigateQuickResult(result),

@@ -16,9 +16,9 @@ export const CHANGELOG: ChangelogEntry[] = [
   },
   {
     date: '2026-07-26',
-    title: 'Liquid glass workspace',
+    title: 'Liquid glass design',
     description:
-      'The workspace has a new visual system, cleaner navigation, a readable activity table, and a full-height log console while the status panel remains in place.',
+      'The dashboard has a new visual system, cleaner navigation, a readable activity table, and a full-height log console while the status panel remains in place.',
     link: { tab: 'home' },
   },
   {

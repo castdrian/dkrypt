@@ -14,6 +14,9 @@ export interface AppStoreDownloaderResponse {
   stage?: string;
   code?: string;
   diagnostic?: string;
+  network_reachable?: boolean;
+  network_latency_ms?: number;
+  network_endpoint?: string;
 }
 
 export interface AppStoreDownloaderRequestOptions {
