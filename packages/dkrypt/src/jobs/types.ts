@@ -46,6 +46,7 @@ export interface Job {
   executionStage?: JobExecutionStage;
   executionPath?: JobExecutionPath;
   offlineAttemptedAt?: number;
+  offlineDeviceFallbackStartedAt?: number;
   offlineFailureReason?: string;
   progress: string;
   timeline?: JobTimelineEvent[];

@@ -5,8 +5,8 @@ export function shouldRecordQueueWait(job: Pick<Job, 'retryCount'>): boolean {
   return (job.retryCount ?? 0) === 0;
 }
 
-export function shouldRecordOfflineDeviceHandoff(job: Pick<Job, 'attempt' | 'offlineAttemptedAt' | 'offlineFailureReason'>): boolean {
-  return job.attempt === 2 && job.offlineAttemptedAt !== undefined && Boolean(job.offlineFailureReason);
+export function shouldRecordOfflineDeviceHandoff(job: Pick<Job, 'offlineAttemptedAt' | 'offlineDeviceFallbackStartedAt' | 'offlineFailureReason'>): boolean {
+  return job.offlineAttemptedAt !== undefined && job.offlineDeviceFallbackStartedAt === undefined && Boolean(job.offlineFailureReason);
 }
 
 export function recordJobStarted(job: Pick<Job, 'source' | 'createdAt' | 'retryCount'>, startedAt: number): void {

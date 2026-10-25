@@ -74,6 +74,7 @@ mock.module('./runner.js', () => ({
     }
     if (job.bundleId.includes('offline-fallback')) {
       offlineWorkerAttempts += 1;
+      job.retryCount = 2;
       return Promise.reject(new Error('App Store provider download failed'));
     }
     return Promise.reject(new Error('unexpected server-side App Store test job'));
@@ -308,7 +309,7 @@ describe('enqueueDecryptJob', () => {
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
       expect(offlineWorkerAttempts).toBe(1);
-      expect(getJob(job.id)).toMatchObject({ id: job.id, status: 'running', attempt: 2, executionPath: 'device_fallback', deviceId: testDeviceId });
+      expect(getJob(job.id)).toMatchObject({ id: job.id, status: 'running', attempt: 4, retryCount: 2, executionPath: 'device_fallback', deviceId: testDeviceId });
       expect(job.timeline?.some((event) => event.label.includes('App Store provider download failed'))).toBe(true);
       expect(getDecryptQuotaUsage(ownerId, 2).used).toBe(1);
       expect(metricCounterValue('appstore_offline_device_fallbacks_total', { failureClass: 'app_store', source: 'manual' })).toBe(fallbackCountBefore + 1);

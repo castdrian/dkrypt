@@ -1048,6 +1048,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.transport = device.transport;
     if (shouldRecordOfflineDeviceHandoff(job) && job.offlineAttemptedAt !== undefined) {
       observeMetric('appstore_offline_to_device_start_ms', Math.max(0, startedAt - job.offlineAttemptedAt), { source: job.source });
+      job.offlineDeviceFallbackStartedAt = startedAt;
     }
   } else {
     job.executionPath = 'appstore_offline';

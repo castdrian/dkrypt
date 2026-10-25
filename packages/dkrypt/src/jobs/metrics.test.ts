@@ -9,10 +9,10 @@ describe('job metrics', () => {
   });
 
   it('records offline-to-device timing only for the first device fallback attempt', () => {
-    const fallbackJob = { attempt: 2, offlineAttemptedAt: 100, offlineFailureReason: 'provider unavailable' };
+    const fallbackJob = { attempt: 6, offlineAttemptedAt: 100, offlineFailureReason: 'provider unavailable' };
 
     expect(shouldRecordOfflineDeviceHandoff(fallbackJob)).toBeTrue();
-    expect(shouldRecordOfflineDeviceHandoff({ ...fallbackJob, attempt: 3 })).toBeFalse();
+    expect(shouldRecordOfflineDeviceHandoff({ ...fallbackJob, offlineDeviceFallbackStartedAt: 150 })).toBeFalse();
     expect(shouldRecordOfflineDeviceHandoff({ ...fallbackJob, offlineFailureReason: undefined })).toBeFalse();
   });
 });
