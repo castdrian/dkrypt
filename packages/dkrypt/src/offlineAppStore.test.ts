@@ -45,7 +45,7 @@ async function createDependencies(overrides: Partial<OfflineAppStoreDependencies
       await writeFile(outputPath, 'decrypted ipa');
     },
     inspect: async () => ({
-      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false, extensionOnly: false },
+      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false },
       metadata: { summary: { shortVersion: '1.0' }, infoPlist: { CFBundleIdentifier: 'com.example.app', CFBundleShortVersionString: '1.0' } },
     }),
     ...overrides,
@@ -94,15 +94,22 @@ test('offline App Store processor reports the decrypt stage after download valid
   expect(stages).toEqual(['offline_decrypting']);
 });
 
-test('offline App Store processor preserves extension-only warnings and removes encrypted staging data', async () => {
+test('offline App Store processor preserves embedded executable warnings and removes encrypted staging data', async () => {
   const dependencies = await createDependencies({
     inspect: async () => ({
-      verification: { encryptedPaths: ['Payload/App.app/PlugIns/Share.appex/Share'], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false, extensionOnly: true },
+      verification: {
+        encryptedPaths: [
+          'Payload/App.app/Watch/AppWatch.app/AppWatch',
+          'Payload/App.app/PlugIns/Share.appex/Share',
+        ],
+        primaryExecutable: 'Payload/App.app/App',
+        primaryEncrypted: false,
+      },
       metadata: { summary: { shortVersion: '1.0' }, infoPlist: { CFBundleIdentifier: 'com.example.app', CFBundleShortVersionString: '1.0' } },
     }),
   });
   const result = await createOfflineAppStoreProcessor(dependencies).run(job());
-  expect(result.warnings[0]).toContain('Some embedded extensions remained encrypted');
+  expect(result.warnings[0]).toContain('Some embedded executables remained encrypted');
   expect(await Bun.file(path.join(dependencies.stagingDirectory, 'offline-job.offline-encrypted.ipa')).exists()).toBe(false);
   expect(await Bun.file(result.outputPath).exists()).toBe(true);
 });
@@ -154,11 +161,11 @@ test('offline App Store processor removes both staged files on decrypt and verif
 
   const encryptedPrimary = await createDependencies({
     inspect: async () => ({
-      verification: { encryptedPaths: ['Payload/App.app/App'], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: true, extensionOnly: false },
+      verification: { encryptedPaths: ['Payload/App.app/App'], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: true },
       metadata: { summary: { shortVersion: '1.0' }, infoPlist: { CFBundleIdentifier: 'com.example.app', CFBundleShortVersionString: '1.0' } },
     }),
   });
-  await expect(createOfflineAppStoreProcessor(encryptedPrimary).run(job())).rejects.toThrow('FairPlay verification found encrypted executable paths');
+  await expect(createOfflineAppStoreProcessor(encryptedPrimary).run(job())).rejects.toThrow('FairPlay verification found the primary executable encrypted');
   expect(await Bun.file(path.join(encryptedPrimary.stagingDirectory, 'offline-job.offline-encrypted.ipa')).exists()).toBe(false);
   expect(await Bun.file(path.join(encryptedPrimary.stagingDirectory, 'offline-job.offline-decrypted.ipa')).exists()).toBe(false);
 });
@@ -166,7 +173,7 @@ test('offline App Store processor removes both staged files on decrypt and verif
 test('offline App Store processor rejects a package for another app or release', async () => {
   const wrongBundle = await createDependencies({
     inspect: async () => ({
-      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false, extensionOnly: false },
+      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false },
       metadata: { summary: { shortVersion: '1.0' }, infoPlist: { CFBundleIdentifier: 'com.other.app', CFBundleShortVersionString: '1.0' } },
     }),
   });

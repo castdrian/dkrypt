@@ -49,7 +49,7 @@ mock.module('./runner.js', () => ({
     }
     if (offlineWorkerEnabled && !offlineWorkerReady) return Promise.reject(new Error('Apple Account session needs verification'));
     if (job.bundleId.includes('offline-unavailable')) {
-      return Promise.reject(Object.assign(new Error('This app is not available in the signed-in Apple Account storefront'), { retryable: false, fallbackToDevice: false }));
+      return Promise.reject(Object.assign(new Error('This app is not available in the signed-in Apple Account storefront'), { retryable: false }));
     }
     if (job.bundleId.includes('offline-fallback')) {
       offlineWorkerAttempts += 1;
@@ -58,6 +58,7 @@ mock.module('./runner.js', () => ({
     return Promise.reject(new Error('unexpected server-side App Store test job'));
   },
   runDecrypt: (job: Job, _device: unknown, signal?: AbortSignal) => {
+    if (job.bundleId.includes('offline-unavailable')) return Promise.resolve();
     if (job.bundleId === 'com.test.trace-propagation') observedWorkerCorrelation = currentCorrelation();
     if (job.bundleId === 'com.test.appstore-action-required') {
       actionRequiredAttempts += 1;
@@ -296,7 +297,7 @@ describe('enqueueDecryptJob', () => {
     }
   });
 
-  test('does not send a storefront-unavailable App Store job to the device', async () => {
+  test('falls back to the device when the Apple Account storefront has no app listing', async () => {
     await clearActiveTestJobs();
     const previousBilling = exportBillingSnapshot();
     const ownerId = `offline-unavailable-${crypto.randomUUID()}`;
@@ -312,19 +313,18 @@ describe('enqueueDecryptJob', () => {
     const job = enqueueDecryptJob(bundleId, 'manual', { queuedBy: ownerId, preferredDeviceId: testDeviceId });
 
     try {
-      for (let attempt = 0; attempt < 200 && job.status !== 'failed'; attempt += 1) {
+      for (let attempt = 0; attempt < 200 && job.status !== 'done'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
       expect(offlineWorkerRunCount).toBe(1);
       expect(job).toMatchObject({
-        status: 'failed',
-        attempt: 1,
-        executionPath: 'appstore_offline',
-        error: 'This app is not available in the signed-in Apple Account storefront',
+        status: 'done',
+        attempt: 2,
+        executionPath: 'device_fallback',
+        deviceId: testDeviceId,
       });
-      expect(job.deviceId).toBeUndefined();
-      expect(job.timeline?.some((event) => event.label.startsWith('Started on '))).toBe(false);
-      expect(getDecryptQuotaUsage(ownerId, 2).used).toBe(0);
+      expect(job.timeline?.some((event) => event.label.startsWith('Started on '))).toBe(true);
+      expect(getDecryptQuotaUsage(ownerId, 2).used).toBe(1);
     } finally {
       offlineWorkerEnabled = false;
       offlineWorkerReady = false;

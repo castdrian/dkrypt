@@ -83,8 +83,8 @@ test('an app lookup miss from the downloader becomes a non-retryable storefront 
       name: 'OfflineAppStoreListingUnavailableError',
       message: 'This app is not available in the signed-in Apple Account storefront',
       retryable: false,
-      fallbackToDevice: false,
     });
+    expect(Object.hasOwn(error ?? {}, 'fallbackToDevice')).toBe(false);
     expect(unavailableAppStoreListingError({ stage: 'download_info', code: 'app_not_found' })).toBeUndefined();
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -104,7 +104,6 @@ export class OfflineAppStoreAuthenticationError extends Error {
 
 export class OfflineAppStoreListingUnavailableError extends Error {
   readonly retryable = false;
-  readonly fallbackToDevice = false;
 
   constructor() {
     super('This app is not available in the signed-in Apple Account storefront');
@@ -239,11 +238,11 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
         job.childProcess = undefined;
         const { verification, metadata } = inspection;
         verifyOfflinePackageIdentity(job, metadata);
-        if (verification.primaryEncrypted || (verification.encryptedPaths.length > 0 && !verification.extensionOnly)) {
-          throw new Error(`FairPlay verification found encrypted executable paths: ${verification.encryptedPaths.join(', ')}`);
+        if (verification.primaryEncrypted) {
+          throw new Error(`FairPlay verification found the primary executable encrypted: ${verification.primaryExecutable}`);
         }
-        if (verification.extensionOnly) {
-          job.warnings = [`Some embedded extensions remained encrypted: ${verification.encryptedPaths.join(', ')}`];
+        if (verification.encryptedPaths.length > 0) {
+          job.warnings = [`Some embedded executables remained encrypted: ${verification.encryptedPaths.join(', ')}`];
         }
         const output = await stat(outputPath);
         if (!output.isFile() || output.size <= 0 || output.size > config.artifactMaxBytes) throw new Error('decrypted IPA has an invalid size');

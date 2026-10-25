@@ -35,13 +35,13 @@ function machO(cryptId: number): Buffer {
   return image;
 }
 
-function createIpa(executable: Buffer, extension?: Buffer): string {
+function createIpa(executable: Buffer, secondaryExecutable?: Buffer, secondaryPath = 'Payload/Example.app/PlugIns/Share.appex/Share'): string {
   const directory = mkdtempSync(path.join(tmpdir(), 'dkrypt-fairplay-'));
   const ipaPath = path.join(directory, 'app.ipa');
   const archive = new AdmZip();
   archive.addFile('Payload/Example.app/Info.plist', Buffer.from(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Example</string></dict></plist>`));
   archive.addFile('Payload/Example.app/Example', executable);
-  if (extension) archive.addFile('Payload/Example.app/PlugIns/Share.appex/Share', extension);
+  if (secondaryExecutable) archive.addFile(secondaryPath, secondaryExecutable);
   archive.writeZip(ipaPath);
   return ipaPath;
 }
@@ -63,28 +63,31 @@ test('FairPlay verifier requires a valid arm64 primary executable and detects it
       encryptedPaths: [],
       primaryExecutable: 'Payload/Example.app/Example',
       primaryEncrypted: false,
-      extensionOnly: false,
     });
   } finally {
     rmSync(path.dirname(ipaPath), { recursive: true, force: true });
   }
 });
 
-test('FairPlay verifier distinguishes extension-only encryption from a primary executable failure', () => {
-  const extensionOnlyPath = createIpa(machO(0), machO(1));
+test('FairPlay verifier reports encrypted embedded executables separately from the primary executable', () => {
+  const extensionPath = createIpa(machO(0), machO(1));
+  const watchAppPath = createIpa(machO(0), machO(1), 'Payload/Example.app/Watch/ExampleWatch.app/ExampleWatch');
   const primaryEncryptedPath = createIpa(machO(1), machO(1));
   try {
-    expect(verifyIpaFairPlayDecrypted(extensionOnlyPath)).toMatchObject({
+    expect(verifyIpaFairPlayDecrypted(extensionPath)).toMatchObject({
       encryptedPaths: ['Payload/Example.app/PlugIns/Share.appex/Share'],
       primaryEncrypted: false,
-      extensionOnly: true,
+    });
+    expect(verifyIpaFairPlayDecrypted(watchAppPath)).toMatchObject({
+      encryptedPaths: ['Payload/Example.app/Watch/ExampleWatch.app/ExampleWatch'],
+      primaryEncrypted: false,
     });
     expect(verifyIpaFairPlayDecrypted(primaryEncryptedPath)).toMatchObject({
       primaryEncrypted: true,
-      extensionOnly: false,
     });
   } finally {
-    rmSync(path.dirname(extensionOnlyPath), { recursive: true, force: true });
+    rmSync(path.dirname(extensionPath), { recursive: true, force: true });
+    rmSync(path.dirname(watchAppPath), { recursive: true, force: true });
     rmSync(path.dirname(primaryEncryptedPath), { recursive: true, force: true });
   }
 });

@@ -404,6 +404,7 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
       reply.code(404).send(createHttpErrorEnvelope(request.id, 404, result.error ?? 'device not found'));
       return;
     }
+    notifyDeviceDispatchStateChanged();
     emitJobsChanged();
     return serializeDashboardDevice(result.device as DeviceRecord);
   });

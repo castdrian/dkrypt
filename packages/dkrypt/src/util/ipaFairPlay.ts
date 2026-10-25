@@ -7,7 +7,6 @@ export interface FairPlayVerificationResult {
   encryptedPaths: string[];
   primaryExecutable: string;
   primaryEncrypted: boolean;
-  extensionOnly: boolean;
 }
 
 interface MachOSlice {
@@ -163,6 +162,5 @@ export function verifyIpaFairPlayDecrypted(ipaPath: string): FairPlayVerificatio
   if (isEncryptedMachO(primaryBuffer) === undefined) throw new Error('downloaded IPA primary executable is malformed');
   const encryptedPaths = entries.flatMap((entry) => isEncryptedMachO(entry.getData()) === true ? [entry.entryName] : []);
   const primaryEncrypted = encryptedPaths.includes(primaryExecutable);
-  const extensionOnly = encryptedPaths.length > 0 && encryptedPaths.every((entry) => /(?:^|\/)(?:Extensions|PlugIns)\/|\.appex(?:\/|$)/i.test(entry));
-  return { encryptedPaths, primaryExecutable, primaryEncrypted, extensionOnly };
+  return { encryptedPaths, primaryExecutable, primaryEncrypted };
 }

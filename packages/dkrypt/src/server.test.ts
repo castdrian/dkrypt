@@ -8,7 +8,7 @@ import { currentCorrelation } from '#correlation.js';
 import { deleteAuthProfile, upsertAuthProfile } from '#identity.js';
 import { scopedLogger } from '#logger.js';
 import { closeDashboardConnections, dashboardEvents, emitBillingChanged, emitJobsChanged } from '#events.js';
-import { cancelQueuedJob, enqueueDecryptJob } from '#jobs/store.js';
+import { cancelJob, cancelQueuedJob, enqueueDecryptJob } from '#jobs/store.js';
 import { config } from '#config.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
 import { PermissionFlag, serializeBits } from '#permissions.js';
@@ -2163,6 +2163,25 @@ test('device drain stops assignment and disables an idle device until explicitly
     expect(enabled.statusCode).toBe(200);
     expect(enabled.json()).toMatchObject({ id: device.id, enabled: true, draining: false });
   } finally {
+    deleteDevice(device.id, 'test');
+    await server.close();
+  }
+});
+
+test('enabling a device wakes queued jobs assigned to it', async () => {
+  const { server, cookie } = await signIn();
+  const device = createDevice({ name: 'dispatch wake device', transport: 'wifi', host: '127.0.0.1', enabled: false }, 'test');
+  const job = enqueueDecryptJob(`com.test.dispatch-wake.${crypto.randomUUID()}`, 'manual', { preferredDeviceId: device.id });
+
+  try {
+    expect(job.status).toBe('queued');
+    const enabled = await server.inject({ method: 'PATCH', url: `/v1/dashboard/devices/${device.id}`, headers: { cookie }, payload: { enabled: true } });
+    expect(enabled.statusCode).toBe(200);
+    for (let attempt = 0; attempt < 100 && job.status === 'queued'; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(job).toMatchObject({ executionPath: 'device', deviceId: device.id });
+  } finally {
+    if (job.status === 'queued') cancelQueuedJob(job.id, 'device dispatch wake test cleanup');
+    if (job.status === 'running') cancelJob(job.id, 'device dispatch wake test cleanup');
     deleteDevice(device.id, 'test');
     await server.close();
   }
