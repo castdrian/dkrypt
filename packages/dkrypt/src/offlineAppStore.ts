@@ -22,6 +22,7 @@ import { sanitizeAppStoreDownloadDiagnostic } from '#offlineAppStoreDiagnostic.j
 import { runAppStoreDownloaderRequest, type AppStoreDownloaderResponse } from '#offlineAppStoreDownloader.js';
 import { emitJobsChanged } from '#events.js';
 import { saveAppleAccountFairPlayCredentialForSelector } from '#appleAccountVault.js';
+import { observeMetric } from '#metrics.js';
 
 const log = scopedLogger('appstore-offline');
 let offlineAppStoreDispatchNotifier = () => {};
@@ -111,6 +112,21 @@ export class OfflineAppStoreListingUnavailableError extends Error {
   }
 }
 
+type OfflineAppStorePhase = 'download' | 'credential_retrieval' | 'decrypt' | 'verification';
+
+async function measureOfflineAppStorePhase<T>(phase: OfflineAppStorePhase, operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  let outcome: 'success' | 'failure' = 'success';
+  try {
+    return await operation();
+  } catch (error) {
+    outcome = 'failure';
+    throw error;
+  } finally {
+    observeMetric('appstore_offline_phase_duration_ms', Math.max(0, Date.now() - startedAt), { phase, outcome });
+  }
+}
+
 export function unavailableAppStoreListingError(response: Pick<AppStoreDownloaderResponse, 'stage' | 'code'>): OfflineAppStoreListingUnavailableError | undefined {
   if (response.stage !== 'app_lookup' || response.code !== 'app_not_found') return undefined;
   return new OfflineAppStoreListingUnavailableError();
@@ -193,7 +209,7 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
       await rm(encryptedPath, { force: true });
       await rm(outputPath, { force: true });
       try {
-        const downloadResult = await dependencies.runDownload(job, secrets, encryptedPath, signal);
+        const downloadResult = await measureOfflineAppStorePhase('download', () => dependencies.runDownload(job, secrets, encryptedPath, signal));
         if (downloadResult && 'freeLicenseClaimed' in downloadResult && downloadResult.freeLicenseClaimed) {
           appendJobTimelineEvent(job, 'Free App Store license acquired', 'done');
           emitJobsChanged();
@@ -212,22 +228,22 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
           job.progress = 'Retrieving the matching FairPlay key from the paired iPad';
           appendJobTimelineEvent(job, 'Retrieving the matching FairPlay key from the paired iPad', 'running');
           emitJobsChanged();
-          retrievedCredential = await dependencies.retrieveCredentialForIpa(job, encryptedPath, signal);
+          retrievedCredential = await measureOfflineAppStorePhase('credential_retrieval', () => dependencies.retrieveCredentialForIpa!(job, encryptedPath, signal));
           credential = retrievedCredential.toString('base64');
           retrievedForThisJob = true;
         }
         try {
-          await dependencies.runDecrypt(job, secrets, encryptedPath, outputPath, signal, credential);
+          await measureOfflineAppStorePhase('decrypt', () => dependencies.runDecrypt(job, secrets, encryptedPath, outputPath, signal, credential));
         } catch (error) {
           if (!isFairPlaySelectorMismatch(error) || !dependencies.retrieveCredentialForIpa || retrievedForThisJob) throw error;
           job.progress = 'Retrieving the matching FairPlay key from the paired iPad';
           appendJobTimelineEvent(job, 'Retrieving the matching FairPlay key from the paired iPad', 'running');
           emitJobsChanged();
-          retrievedCredential = await dependencies.retrieveCredentialForIpa(job, encryptedPath, signal);
+          retrievedCredential = await measureOfflineAppStorePhase('credential_retrieval', () => dependencies.retrieveCredentialForIpa!(job, encryptedPath, signal));
           credential = retrievedCredential.toString('base64');
           retrievedForThisJob = true;
           await rm(outputPath, { force: true });
-          await dependencies.runDecrypt(job, secrets, encryptedPath, outputPath, signal, credential);
+          await measureOfflineAppStorePhase('decrypt', () => dependencies.runDecrypt(job, secrets, encryptedPath, outputPath, signal, credential));
           job.progress = 'Decrypting the App Store package on the server';
           appendJobTimelineEvent(job, 'The matching FairPlay key decrypted the downloaded package', 'done');
           emitJobsChanged();
@@ -238,7 +254,7 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
           dependencies.saveCredentialForSelector?.(selector, credential);
         }
         throwIfAborted(signal);
-        const inspection = await dependencies.inspect(outputPath, signal, (child) => { job.childProcess = child; });
+        const inspection = await measureOfflineAppStorePhase('verification', () => dependencies.inspect(outputPath, signal, (child) => { job.childProcess = child; }));
         job.childProcess = undefined;
         const { verification, metadata } = inspection;
         verifyOfflinePackageIdentity(job, metadata);

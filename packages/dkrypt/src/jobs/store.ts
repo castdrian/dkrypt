@@ -1046,6 +1046,9 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.executionPath = job.offlineFailureReason ? 'device_fallback' : 'device';
     job.deviceId = device.id;
     job.transport = device.transport;
+    if (job.offlineFailureReason && job.offlineAttemptedAt !== undefined) {
+      observeMetric('appstore_offline_to_device_start_ms', Math.max(0, startedAt - job.offlineAttemptedAt), { source: job.source });
+    }
   } else {
     job.executionPath = 'appstore_offline';
     job.offlineAttemptedAt = startedAt;
@@ -1087,8 +1090,12 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.status = 'done';
     job.shutdownRecoveryPending = undefined;
     job.finishedAt = Date.now();
+    if (!device) {
+      incrementMetric('appstore_offline_attempts_total', { outcome: 'success' });
+      observeMetric('appstore_offline_attempt_duration_ms', Math.max(0, job.finishedAt - startedAt), { outcome: 'success' });
+    }
     incrementMetric('jobs_completed_total', { source: job.source });
-    observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { source: job.source });
+    observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { executionPath: job.executionPath, source: job.source });
     appendJobTimelineEvent(job, 'Finished', 'done', job.finishedAt);
     log.info('job done', { jobId: job.id, bundleId: job.bundleId, deviceId: device?.id, executionPath: job.executionPath, sizeBytes: job.fileSizeBytes });
     if (device) recordDeviceActivity({ deviceId: device.id, kind: 'job', bundleId: job.bundleId, message: 'Decrypt completed' });
@@ -1097,6 +1104,11 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     settleDecryptQuota(job.id, true);
   } catch (err) {
     let message = job.cancelledBy ? `cancelled by ${job.cancelledBy}` : err instanceof Error ? err.message : String(err);
+    if (!device) {
+      const outcome = job.deadlineExceeded ? 'deadline' : job.cancelledBy ? 'cancelled' : job.shutdownRecoveryPending ? 'interrupted' : 'failure';
+      incrementMetric('appstore_offline_attempts_total', { outcome });
+      observeMetric('appstore_offline_attempt_duration_ms', Math.max(0, Date.now() - startedAt), { outcome });
+    }
     const preventsDeviceFallback = Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
     if (device && job.offlineFailureReason) message = `${message}; earlier server-side attempt failed: ${job.offlineFailureReason}`;
     if (job.filePath?.startsWith(`${config.artifactDir}/.staging/`)) {
@@ -1109,6 +1121,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     }
     if (!device && !preventsDeviceFallback && !job.cancelledBy && !job.deadlineExceeded && (job.deadlineAt === undefined || Date.now() < job.deadlineAt)) {
       job.offlineFailureReason = message.replace(/\s+/g, ' ').slice(0, 600);
+      incrementMetric('appstore_offline_device_fallbacks_total', { failureClass: classifyJobFailure(message), source: job.source });
       job.executionPath = 'device_fallback';
       job.executionStage = undefined;
       job.status = 'queued';
@@ -1178,7 +1191,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.status = 'failed';
     job.finishedAt = Date.now();
     incrementMetric('jobs_failed_total', { source: job.source, failureClass: job.failureClass });
-    observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { source: job.source });
+    observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { executionPath: job.executionPath, source: job.source });
     job.error = message;
     appendJobTimelineEvent(job, `Failed: ${message}`, 'failed', job.finishedAt);
     log.error('job failed', { jobId: job.id, bundleId: job.bundleId, deviceId: device?.id, executionPath: job.executionPath, error: job.error, retried: (job.retryCount ?? 0) > 0 });

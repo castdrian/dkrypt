@@ -11,6 +11,7 @@ import { currentCorrelation, withCorrelation } from '#correlation.js';
 import { createDevice, createProject, deleteDevice, getJobHistoryEntryById, getTestFlightCatalogCache, recordJobHistory, setTestFlightCatalogCache, type DeviceRecord } from '#store/state.js';
 import { traceContextFromHeader } from '#telemetry.js';
 import { getRecentLogs } from '#logger.js';
+import { createOtlpMetricsPayload } from '#metrics.js';
 import { loadPersistedJobs } from '#jobs/repository.js';
 import { getDecryptQuotaUsage } from '#jobs/repository.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -25,6 +26,30 @@ let offlineWorkerHold = false;
 let offlineWorkerAttempts = 0;
 let offlineWorkerRunCount = 0;
 let offlineAppStoreDispatchNotifier = () => {};
+
+function metricCounterValue(name: string, labels: Record<string, string>): number {
+  const metric = createOtlpMetricsPayload('dkrypt').resourceMetrics[0]?.scopeMetrics[0]?.metrics.find((item) => item.name === `dkrypt_${name}`);
+  const point = metric?.sum?.dataPoints.find((item) => {
+    const attributes = Object.fromEntries(item.attributes.map((attribute) => [attribute.key, attribute.value]));
+    return Object.entries(labels).every(([key, value]) => {
+      const attribute = attributes[key];
+      return attribute !== undefined && 'stringValue' in attribute && attribute.stringValue === value;
+    });
+  });
+  return Number(point?.asInt ?? 0);
+}
+
+function metricHistogramCount(name: string, labels: Record<string, string>): number {
+  const metric = createOtlpMetricsPayload('dkrypt').resourceMetrics[0]?.scopeMetrics[0]?.metrics.find((item) => item.name === `dkrypt_${name}`);
+  const point = metric?.histogram?.dataPoints.find((item) => {
+    const attributes = Object.fromEntries(item.attributes.map((attribute) => [attribute.key, attribute.value]));
+    return Object.entries(labels).every(([key, value]) => {
+      const attribute = attributes[key];
+      return attribute !== undefined && 'stringValue' in attribute && attribute.stringValue === value;
+    });
+  });
+  return Number(point?.count ?? 0);
+}
 
 mock.module('#offlineAppStore.js', () => ({
   setOfflineAppStoreDispatchNotifier: (notifier: () => void) => { offlineAppStoreDispatchNotifier = notifier; },
@@ -277,6 +302,9 @@ describe('enqueueDecryptJob', () => {
     offlineWorkerReady = true;
     offlineWorkerAttempts = 0;
     const bundleId = `com.test.offline-fallback.${crypto.randomUUID()}`;
+    const fallbackCountBefore = metricCounterValue('appstore_offline_device_fallbacks_total', { failureClass: 'app_store', source: 'manual' });
+    const offlineFailureCountBefore = metricHistogramCount('appstore_offline_attempt_duration_ms', { outcome: 'failure' });
+    const deviceStartCountBefore = metricHistogramCount('appstore_offline_to_device_start_ms', { source: 'manual' });
     const job = enqueueDecryptJob(bundleId, 'manual', { queuedBy: ownerId, preferredDeviceId: testDeviceId });
 
     try {
@@ -287,6 +315,9 @@ describe('enqueueDecryptJob', () => {
       expect(getJob(job.id)).toMatchObject({ id: job.id, status: 'running', attempt: 2, executionPath: 'device_fallback', deviceId: testDeviceId });
       expect(job.timeline?.some((event) => event.label.includes('App Store provider download failed'))).toBe(true);
       expect(getDecryptQuotaUsage(ownerId, 2).used).toBe(1);
+      expect(metricCounterValue('appstore_offline_device_fallbacks_total', { failureClass: 'app_store', source: 'manual' })).toBe(fallbackCountBefore + 1);
+      expect(metricHistogramCount('appstore_offline_attempt_duration_ms', { outcome: 'failure' })).toBe(offlineFailureCountBefore + 1);
+      expect(metricHistogramCount('appstore_offline_to_device_start_ms', { source: 'manual' })).toBe(deviceStartCountBefore + 1);
     } finally {
       offlineWorkerEnabled = false;
       offlineWorkerReady = false;
@@ -294,6 +325,33 @@ describe('enqueueDecryptJob', () => {
       if (job.status === 'running') cancelJob(job.id, 'offline fallback test cleanup');
       await waitForJob(job, 1_000);
       replaceBillingSnapshot(previousBilling);
+    }
+  });
+
+  test('does not hand an offline job to a device after the user cancels it', async () => {
+    await clearActiveTestJobs();
+    offlineWorkerEnabled = true;
+    offlineWorkerReady = true;
+    offlineWorkerHold = true;
+    offlineWorkerRunCount = 0;
+    const cancelledAttemptCountBefore = metricHistogramCount('appstore_offline_attempt_duration_ms', { outcome: 'cancelled' });
+    const job = enqueueDecryptJob(`com.test.offline-cancelled.${crypto.randomUUID()}`, 'manual', { preferredDeviceId: testDeviceId });
+
+    try {
+      expect(job).toMatchObject({ status: 'running', executionPath: 'appstore_offline' });
+      expect(cancelJob(job.id, 'tester')).toBe(true);
+      await waitForJob(job, 1_000);
+      expect(job).toMatchObject({ status: 'failed', executionPath: 'appstore_offline', cancelledBy: 'tester' });
+      expect(job.deviceId).toBeUndefined();
+      expect(offlineWorkerRunCount).toBe(1);
+      expect(metricHistogramCount('appstore_offline_attempt_duration_ms', { outcome: 'cancelled' })).toBe(cancelledAttemptCountBefore + 1);
+    } finally {
+      offlineWorkerEnabled = false;
+      offlineWorkerReady = false;
+      offlineWorkerHold = false;
+      if (job.status === 'queued') cancelQueuedJob(job.id, 'offline cancellation test cleanup');
+      if (job.status === 'running') cancelJob(job.id, 'offline cancellation test cleanup');
+      await waitForJob(job, 1_000);
     }
   });
 

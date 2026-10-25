@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createAppleAccountVault } from '#appleAccountVault.js';
 import { createAppleAccountRepository } from '#store/appleAccountRepository.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
+import { createOtlpMetricsPayload } from '#metrics.js';
 import { createOfflineAppStoreProcessor, OfflineAppStoreUnavailableError, withTemporaryCredentialFile, type OfflineAppStoreDependencies } from '#offlineAppStore.js';
 import type { AppleAccountSecrets } from '#appleAccountVault.js';
 import type { Job } from '#jobs/types.js';
@@ -85,6 +86,8 @@ test('offline App Store processor excludes TestFlight and verifies a decrypted p
   expect(result.outputPath).toContain('offline-decrypted.ipa');
   expect(result.warnings).toEqual([]);
   expect(currentJob.warnings).toBeUndefined();
+  const phaseHistogram = createOtlpMetricsPayload('dkrypt').resourceMetrics[0]?.scopeMetrics[0]?.metrics.find((metric) => metric.name === 'dkrypt_appstore_offline_phase_duration_ms')?.histogram;
+  expect(phaseHistogram?.dataPoints.some((point) => point.attributes.some((attribute) => attribute.key === 'phase' && 'stringValue' in attribute.value && attribute.value.stringValue === 'download') && point.attributes.some((attribute) => attribute.key === 'outcome' && 'stringValue' in attribute.value && attribute.value.stringValue === 'success'))).toBe(true);
 });
 
 test('offline App Store processor reports the decrypt stage after download validation', async () => {
