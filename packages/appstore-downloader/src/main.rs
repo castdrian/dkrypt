@@ -8,7 +8,7 @@ use dkrypt_appstore_core::api;
 use dkrypt_appstore_core::client::{AppleClient, is_trusted_apple_download_url};
 use dkrypt_appstore_core::error::{ClientError, StoreError};
 use dkrypt_appstore_core::guid::MachineIdentity;
-use dkrypt_appstore_core::model::{Account, Platform};
+use dkrypt_appstore_core::model::{Account, App, Platform};
 use dkrypt_appstore_core::sap;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -375,32 +375,41 @@ async fn download(
         .await
         .map_err(|error| DownloaderFailure::new("app_lookup", map_lookup_error(&error)))?
         .ok_or_else(|| DownloaderFailure::new("app_lookup", "app_not_found"))?;
-    let item = match api::download::get_download_info(
-        &client,
-        app.id,
-        &app.bundle_id,
-        &account,
+    let item = match get_download_info_with_reauthentication(
+        &mut client,
+        &app,
+        &mut account,
         external_version_id,
     )
     .await
     {
         Ok(item) => item,
-        Err(error) if error.is_token_expired() => {
-            account = api::reauth::reauthenticate(&client, &account)
+        Err(error) if should_claim_free_license(app.price, &error) => {
+            claim_free_license_with_reauthentication(&mut client, &app, &mut account)
                 .await
-                .map_err(|error| {
-                    DownloaderFailure::from_download_error("reauthentication", &error)
-                })?;
-            client.set_account(account.clone());
-            api::download::get_download_info(
-                &client,
-                app.id,
-                &app.bundle_id,
-                &account,
+                .map_err(|error| map_license_claim_error(&error))?;
+            match get_download_info_with_reauthentication(
+                &mut client,
+                &app,
+                &mut account,
                 external_version_id,
             )
             .await
-            .map_err(|error| DownloaderFailure::from_download_error("download_info", &error))?
+            {
+                Ok(item) => item,
+                Err(error) if error.is_license_not_found() => {
+                    return Err(DownloaderFailure::new(
+                        "license_acquisition",
+                        "free_app_license_not_confirmed",
+                    ));
+                }
+                Err(error) => {
+                    return Err(DownloaderFailure::from_download_error(
+                        "download_info",
+                        &error,
+                    ));
+                }
+            }
         }
         Err(error) => {
             return Err(DownloaderFailure::from_download_error(
@@ -452,6 +461,72 @@ fn verify_requested_version(
         Some(_) => Err("version_mismatch"),
         None => Err("version_unverified"),
     }
+}
+
+fn should_claim_free_license(price: f64, error: &ClientError) -> bool {
+    price == 0.0 && error.is_license_not_found()
+}
+
+async fn get_download_info_with_reauthentication(
+    client: &mut AppleClient,
+    app: &App,
+    account: &mut Account,
+    external_version_id: Option<&str>,
+) -> Result<dkrypt_appstore_core::api::download::DownloadItem, ClientError> {
+    match api::download::get_download_info(
+        client,
+        app.id,
+        &app.bundle_id,
+        account,
+        external_version_id,
+    )
+    .await
+    {
+        Err(error) if error.is_token_expired() => {
+            *account = api::reauth::reauthenticate(client, account).await?;
+            client.set_account(account.clone());
+            api::download::get_download_info(
+                client,
+                app.id,
+                &app.bundle_id,
+                account,
+                external_version_id,
+            )
+            .await
+        }
+        result => result,
+    }
+}
+
+async fn claim_free_license_with_reauthentication(
+    client: &mut AppleClient,
+    app: &App,
+    account: &mut Account,
+) -> Result<(), ClientError> {
+    match api::purchase::claim_free_license(client, app, account).await {
+        Err(error) if error.is_token_expired() => {
+            *account = api::reauth::reauthenticate(client, account).await?;
+            client.set_account(account.clone());
+            api::purchase::claim_free_license(client, app, account).await
+        }
+        result => result,
+    }
+}
+
+fn map_license_claim_error(error: &ClientError) -> DownloaderFailure {
+    let code = match error {
+        ClientError::Store(StoreError::AuthCodeRequired) => "two_factor_required",
+        ClientError::Store(StoreError::DeviceVerificationFailed) => "device_verification_required",
+        ClientError::Store(StoreError::RateLimited) => "apple_rate_limited",
+        ClientError::Store(StoreError::TemporarilyUnavailable) => "apple_store_unavailable",
+        ClientError::Store(StoreError::PasswordTokenExpired | StoreError::SignInRequired) => {
+            "authentication_required"
+        }
+        ClientError::Http(error) if error.is_timeout() => "free_license_claim_timed_out",
+        ClientError::Http(error) if error.is_connect() => "free_license_claim_network_unavailable",
+        _ => "free_license_claim_failed",
+    };
+    DownloaderFailure::new("license_acquisition", code)
 }
 
 fn map_lookup_error(error: &ClientError) -> &'static str {
@@ -829,8 +904,9 @@ fn load_or_create_identity(session_directory: &Path) -> Result<MachineIdentity, 
 mod tests {
     use super::{
         DownloaderFailure, load_account, map_authentication_error, map_download_diagnostic,
-        map_download_error, map_lookup_error, save_account, temporary_download_path,
-        valid_bundle_id, valid_email, valid_verification_code, verify_requested_version,
+        map_download_error, map_license_claim_error, map_lookup_error, save_account,
+        should_claim_free_license, temporary_download_path, valid_bundle_id, valid_email,
+        valid_verification_code, verify_requested_version,
     };
     use dkrypt_appstore_core::error::{ClientError, StoreError};
     use dkrypt_appstore_core::model::Account;
@@ -1001,6 +1077,40 @@ mod tests {
             map_download_error(&ClientError::UnexpectedResponse("private response".into())),
             "download_info_response_invalid"
         );
+    }
+
+    #[test]
+    fn claims_a_license_only_for_an_unowned_free_app() {
+        assert!(should_claim_free_license(
+            0.0,
+            &ClientError::Store(StoreError::LicenseNotFound)
+        ));
+        assert!(!should_claim_free_license(
+            1.0,
+            &ClientError::Store(StoreError::LicenseNotFound)
+        ));
+        assert!(!should_claim_free_license(
+            0.0,
+            &ClientError::Store(StoreError::TemporarilyUnavailable)
+        ));
+    }
+
+    #[test]
+    fn maps_license_claim_errors_to_safe_recovery_codes() {
+        let two_factor = map_license_claim_error(&ClientError::Store(StoreError::AuthCodeRequired));
+        assert_eq!(two_factor.stage, "license_acquisition");
+        assert_eq!(two_factor.code, "two_factor_required");
+
+        let verification =
+            map_license_claim_error(&ClientError::Store(StoreError::DeviceVerificationFailed));
+        assert_eq!(verification.code, "device_verification_required");
+
+        let provider_error = map_license_claim_error(&ClientError::Store(StoreError::Unknown {
+            code: "private-provider-code".into(),
+            message: "private provider message".into(),
+        }));
+        assert_eq!(provider_error.code, "free_license_claim_failed");
+        assert!(provider_error.diagnostic.is_none());
     }
 
     #[test]
