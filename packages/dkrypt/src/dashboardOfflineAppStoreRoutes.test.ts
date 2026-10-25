@@ -135,7 +135,7 @@ test('App Store downloader network check is manager-only and reports only safe c
   await server.register(createDashboardOfflineAppStoreRoutes({
     checkDownloaderNetwork: async () => {
       checks += 1;
-      return { reachable: true, latencyMs: 42, endpoint: 'https://itunes.apple.com/lookup' };
+      return { reachable: true, latencyMs: 42, endpoint: 'https://itunes.apple.com/lookup', redirected: false, rateLimited: false };
     },
   }));
 
@@ -238,7 +238,7 @@ test('App Store downloader network check is manager-only and reports safe connec
     readiness,
     checkDownloaderNetwork: async () => {
       calls += 1;
-      return { reachable: true, latencyMs: 42, endpoint: 'itunes.apple.com' };
+      return { reachable: true, latencyMs: 42, endpoint: 'itunes.apple.com', redirected: false, rateLimited: false };
     },
   }));
 

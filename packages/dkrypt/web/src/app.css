@@ -495,6 +495,25 @@ summary:focus-visible {
 	min-height: 2.75rem;
 }
 
+@media (max-width: 1023px) {
+	:root[data-one-thumb='true'] .one-thumb-artifact-actions[data-selected='true'],
+	:root[data-one-thumb='true'] .one-thumb-job-actions[data-selected='true'] {
+		position: fixed;
+		z-index: 39;
+		right: 0.5rem;
+		bottom: calc(4rem + env(safe-area-inset-bottom));
+		left: 0.5rem;
+		max-height: min(40dvh, 18rem);
+		overflow-y: auto;
+		border: 1px solid var(--border);
+		border-radius: 1rem;
+		background: color-mix(in srgb, var(--card) 94%, transparent);
+		padding: 0.65rem;
+		box-shadow: 0 8px 28px color-mix(in srgb, black 20%, transparent);
+		backdrop-filter: blur(16px);
+	}
+}
+
 .account-menu {
 	position: fixed !important;
 	top: calc(env(safe-area-inset-top) + 3.5rem) !important;

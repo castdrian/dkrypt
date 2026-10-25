@@ -47,7 +47,10 @@ impl AppleClient {
             .cookie_provider(cookie_store.clone())
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let from_auth = attempt.previous().last().is_some_and(is_auth_endpoint);
-                if from_auth {
+                if from_auth
+                    || attempt.previous().len() >= 10
+                    || !is_trusted_apple_download_url(attempt.url())
+                {
                     attempt.stop()
                 } else {
                     attempt.follow()

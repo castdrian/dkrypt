@@ -1286,6 +1286,9 @@ export interface ApiKeyOutcomeUsage {
   clientError: number;
   serverError: number;
   lastAt: number;
+  latencyCount?: number;
+  averageLatencyMs?: number;
+  maxLatencyMs?: number;
 }
 
 export function fetchKeyOutcomeUsage(id: string, limit = 10): Promise<{ outcomes: ApiKeyOutcomeUsage[] }> {
@@ -1748,6 +1751,10 @@ export interface AppStoreDownloaderNetworkCheck {
   reachable: boolean;
   latencyMs: number;
   endpoint: string;
+  redirected: boolean;
+  rangeSupported?: boolean;
+  rateLimited: boolean;
+  retryAfterSeconds?: number;
   checkedAt: string;
   diagnostic?: string;
 }

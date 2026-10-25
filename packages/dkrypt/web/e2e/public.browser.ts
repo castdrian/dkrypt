@@ -220,6 +220,7 @@ test('billing revenue provider breakdown stays readable at wide and narrow deskt
         updatedAt: new Date().toISOString(),
         complete: true,
         totals: [total],
+        retention: { activeAccounts: 1, paymentIssues: 0, cancellationsUpdatedLast30Days: 0, recentCancellationRatePercent: 0 },
         providers: {
           stripe: { state: 'ready', totals: [total], paymentCount: 2 },
           nowpayments: { state: 'ready', totals: [], paymentCount: 0 },
@@ -269,11 +270,11 @@ test('billing revenue provider breakdown stays readable at wide and narrow deskt
 
 test('command palette searches dkrypt data without triggering live App Store search', async ({ page }) => {
   await mockAuthenticatedDashboard(page, '1');
-  const quickSearchQueries: Array<{ q: string | null; projectId: string | null }> = [];
+  const quickSearchQueries: Array<{ q: string | null }> = [];
   let appStoreSearchRequests = 0;
   await page.route('**/v1/dashboard/quick-search*', async (route) => {
     const url = new URL(route.request().url());
-    quickSearchQueries.push({ q: url.searchParams.get('q'), projectId: url.searchParams.get('projectId') });
+    quickSearchQueries.push({ q: url.searchParams.get('q') });
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({ results: [{ kind: 'app', id: 'com.example.quick', title: 'Example App', subtitle: 'com.example.quick' }] }),
@@ -288,7 +289,7 @@ test('command palette searches dkrypt data without triggering live App Store sea
   await page.getByRole('button', { name: 'Open command menu' }).click();
   await page.getByPlaceholder('Search dkrypt…').fill('Example');
   await expect(page.getByRole('button', { name: /Example App App com\.example\./ })).toBeVisible();
-  await expect.poll(() => quickSearchQueries.at(-1)).toEqual({ q: 'Example', projectId: 'default' });
+  await expect.poll(() => quickSearchQueries.at(-1)).toEqual({ q: 'Example' });
   expect(appStoreSearchRequests).toBe(0);
   await page.getByRole('button', { name: /Example App App com\.example\./ }).click();
   await expect(page.getByPlaceholder('Search the App Store to decrypt… (press / to focus)')).toHaveValue('com.example.quick');
@@ -1038,7 +1039,7 @@ test('live updates keep stale data visible until a reconnect refresh succeeds', 
   await failedRefreshStarted;
   await expect(page.getByText('Reconnected - refreshing data…')).toBeVisible();
 
-  const failedRefreshResponse = page.waitForResponse((response) => response.url().includes('/v1/dashboard/overview?') && response.status() === 503);
+  const failedRefreshResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/v1/dashboard/overview' && response.status() === 503);
   releaseFailedRefresh();
   await failedRefreshResponse;
   await expect(page.getByText('Dashboard data refresh failed. Try again.')).toBeVisible();
@@ -2345,7 +2346,7 @@ test('self-hosters can review configuration doctor checks from Settings', async 
   await expect(page.getByText('SQLite schema 12 is intact')).toBeVisible();
   await expect(page.getByText('Rust device bridge socket is not available yet')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh checks' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Download support bundle' })).toHaveAttribute('href', '/v1/dashboard/support-bundle?projectId=default');
+  await expect(page.getByRole('link', { name: 'Download support bundle' })).toHaveAttribute('href', '/v1/dashboard/support-bundle');
   expect(doctorRequests).toBe(1);
   await page.getByRole('button', { name: 'Refresh checks' }).click();
   await expect(page.getByText('All checks passed')).toBeVisible();
@@ -3562,7 +3563,7 @@ test('bulk retry queues only failures, continues after an error, and exports per
   await expect(retryFailedOnly).toBeVisible();
   const previewRequest = page.waitForRequest((request) => request.url().includes('/v1/dashboard/jobs/bulk-preview'));
   await retryFailedOnly.click();
-  expect((await previewRequest).postDataJSON()).toMatchObject({ ids: ['job-network-failure', 'job-queued-success'], projectId: 'default' });
+  expect((await previewRequest).postDataJSON()).toMatchObject({ ids: ['job-network-failure', 'job-queued-success'] });
 
   await expect(page.getByText('Preview bulk decrypt')).toBeVisible();
   await page.getByRole('button', { name: 'Queue 2', exact: true }).click();

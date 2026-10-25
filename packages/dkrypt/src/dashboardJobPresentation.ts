@@ -4,10 +4,6 @@ import { getJob } from '#jobs/store.js';
 import { artifactFileAvailable, getArtifactById, getArtifactBySourceJobId, getArtifactForJob } from '#artifacts.js';
 import { type JobHistoryEntry } from '#store/state.js';
 
-export function canAccessProject(_userId: string, _permissions: bigint, _projectId: string): boolean {
-  return true;
-}
-
 export function dashboardHistoryEntry(entry: JobHistoryEntry) {
   const { projectId: _projectId, ...visibleEntry } = entry;
   const job = getJob(entry.id);

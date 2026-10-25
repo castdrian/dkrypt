@@ -59,6 +59,7 @@ export interface Job {
   error?: string;
   queueReason?: string;
   pausedAt?: number;
+  pausedQueueIndex?: number;
   pausedRemainingMs?: number;
   lastQueueReason?: string;
   retryCount?: number;

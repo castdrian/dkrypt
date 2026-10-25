@@ -47,7 +47,6 @@ import {
   getDiscordRolePerks,
   getInsightsSummary,
   getEffectiveSettings,
-  getProject,
   getUserEffectivePermissions,
   getRole,
   getEffectiveDevices,
@@ -58,7 +57,6 @@ import {
   importBackup,
   listAllowedUsers,
   listDeviceAlertRecipients,
-  listProjectsForUser,
   listNotifications,
   listNotificationsPage,
   listAllApiKeysPage,
@@ -69,6 +67,8 @@ import {
   recordDeviceAlertNotification,
   recordAudit,
   recordApiKeyBundleUsage,
+  recordApiKeyOutcome,
+  getApiKeyOutcomeUsage,
   recordJobHistory,
   recordJobResolutionNotice,
   recordNotification,
@@ -82,7 +82,6 @@ import {
   setNewBillingCheckoutsPaused,
   syncDiscordPerkRoles,
   updateAllowedUserRoles,
-  userCanAccessProject,
   updateDevice,
   updateSettings,
   upsertAppCatalogEntry,
@@ -419,18 +418,6 @@ test('session inventory reflects a recent session touch immediately', () => {
 });
 
 describe('shared account scope', () => {
-  test('every authorized user uses the same account workspace', () => {
-    const firstUser = `github:project-first-${randomUUID()}`;
-    const secondUser = `github:project-second-${randomUUID()}`;
-    addAllowedUser(firstUser, [], 'tester');
-    addAllowedUser(secondUser, [], 'tester');
-    expect(listProjectsForUser(firstUser).map((entry) => entry.id)).toEqual(['default']);
-    expect(listProjectsForUser(secondUser).map((entry) => entry.id)).toEqual(['default']);
-    expect(userCanAccessProject(firstUser, 'legacy-workspace')).toBe(true);
-    expect(userCanAccessProject(secondUser, 'legacy-workspace')).toBe(true);
-    expect(getProject('legacy-workspace')?.id).toBe('default');
-  });
-
   test('merges historical records from legacy workspace partitions', () => {
     const sharedBundleId = `com.example.workspace-history.${randomUUID()}`;
     const finishedAt = Date.now();
@@ -603,7 +590,6 @@ describe('exportBackup / importBackup', () => {
     expect(result.ok).toBe(true);
     expect(listAllowedUsers().some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(getRole(role.id)).toMatchObject({ id: role.id, name: 'Roundtrip Role' });
-    expect(listProjectsForUser('roundtrip-user')).toEqual([expect.objectContaining({ id: 'default', name: 'dkrypt', memberIds: [] })]);
   });
 
   test('restoring an older backup does not carry quota usage from the current installation', () => {
@@ -689,7 +675,6 @@ describe('exportBackup / importBackup', () => {
       } as unknown as ReturnType<typeof exportBackup>;
 
       expect(importBackup(backup, 'tester').ok).toBe(true);
-      expect(listProjectsForUser('tester')).toEqual([expect.objectContaining({ id: 'default', name: 'dkrypt' })]);
       expect(getJobHistoryEntryById(jobId)).toMatchObject({ id: jobId, projectId: 'default' });
     } finally {
       replaceStateCollection(database, 'jobs', previousRows);
@@ -903,6 +888,23 @@ describe('exportBackup / importBackup', () => {
       database.close();
       deleteBackupSnapshot(entry.id, 'backup-consistency-test');
     }
+  });
+
+  test('API key route outcomes include bounded latency aggregates without request data', () => {
+    const keyId = `route-latency-${randomUUID()}`;
+    recordApiKeyOutcome(keyId, 'GET', '/v1/jobs/:id', 200, 10);
+    recordApiKeyOutcome(keyId, 'GET', '/v1/jobs/:id', 503, 30);
+
+    expect(getApiKeyOutcomeUsage(keyId)).toEqual([{
+      route: 'GET /v1/jobs/:id',
+      success: 1,
+      clientError: 0,
+      serverError: 1,
+      lastAt: expect.any(Number),
+      latencyCount: 2,
+      averageLatencyMs: 20,
+      maxLatencyMs: 30,
+    }]);
   });
 
   test('backup snapshot and restore drill metadata stay available through the typed repository', () => {

@@ -559,7 +559,7 @@
           <div class="mb-3 text-muted text-xs" role="note">Archived items still use library storage and may be removed automatically unless pinned.</div>
         {/if}
         {#if selectingArtifacts && canDecrypt && artifacts.length > 0}
-          <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Bulk artifact actions">
+          <div class="one-thumb-artifact-actions mb-3 flex flex-wrap items-center gap-2" data-selected={selectAllMatching || selectedArtifactIds.size > 0 ? 'true' : 'false'} role="group" aria-label="Bulk artifact actions">
             {#if canManageStorage}
               <Button variant="ghost" size="sm" onclick={toggleAllLoadedArtifacts}>
                 {artifacts.every((artifact) => selectedArtifactIds.has(artifact.id)) && !selectAllMatching ? 'Clear selection' : 'Select loaded'}

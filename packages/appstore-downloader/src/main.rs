@@ -59,6 +59,25 @@ struct Response {
     network_latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     network_endpoint: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_redirected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_range_supported: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_rate_limited: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_retry_after_seconds: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct AppStoreLookupResponse {
+    results: Vec<AppStoreLookupResult>,
+}
+
+#[derive(Deserialize)]
+struct AppStoreLookupResult {
+    #[serde(rename = "artworkUrl512")]
+    artwork_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +118,10 @@ impl Response {
             network_reachable: None,
             network_latency_ms: None,
             network_endpoint: None,
+            network_redirected: None,
+            network_range_supported: None,
+            network_rate_limited: None,
+            network_retry_after_seconds: None,
         }
     }
 
@@ -114,6 +137,10 @@ impl Response {
             network_reachable: None,
             network_latency_ms: None,
             network_endpoint: None,
+            network_redirected: None,
+            network_range_supported: None,
+            network_rate_limited: None,
+            network_retry_after_seconds: None,
         }
     }
 
@@ -129,10 +156,22 @@ impl Response {
             network_reachable: None,
             network_latency_ms: None,
             network_endpoint: None,
+            network_redirected: None,
+            network_range_supported: None,
+            network_rate_limited: None,
+            network_retry_after_seconds: None,
         }
     }
 
-    fn network_check(reachable: bool, latency_ms: u64, diagnostic: Option<String>) -> Self {
+    fn network_check(
+        reachable: bool,
+        latency_ms: u64,
+        redirected: bool,
+        range_supported: Option<bool>,
+        rate_limited: bool,
+        retry_after_seconds: Option<u64>,
+        diagnostic: Option<String>,
+    ) -> Self {
         Self {
             ok: true,
             authenticated: None,
@@ -144,6 +183,10 @@ impl Response {
             network_reachable: Some(reachable),
             network_latency_ms: Some(latency_ms),
             network_endpoint: Some("https://itunes.apple.com/lookup"),
+            network_redirected: Some(redirected),
+            network_range_supported: range_supported,
+            network_rate_limited: Some(rate_limited),
+            network_retry_after_seconds: retry_after_seconds,
         }
     }
 }
@@ -352,6 +395,7 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
 
 async fn check_network() -> Response {
     const ENDPOINT: &str = "https://itunes.apple.com/lookup?id=310633997&entity=software";
+    const MAX_LOOKUP_BYTES: usize = 1_048_576;
     let started_at = Instant::now();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
@@ -370,38 +414,246 @@ async fn check_network() -> Response {
             return Response::network_check(
                 false,
                 started_at.elapsed().as_millis() as u64,
+                false,
+                None,
+                false,
+                None,
                 Some("network_client_setup_failed".to_string()),
             );
         }
     };
     let response = client.get(ENDPOINT).send().await;
     match response {
-        Ok(response)
-            if response.status().is_success() && is_trusted_apple_download_url(response.url()) =>
-        {
-            Response::network_check(true, started_at.elapsed().as_millis() as u64, None)
+        Ok(response) => {
+            let redirected = response.url().as_str() != ENDPOINT;
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Response::network_check(
+                    true,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    true,
+                    response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(parse_retry_after_seconds),
+                    Some("apple_rate_limited".to_string()),
+                );
+            }
+            if !response.status().is_success() || !is_trusted_apple_download_url(response.url()) {
+                return Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some(format!("apple_http_{}", response.status().as_u16())),
+                );
+            }
+            if response
+                .content_length()
+                .is_some_and(|size| size > MAX_LOOKUP_BYTES as u64)
+            {
+                return Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some("apple_lookup_response_too_large".to_string()),
+                );
+            }
+            let body = match response.bytes().await {
+                Ok(body) if body.len() <= MAX_LOOKUP_BYTES => body,
+                _ => {
+                    return Response::network_check(
+                        false,
+                        started_at.elapsed().as_millis() as u64,
+                        redirected,
+                        None,
+                        false,
+                        None,
+                        Some("apple_lookup_response_invalid".to_string()),
+                    );
+                }
+            };
+            let lookup = match serde_json::from_slice::<AppStoreLookupResponse>(&body) {
+                Ok(lookup) => lookup,
+                Err(_) => {
+                    return Response::network_check(
+                        false,
+                        started_at.elapsed().as_millis() as u64,
+                        redirected,
+                        None,
+                        false,
+                        None,
+                        Some("apple_lookup_response_invalid".to_string()),
+                    );
+                }
+            };
+            let Some(artwork_url) = lookup
+                .results
+                .first()
+                .and_then(|result| result.artwork_url.as_deref())
+            else {
+                return Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some("apple_download_endpoint_missing".to_string()),
+                );
+            };
+            let artwork_url = match Url::parse(artwork_url) {
+                Ok(url) if is_trusted_apple_download_url(&url) => url,
+                _ => {
+                    return Response::network_check(
+                        false,
+                        started_at.elapsed().as_millis() as u64,
+                        redirected,
+                        None,
+                        false,
+                        None,
+                        Some("apple_download_endpoint_rejected".to_string()),
+                    );
+                }
+            };
+            let range_response = client
+                .get(artwork_url.clone())
+                .header(reqwest::header::RANGE, "bytes=0-0")
+                .send()
+                .await;
+            match range_response {
+                Ok(response) => {
+                    let redirected = redirected || response.url() != &artwork_url;
+                    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        return Response::network_check(
+                            true,
+                            started_at.elapsed().as_millis() as u64,
+                            redirected,
+                            None,
+                            true,
+                            response
+                                .headers()
+                                .get(reqwest::header::RETRY_AFTER)
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(parse_retry_after_seconds),
+                            Some("apple_rate_limited".to_string()),
+                        );
+                    }
+                    if !response.status().is_success()
+                        || !is_trusted_apple_download_url(response.url())
+                    {
+                        return Response::network_check(
+                            false,
+                            started_at.elapsed().as_millis() as u64,
+                            redirected,
+                            None,
+                            false,
+                            None,
+                            Some(format!(
+                                "apple_download_http_{}",
+                                response.status().as_u16()
+                            )),
+                        );
+                    }
+                    let range_supported = supports_single_byte_range(
+                        response.status(),
+                        response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|value| value.to_str().ok()),
+                    );
+                    Response::network_check(
+                        true,
+                        started_at.elapsed().as_millis() as u64,
+                        redirected,
+                        Some(range_supported),
+                        false,
+                        None,
+                        None,
+                    )
+                }
+                Err(error) if error.is_timeout() => Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some("apple_download_request_timed_out".to_string()),
+                ),
+                Err(error) if error.is_connect() => Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some("apple_download_network_unavailable".to_string()),
+                ),
+                Err(_) => Response::network_check(
+                    false,
+                    started_at.elapsed().as_millis() as u64,
+                    redirected,
+                    None,
+                    false,
+                    None,
+                    Some("apple_download_request_failed".to_string()),
+                ),
+            }
         }
-        Ok(response) => Response::network_check(
-            false,
-            started_at.elapsed().as_millis() as u64,
-            Some(format!("apple_http_{}", response.status().as_u16())),
-        ),
         Err(error) if error.is_timeout() => Response::network_check(
             false,
             started_at.elapsed().as_millis() as u64,
+            false,
+            None,
+            false,
+            None,
             Some("apple_request_timed_out".to_string()),
         ),
         Err(error) if error.is_connect() => Response::network_check(
             false,
             started_at.elapsed().as_millis() as u64,
+            false,
+            None,
+            false,
+            None,
             Some("apple_network_unavailable".to_string()),
         ),
         Err(_) => Response::network_check(
             false,
             started_at.elapsed().as_millis() as u64,
+            false,
+            None,
+            false,
+            None,
             Some("apple_request_failed".to_string()),
         ),
     }
+}
+
+fn parse_retry_after_seconds(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+fn supports_single_byte_range(status: reqwest::StatusCode, content_range: Option<&str>) -> bool {
+    status == reqwest::StatusCode::PARTIAL_CONTENT
+        && content_range.is_some_and(|value| {
+            let Some(total) = value.strip_prefix("bytes 0-0/") else {
+                return false;
+            };
+            total == "*" || total.parse::<u64>().is_ok_and(|length| length > 0)
+        })
 }
 
 fn authentication_failure_stage(code: &'static str) -> &'static str {
@@ -1308,10 +1560,10 @@ mod tests {
     use super::{
         DownloaderFailure, Response, country_code_from_storefront, load_account,
         map_authentication_error, map_download_diagnostic, map_download_error,
-        map_license_claim_error, map_lookup_error, parse_content_range,
+        map_license_claim_error, map_lookup_error, parse_content_range, parse_retry_after_seconds,
         parse_unsatisfied_content_range, resumable_download_path, save_account,
-        should_claim_free_license, temporary_download_path, valid_bundle_id, valid_email,
-        valid_verification_code, verify_requested_version,
+        should_claim_free_license, supports_single_byte_range, temporary_download_path,
+        valid_bundle_id, valid_email, valid_verification_code, verify_requested_version,
     };
     use dkrypt_appstore_core::error::{ClientError, StoreError};
     use dkrypt_appstore_core::model::Account;
@@ -1714,6 +1966,37 @@ mod tests {
     fn parses_unsatisfied_ranges_for_completed_partial_files() {
         assert_eq!(parse_unsatisfied_content_range("bytes */4096"), Some(4096));
         assert_eq!(parse_unsatisfied_content_range("bytes 1-4/5"), None);
+    }
+
+    #[test]
+    fn accepts_only_valid_single_byte_range_probes() {
+        assert!(supports_single_byte_range(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 0-0/1024"),
+        ));
+        assert!(supports_single_byte_range(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 0-0/*"),
+        ));
+        assert!(!supports_single_byte_range(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 1-1/1024"),
+        ));
+        assert!(!supports_single_byte_range(
+            reqwest::StatusCode::OK,
+            Some("bytes 0-0/1024"),
+        ));
+        assert!(!supports_single_byte_range(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 0-0/0"),
+        ));
+    }
+
+    #[test]
+    fn parses_retry_after_seconds_without_accepting_invalid_values() {
+        assert_eq!(parse_retry_after_seconds(" 30 "), Some(30));
+        assert_eq!(parse_retry_after_seconds("0"), None);
+        assert_eq!(parse_retry_after_seconds("later"), None);
     }
 
     #[test]

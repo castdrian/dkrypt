@@ -48,6 +48,9 @@ export const dashboardApiKeyOutcomeResponseSchema = Type.Object({
     clientError: Type.Integer({ minimum: 0 }),
     serverError: Type.Integer({ minimum: 0 }),
     lastAt: Type.Number(),
+    latencyCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    averageLatencyMs: Type.Optional(Type.Number({ minimum: 0 })),
+    maxLatencyMs: Type.Optional(Type.Number({ minimum: 0 })),
   })),
 }, { additionalProperties: true });
 

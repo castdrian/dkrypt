@@ -4,7 +4,7 @@ import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { getAuthProfile } from '#identity.js';
-import { DEFAULT_PROJECT_ID, getUserEffectivePermissions, listAllowedUsers, recordAudit, userCanAccessProject } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getUserEffectivePermissions, listAllowedUsers, recordAudit } from '#store/state.js';
 import { acceptIntegrationBillingOwnerTransfer, createGithubOidcPolicy, createSignedTriggerPolicy, getSignedTriggerPolicy, listGithubOidcPolicies, listSignedTriggerPolicies, publicSignedTriggerPolicy, requestIntegrationBillingOwnerTransfer, revokeGithubOidcPolicy, revokeSignedTriggerPolicy, rotateSignedTriggerSecret } from '#store/integrationRepository.js';
 
 const bundleIdSchema = Type.String({ minLength: 3, maxLength: 200, pattern: '^[A-Za-z0-9.-]+$' });
@@ -24,8 +24,7 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
     billingOwnerTransferRequestorDisplayName: policy.billingOwnerTransfer ? profileName(policy.billingOwnerTransfer.requestedBy) : undefined,
     };
   };
-  const eligibleOwners = (projectId: string) => listAllowedUsers()
-    .filter((user) => userCanAccessProject(user.username, projectId))
+  const eligibleOwners = () => listAllowedUsers()
     .filter((user) => hasPermission(getUserEffectivePermissions(user.username), PermissionFlag.requestDecrypt))
     .filter((user) => hasPermission(getUserEffectivePermissions(user.username), PermissionFlag.viewAutomation | PermissionFlag.manageAutomation))
     .map((user) => ({ id: user.username, name: profileName(user.username) }));
@@ -47,7 +46,7 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
   }, (request, reply) => {
     const policy = getSignedTriggerPolicy(request.params.id) ?? listGithubOidcPolicies().find((candidate) => candidate.id === request.params.id);
     if (!policy) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'integration not found'));
-    return { users: eligibleOwners(policy.projectId) };
+    return { users: eligibleOwners() };
   });
 
   server.post('/v1/dashboard/integrations/:id/ownership/request', {
@@ -58,7 +57,7 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
     const policy = getSignedTriggerPolicy(request.params.id) ?? listGithubOidcPolicies().find((candidate) => candidate.id === request.params.id);
     if (!policy || !policy.enabled) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     const userId = request.body.userId.trim().toLowerCase();
-    if (userId !== 'root' && !eligibleOwners(policy.projectId).some((user) => user.id === userId)) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'recipient needs integration and decrypt access'));
+    if (userId !== 'root' && !eligibleOwners().some((user) => user.id === userId)) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'recipient needs integration and decrypt access'));
     const result = requestIntegrationBillingOwnerTransfer(request.params.id, userId, actor);
     if (!result) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'active integration not found'));
     recordAudit(actor, 'integration.billing-owner-request', result.id, userId);
@@ -71,7 +70,7 @@ export const dashboardIntegrationRoutes: FastifyPluginAsyncTypebox = async (serv
   }, (request, reply) => {
     const actor = getFastifySession(request)!.sub;
     const existing = getSignedTriggerPolicy(request.params.id) ?? listGithubOidcPolicies().find((candidate) => candidate.id === request.params.id);
-    if (!existing || !existing.enabled || !userCanAccessProject(actor, existing.projectId)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'integration not found'));
+    if (!existing || !existing.enabled) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'integration not found'));
     if (actor !== 'root' && !hasPermission(getUserEffectivePermissions(actor), PermissionFlag.requestDecrypt)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'decrypt access is required to accept ownership'));
     const policy = acceptIntegrationBillingOwnerTransfer(request.params.id, actor);
     if (!policy) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'no ownership request is awaiting this account'));

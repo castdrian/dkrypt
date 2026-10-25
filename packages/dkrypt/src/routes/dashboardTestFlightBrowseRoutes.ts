@@ -6,7 +6,6 @@ import type {
   DashboardTestFlightTrainsRoute,
 } from '#dashboardTestFlightContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { fastifyBlockDuringMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
@@ -18,7 +17,6 @@ import {
   DEFAULT_PROJECT_ID,
   getDevice,
   getPrimaryDevice,
-  getProject,
   getUserPriority,
   type DeviceRecord,
 } from '#store/state.js';
@@ -99,24 +97,6 @@ function sendUpstreamError(
   sendError(request, reply, 502, 'TestFlight service is temporarily unavailable', code);
 }
 
-function resolveProjectId(
-  request: import('fastify').FastifyRequest,
-  reply: import('fastify').FastifyReply,
-): string | undefined {
-  const projectId = DEFAULT_PROJECT_ID;
-  const project = getProject(projectId);
-  const session = getFastifySession(request);
-  if (!project || !session || !canAccessProject(session.sub, session.permissions, projectId)) {
-    sendError(request, reply, 404, 'account configuration is unavailable');
-    return undefined;
-  }
-  if (project.archivedAt !== undefined) {
-    sendError(request, reply, 409, 'TestFlight operations are unavailable');
-    return undefined;
-  }
-  return projectId;
-}
-
 function resolveEnabledDevice(
   request: import('fastify').FastifyRequest,
   reply: import('fastify').FastifyReply,
@@ -192,8 +172,7 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
       schema: getRouteContract('POST', '/v1/dashboard/testflight/decrypt'),
       preHandler: [canDecrypt, fastifyBlockDuringMaintenance],
     }, async (request, reply) => {
-      const projectId = resolveProjectId(request, reply);
-      if (!projectId) return;
+      const projectId = DEFAULT_PROJECT_ID;
       const bundleId = request.body.bundleId.trim();
       const appId = Number.parseInt(String(request.body.appId), 10);
       const build = request.body.build as TFBuild;

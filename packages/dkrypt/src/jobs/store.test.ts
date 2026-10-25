@@ -8,7 +8,7 @@ import { exportBillingSnapshot, replaceBillingSnapshot } from '#billing.js';
 import { SCHEDULER_JOB_TIMEOUT_MS } from '#jobs/timeouts.js';
 import { artifactKeyForJob, promoteArtifact } from '#artifacts.js';
 import { currentCorrelation, withCorrelation } from '#correlation.js';
-import { createDevice, createProject, deleteDevice, getJobHistoryEntryById, getTestFlightCatalogCache, recordJobHistory, setTestFlightCatalogCache, type DeviceRecord } from '#store/state.js';
+import { createDevice, deleteDevice, getJobHistoryEntryById, getTestFlightCatalogCache, recordJobHistory, setTestFlightCatalogCache, type DeviceRecord } from '#store/state.js';
 import { traceContextFromHeader } from '#telemetry.js';
 import { getRecentLogs } from '#logger.js';
 import { createOtlpMetricsPayload } from '#metrics.js';
@@ -100,7 +100,7 @@ mock.module('./runner.js', () => ({
   },
 }));
 
-const { cancelJob, cancelQueuedJob, enqueueDecryptJob, getActiveJobs, getJob, getQueueInfo, getQueueReason, isJobDispatchable, notifyDeviceDispatchStateChanged, prioritizeQueuedJob, reclaimJobFile, recoverPersistedActiveJobs, reorderQueue, ScheduledJobDeferredError, waitForJob } = await import('./store.js');
+const { cancelJob, cancelQueuedJob, enqueueDecryptJob, getActiveJobs, getJob, getQueueInfo, getQueueReason, isJobDispatchable, notifyDeviceDispatchStateChanged, pauseQueuedJob, prioritizeQueuedJob, reclaimJobFile, recoverPersistedActiveJobs, reorderQueue, resumePausedJob, ScheduledJobDeferredError, waitForJob } = await import('./store.js');
 const { jobSummary } = await import('./http.js');
 
 let testDeviceId = '';
@@ -572,12 +572,12 @@ describe('enqueueDecryptJob', () => {
   test('includes historical queue ETA in the job response', async () => {
     await clearActiveTestJobs();
     setCachedDeviceHealth(testDeviceId, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
-    const project = createProject({ name: `Queue ETA ${crypto.randomUUID()}` }, 'tests').project!;
+    const accountId = 'default';
     const bundleId = `com.test.queue-eta-${crypto.randomUUID()}`;
     const historyFinishedAt = Date.now() - 20_000;
     recordJobHistory({
       id: `queue-eta-history-${crypto.randomUUID()}`,
-      projectId: project.id,
+      projectId: accountId,
       bundleId,
       source: 'manual',
       status: 'done',
@@ -586,11 +586,11 @@ describe('enqueueDecryptJob', () => {
       finishedAt: historyFinishedAt,
     });
     const running = enqueueDecryptJob(`com.test.queue-eta-blocker-${crypto.randomUUID()}`, 'manual', {
-      projectId: project.id,
+      projectId: accountId,
       preferredDeviceId: testDeviceId,
     });
     const queued = enqueueDecryptJob(bundleId, 'manual', {
-      projectId: project.id,
+      projectId: accountId,
       preferredDeviceId: testDeviceId,
     });
 
@@ -749,49 +749,45 @@ describe('enqueueDecryptJob', () => {
     expect(retry.artifactId).toBe(artifact.id);
   });
 
-  test('deduplicates jobs and cache hits across legacy workspace identifiers', async () => {
-    const bundleId = `com.test.project-cache.${crypto.randomUUID()}`;
-    const projectA = createProject({ name: `Cache project A ${crypto.randomUUID()}` }, 'root').project!.id;
-    const projectB = createProject({ name: `Cache project B ${crypto.randomUUID()}` }, 'root').project!.id;
-    const firstProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: projectA });
-    const duplicateFirstProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: projectA });
-    const secondProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: projectB });
+  test('deduplicates jobs and cache hits across legacy scope identifiers', async () => {
+    const bundleId = `com.test.shared-cache.${crypto.randomUUID()}`;
+    const firstProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: 'legacy-a' });
+    const duplicateFirstProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: 'legacy-a' });
+    const secondProjectJob = enqueueDecryptJob(bundleId, 'manual', { projectId: 'legacy-b' });
 
     expect(firstProjectJob.id).toBe(duplicateFirstProjectJob.id);
     expect(secondProjectJob.id).toBe(firstProjectJob.id);
     expect(firstProjectJob.projectId).toBe('default');
     expect(secondProjectJob.projectId).toBe('default');
 
-    cancelQueuedJob(firstProjectJob.id, 'project test cleanup');
+    cancelQueuedJob(firstProjectJob.id, 'shared scope test cleanup');
 
-    const outputDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-project-cache-'));
+    const outputDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-shared-cache-'));
     const outputPath = path.join(outputDir, 'app.ipa');
     await writeFile(outputPath, 'ipa');
     const artifact = await promoteArtifact({
-      key: artifactKeyForJob({ id: 'lookup', bundleId, externalVersionId: 'project-cache-build' }),
+      key: artifactKeyForJob({ id: 'lookup', bundleId, externalVersionId: 'shared-cache-build' }),
       bundleId,
       channel: 'appstore',
-      externalVersionId: 'project-cache-build',
-      projectId: projectA,
+      externalVersionId: 'shared-cache-build',
+      projectId: 'legacy-a',
       stagingPath: outputPath,
     });
-    const shared = enqueueDecryptJob(bundleId, 'manual', { externalVersionId: 'project-cache-build', projectId: projectB });
+    const shared = enqueueDecryptJob(bundleId, 'manual', { externalVersionId: 'shared-cache-build', projectId: 'legacy-b' });
 
     expect(shared).toMatchObject({ status: 'done', projectId: 'default', artifactId: artifact.id, cacheHit: true });
     expect(getJobHistoryEntryById(shared.id)).toMatchObject({ status: 'done', cacheHit: true });
     expect(artifact.projectIds).toEqual(['default']);
   });
 
-  test('legacy workspace identifiers share one queue without separate project quotas', async () => {
-    const project = createProject({ name: `Concurrency quota ${crypto.randomUUID()}`, maxConcurrentJobs: 1 }, 'root').project!;
-    const first = enqueueDecryptJob(`com.test.project-quota.${crypto.randomUUID()}`, 'manual', { projectId: project.id });
-    const otherProject = createProject({ name: `Independent quota ${crypto.randomUUID()}` }, 'root').project!;
-    const independent = enqueueDecryptJob(`com.test.project-quota.${crypto.randomUUID()}`, 'manual', { projectId: otherProject.id });
+  test('legacy scope identifiers share the account queue', async () => {
+    const first = enqueueDecryptJob(`com.test.shared-quota.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-a' });
+    const independent = enqueueDecryptJob(`com.test.shared-quota.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-b' });
     expect(independent.projectId).toBe('default');
     expect(first.projectId).toBe('default');
 
-    cancelQueuedJob(first.id, 'project quota test cleanup');
-    cancelQueuedJob(independent.id, 'project quota test cleanup');
+    cancelQueuedJob(first.id, 'shared account queue test cleanup');
+    cancelQueuedJob(independent.id, 'shared account queue test cleanup');
   });
 
   test('reclaims a completed job file without an artifact exception', async () => {
@@ -933,12 +929,10 @@ test('reordering and prioritizing changes the one shared queue', async () => {
   await clearActiveTestJobs();
   const blocker = enqueueDecryptJob(`com.test.queue-blocker.${crypto.randomUUID()}`, 'manual');
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const projectA = createProject({ name: `Queue project A ${crypto.randomUUID()}` }, 'root').project!.id;
-  const projectB = createProject({ name: `Queue project B ${crypto.randomUUID()}` }, 'root').project!.id;
-  const firstA = enqueueDecryptJob(`com.test.queue-a1.${crypto.randomUUID()}`, 'manual', { projectId: projectA });
-  const firstB = enqueueDecryptJob(`com.test.queue-b1.${crypto.randomUUID()}`, 'manual', { projectId: projectB });
-  const secondA = enqueueDecryptJob(`com.test.queue-a2.${crypto.randomUUID()}`, 'manual', { projectId: projectA });
-  const secondB = enqueueDecryptJob(`com.test.queue-b2.${crypto.randomUUID()}`, 'manual', { projectId: projectB });
+  const firstA = enqueueDecryptJob(`com.test.queue-a1.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-a' });
+  const firstB = enqueueDecryptJob(`com.test.queue-b1.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-b' });
+  const secondA = enqueueDecryptJob(`com.test.queue-a2.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-a' });
+  const secondB = enqueueDecryptJob(`com.test.queue-b2.${crypto.randomUUID()}`, 'manual', { projectId: 'legacy-b' });
 
   try {
     expect(blocker.status).toBe('running');
@@ -948,6 +942,27 @@ test('reordering and prioritizing changes the one shared queue', async () => {
     expect(getQueueInfo(secondB.id)!.position).toBeLessThan(getQueueInfo(firstA.id)!.position);
     expect(prioritizeQueuedJob(firstA.id)).toBe(true);
     expect(getQueueInfo(firstA.id)!.position).toBe(2);
+  } finally {
+    await clearActiveTestJobs();
+  }
+});
+
+test('resuming a paused job restores its queue position', async () => {
+  await clearActiveTestJobs();
+  const blocker = enqueueDecryptJob(`com.test.pause-blocker.${crypto.randomUUID()}`, 'manual');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const first = enqueueDecryptJob(`com.test.pause-first.${crypto.randomUUID()}`, 'manual');
+  const paused = enqueueDecryptJob(`com.test.pause-target.${crypto.randomUUID()}`, 'manual');
+  const last = enqueueDecryptJob(`com.test.pause-last.${crypto.randomUUID()}`, 'manual');
+
+  try {
+    expect(blocker.status).toBe('running');
+    expect(getQueueInfo(paused.id)?.position).toBe(3);
+    expect(pauseQueuedJob(paused.id, 'tester')).toBe(true);
+    expect(resumePausedJob(paused.id, 'tester')).toBe(true);
+    expect(getQueueInfo(first.id)?.position).toBe(2);
+    expect(getQueueInfo(paused.id)?.position).toBe(3);
+    expect(getQueueInfo(last.id)?.position).toBe(4);
   } finally {
     await clearActiveTestJobs();
   }

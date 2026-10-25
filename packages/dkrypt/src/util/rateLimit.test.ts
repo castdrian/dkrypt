@@ -18,6 +18,20 @@ test('fixed-window rate limiter exposes bounded retry metadata', () => {
   expect(limiter.consume('client', 61_001)).toMatchObject({ allowed: true, remaining: 1, resetAt: 121_001 });
 });
 
+test('sliding-window inspection reports current API usage without consuming a request', () => {
+  const limiter = new SlidingWindowRateLimiter(60_000);
+  expect(limiter.consume('account', 4, 10_000).remaining).toBe(3);
+  expect(limiter.consume('account', 4, 20_000).remaining).toBe(2);
+  expect(limiter.inspect('account', 4, 30_000)).toEqual({
+    allowed: true,
+    limit: 4,
+    remaining: 2,
+    resetAt: 70_000,
+    retryAfterSeconds: 0,
+  });
+  expect(limiter.consume('account', 4, 30_001).remaining).toBe(1);
+});
+
 test('Fastify rate limiting preserves the default dashboard error envelope', async () => {
   const server = Fastify();
   const limiter = new FixedWindowRateLimiter(1, 60_000);

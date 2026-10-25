@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-25",
+    "title": "feat: improve workflows and remove project spaces",
+    "description": "Released in 3a80fc3."
+  },
+  {
+    "date": "2026-10-25",
     "title": "fix: align deployment smoke checks with public API allowlist",
     "description": "Released in 556c1fa."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-25",
     "title": "fix(appstore): encode free license app id as string",
     "description": "Released in edce27c."
-  },
-  {
-    "date": "2026-10-25",
-    "title": "fix(appstore): resolve account storefront and auth diagnostics",
-    "description": "Released in 7eda3e4."
   }
 ] as const;

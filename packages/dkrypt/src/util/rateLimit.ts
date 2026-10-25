@@ -84,6 +84,19 @@ export class SlidingWindowRateLimiter {
       retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil((resetAt - now) / 1000)),
     };
   }
+
+  inspect(key: string, limit: number, now = Date.now()): RateLimitDecision {
+    const active = (this.requests.get(key) ?? []).filter((timestamp) => timestamp > now - this.windowMs);
+    const resetAt = (active[0] ?? now) + this.windowMs;
+    const remaining = Math.max(0, limit - active.length);
+    return {
+      allowed: remaining > 0,
+      limit,
+      remaining,
+      resetAt,
+      retryAfterSeconds: remaining > 0 ? 0 : Math.max(1, Math.ceil((resetAt - now) / 1000)),
+    };
+  }
 }
 
 export const externalRequestRateLimiter = new FixedWindowRateLimiter(10, 60_000);

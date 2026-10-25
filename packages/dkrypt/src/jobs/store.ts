@@ -11,7 +11,7 @@ import { scopedLogger } from '#logger.js';
 const log = scopedLogger('jobs');
 import { sendMailToUser } from '#mail.js';
 import { sendPushToUser } from '#push.js';
-import { DEFAULT_PROJECT_ID, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getProject, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { uninstallFromDevice } from '#appStoreInstall.js';
 import { getCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -496,7 +496,6 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     if (existing.status === 'queued') pumpWorkers();
     return existing;
   }
-  requireProjectAvailable(projectId);
   const artifactKey = artifactKeyForJob({ id: 'lookup', bundleId, externalVersionId, testflight, versionLabel });
   const artifact = getArtifactByKey(artifactKey);
   if (artifact) {
@@ -505,7 +504,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   }
   const reusable = findReusableCompletedJob(lookup);
   if (reusable) return reusable;
-  enforceProjectQuotas(projectId);
+  enforceAccountQuotas(projectId);
 
   const resolvedLabel = versionLabel ?? (testflight ? `${testflight.build.cfBundleShortVersion}_${testflight.build.cfBundleVersion}` : 'Current App Store release');
 
@@ -570,37 +569,28 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   return job;
 }
 
-class ProjectQuotaExceededError extends Error {
+class AccountQuotaExceededError extends Error {
   readonly statusCode = 429;
 
   constructor(message: string) {
     super(message);
-    this.name = 'ProjectQuotaExceededError';
+    this.name = 'AccountQuotaExceededError';
   }
 }
 
-function requireProjectAvailable(projectId: string): void {
-  const project = getProject(projectId);
-  if (!project || project.archivedAt !== undefined) {
-    const error = new Error('account settings are unavailable');
-    Object.assign(error, { statusCode: 404 });
-    throw error;
+function enforceAccountQuotas(accountId: string): void {
+  const limits = getAccountJobQuotaLimits();
+  const active = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === accountId && (job.status === 'queued' || job.status === 'running'));
+  if (limits.maxConcurrentJobs && active.length >= limits.maxConcurrentJobs) {
+    throw new AccountQuotaExceededError('account concurrency limit reached');
   }
-}
-
-function enforceProjectQuotas(projectId: string): void {
-  const project = getProject(projectId)!;
-  const active = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId && (job.status === 'queued' || job.status === 'running'));
-  if (project.maxConcurrentJobs && active.length >= project.maxConcurrentJobs) {
-    throw new ProjectQuotaExceededError('account concurrency limit reached');
-  }
-  if (!project.dailyJobQuota) return;
+  if (!limits.dailyJobQuota) return;
   const now = new Date();
   const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const knownIds = new Set([...jobs.values()].map((job) => job.id));
-  const jobsToday = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId && job.createdAt >= dayStart).length;
-  const historyToday = getAllJobHistory().filter((entry) => (entry.projectId ?? DEFAULT_PROJECT_ID) === projectId && entry.createdAt >= dayStart && !knownIds.has(entry.id)).length;
-  if (jobsToday + historyToday >= project.dailyJobQuota) throw new ProjectQuotaExceededError('account daily job limit reached');
+  const jobsToday = [...jobs.values()].filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === accountId && job.createdAt >= dayStart).length;
+  const historyToday = getAllJobHistory().filter((entry) => (entry.projectId ?? DEFAULT_PROJECT_ID) === accountId && entry.createdAt >= dayStart && !knownIds.has(entry.id)).length;
+  if (jobsToday + historyToday >= limits.dailyJobQuota) throw new AccountQuotaExceededError('account daily job limit reached');
 }
 
 export function getJob(id: string): Job | undefined {
@@ -832,6 +822,7 @@ export function pauseQueuedJob(id: string, pausedBy: string): boolean {
   if (!job || job.status !== 'queued' || job.pausedAt !== undefined) return false;
   const now = Date.now();
   const queueIndex = queue.indexOf(id);
+  job.pausedQueueIndex = queueIndex === -1 ? undefined : queueIndex;
   if (queueIndex !== -1) queue.splice(queueIndex, 1);
   clearQueuedDeadline(job.id);
   job.pausedAt = now;
@@ -853,12 +844,15 @@ export function resumePausedJob(id: string, resumedBy: string): boolean {
   job.deadlineAt = job.pausedRemainingMs === undefined ? undefined : now + job.pausedRemainingMs;
   if (job.schedulerDeadlineAt !== undefined && job.deadlineAt !== undefined) job.schedulerDeadlineAt = job.deadlineAt;
   job.pausedAt = undefined;
+  const queueIndex = job.pausedQueueIndex;
+  job.pausedQueueIndex = undefined;
   job.pausedRemainingMs = undefined;
   job.progress = 'queued';
   job.queueReason = undefined;
   job.lastQueueReason = undefined;
   appendJobTimelineEvent(job, 'Resumed in queue', 'queued', now);
-  insertByPriority(job.id, job.priority);
+  if (queueIndex === undefined) insertByPriority(job.id, job.priority);
+  else queue.splice(Math.min(queueIndex, queue.length), 0, job.id);
   scheduleQueuedDeadline(job);
   log.info('queued job resumed', { jobId: id, bundleId: job.bundleId, resumedBy });
   persistActiveJobs();

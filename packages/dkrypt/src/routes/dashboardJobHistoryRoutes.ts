@@ -7,7 +7,6 @@ import type {
 } from '#dashboardJobContracts.js';
 import { dashboardJobAttemptDiffQuerySchema, dashboardJobAttemptDiffResponseSchema } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { getActiveJobs } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
@@ -18,7 +17,6 @@ import {
   getAllJobHistory,
   getAverageJobDurationMs,
   getJobHistoryEntryById,
-  getProject,
   type JobHistoryEntry,
 } from '#store/state.js';
 import { FixedWindowRateLimiter, fastifyRateLimitPerUser } from '#util/rateLimit.js';
@@ -26,21 +24,17 @@ import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { csvCell } from '#util/csv.js';
 
 export interface DashboardJobHistoryServices {
-  canAccessProject: typeof canAccessProject;
   getActiveJobs: typeof getActiveJobs;
   getAllJobHistory: typeof getAllJobHistory;
   getAverageJobDurationMs: typeof getAverageJobDurationMs;
   getJobHistoryEntryById: typeof getJobHistoryEntryById;
-  getProject: typeof getProject;
 }
 
 const defaultServices: DashboardJobHistoryServices = {
-  canAccessProject,
   getActiveJobs,
   getAllJobHistory,
   getAverageJobDurationMs,
   getJobHistoryEntryById,
-  getProject,
 };
 
 const canRequestDecrypt = fastifyRequirePermission(PermissionFlag.requestDecrypt);
@@ -67,23 +61,8 @@ const historyCsvColumns = [
   'finishedAt',
 ] as const satisfies ReadonlyArray<keyof JobHistoryEntry>;
 
-function resolveProjectId(
-  services: DashboardJobHistoryServices,
-  userId: string,
-  permissions: bigint,
-  projectId: string,
-  reply: { code(statusCode: number): unknown },
-): string | undefined {
-  if (!services.getProject(projectId) || !services.canAccessProject(userId, permissions, projectId)) {
-    reply.code(404);
-    return undefined;
-  }
-  return projectId;
-}
-
-function hasMatchingActiveJob(activeJobs: Job[], entry: JobHistoryEntry, projectId: string): Job | undefined {
+function hasMatchingActiveJob(activeJobs: Job[], entry: JobHistoryEntry): Job | undefined {
   return activeJobs.find((job) =>
-    (job.projectId ?? DEFAULT_PROJECT_ID) === projectId &&
     job.bundleId === entry.bundleId &&
     job.externalVersionId === entry.externalVersionId &&
     job.testflight?.build.id === entry.testflight?.build.id,
@@ -146,13 +125,7 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
     server.get<DashboardJobHistoryExportRoute>('/v1/dashboard/jobs/export', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/export'),
     }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = DEFAULT_PROJECT_ID;
-      if (!resolveProjectId(services, session.sub, session.permissions, projectId, reply)) {
-        return createHttpErrorEnvelope(request.id, 404, 'account data is unavailable');
-      }
-      const entries = services.getAllJobHistory().filter((entry) => (entry.projectId ?? DEFAULT_PROJECT_ID) === projectId)
-        .map(({ projectId: _projectId, ...entry }) => entry);
+      const entries = services.getAllJobHistory().map(({ projectId: _projectId, ...entry }) => entry);
       if (request.query.format !== 'csv') {
         reply.header('Content-Disposition', 'attachment; filename="dkrypt-job-history.json"');
         return entries;
@@ -171,12 +144,7 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
         done();
       },
       preHandler: canRequestDecrypt,
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = DEFAULT_PROJECT_ID;
-      if (!resolveProjectId(services, session.sub, session.permissions, projectId, reply)) {
-        return createHttpErrorEnvelope(request.id, 404, 'account data is unavailable');
-      }
+    }, (request) => {
       const rawIds: string[] = Array.isArray(request.body.ids)
         ? request.body.ids.filter((id): id is string => typeof id === 'string')
         : [];
@@ -184,8 +152,8 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       const activeJobs = services.getActiveJobs();
       const entries = ids.flatMap((id) => {
         const entry = services.getJobHistoryEntryById(id);
-        if (!entry || (entry.projectId ?? DEFAULT_PROJECT_ID) !== projectId) return [];
-        const active = hasMatchingActiveJob(activeJobs, entry, projectId);
+        if (!entry) return [];
+        const active = hasMatchingActiveJob(activeJobs, entry);
         return [{
           entry,
           item: {
@@ -195,7 +163,7 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
             status: entry.status,
             action: active ? 'join-existing' as const : 'queue' as const,
             reason: active ? `Already active as ${active.id.slice(0, 8)}` : undefined,
-            estimatedDurationMs: services.getAverageJobDurationMs(entry.bundleId, projectId),
+            estimatedDurationMs: services.getAverageJobDurationMs(entry.bundleId, DEFAULT_PROJECT_ID),
           },
         }];
       });
@@ -214,14 +182,9 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       schema: getRouteContract('GET', '/v1/dashboard/jobs/diff'),
       preHandler: limitJobDiff,
     }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = DEFAULT_PROJECT_ID;
-      if (!resolveProjectId(services, session.sub, session.permissions, projectId, reply)) {
-        return createHttpErrorEnvelope(request.id, 404, 'account data is unavailable');
-      }
       const first = services.getJobHistoryEntryById(request.query.a);
       const second = services.getJobHistoryEntryById(request.query.b);
-      if (!first || !second || (first.projectId ?? DEFAULT_PROJECT_ID) !== projectId || (second.projectId ?? DEFAULT_PROJECT_ID) !== projectId) {
+      if (!first || !second) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or both job history entries not found');
       }
@@ -250,12 +213,9 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       schema: { hide: true, querystring: dashboardJobAttemptDiffQuerySchema, response: { 200: dashboardJobAttemptDiffResponseSchema } },
       preHandler: [canRequestDecrypt, limitJobDiff],
     }, (request, reply) => {
-      const session = getFastifySession(request)!;
-      const projectId = DEFAULT_PROJECT_ID;
-      if (!resolveProjectId(services, session.sub, session.permissions, projectId, reply)) return createHttpErrorEnvelope(request.id, 404, 'account data is unavailable');
       const first = services.getJobHistoryEntryById(request.query.a);
       const second = services.getJobHistoryEntryById(request.query.b);
-      if (!first || !second || (first.projectId ?? DEFAULT_PROJECT_ID) !== projectId || (second.projectId ?? DEFAULT_PROJECT_ID) !== projectId) {
+      if (!first || !second) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or both job attempts were not found');
       }

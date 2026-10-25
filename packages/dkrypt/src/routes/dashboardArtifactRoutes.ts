@@ -4,7 +4,6 @@ import type { DashboardArtifactArchiveRoute, DashboardArtifactBulkArchiveRoute, 
 import { dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema } from '#dashboardArtifactContracts.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, setArtifactArchived, setArtifactPinned, setArtifactsArchived, setArtifactsPinned, touchArtifact, undoArtifactStateChanges } from '#artifacts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { streamFilePath } from '#jobs/http.js';
 import { PermissionFlag } from '#permissions.js';
@@ -29,7 +28,6 @@ interface DashboardArtifactServices {
   setArtifactsArchived: typeof setArtifactsArchived;
   undoArtifactStateChanges: typeof undoArtifactStateChanges;
   touchArtifact: typeof touchArtifact;
-  canAccessProject: typeof canAccessProject;
   recordAudit: typeof recordAudit;
   readIpaStructure: typeof readIpaStructure;
 }
@@ -45,7 +43,6 @@ const defaultServices: DashboardArtifactServices = {
   setArtifactsArchived,
   undoArtifactStateChanges,
   touchArtifact,
-  canAccessProject,
   recordAudit,
   readIpaStructure,
 };
@@ -55,8 +52,7 @@ const canManageStorage = fastifyRequirePermission(PermissionFlag.manageAutomatio
 
 export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifactServices> = {}): FastifyPluginAsyncTypebox {
   const services = { ...defaultServices, ...overrides };
-  const resolveMatchingArtifacts = (filter: { q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }, session: NonNullable<ReturnType<typeof getFastifySession>>) => {
-    if (!services.canAccessProject(session.sub, session.permissions, DEFAULT_PROJECT_ID)) return { status: 'not-found' as const, artifacts: [] as ArtifactRecord[] };
+  const resolveMatchingArtifacts = (filter: { q?: string; channel?: 'appstore' | 'testflight'; archived: boolean }) => {
     const artifacts: ArtifactRecord[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined;
@@ -90,13 +86,8 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
     server.get<DashboardArtifactListRoute>('/v1/dashboard/artifacts', {
       schema: getRouteContract('GET', '/v1/dashboard/artifacts'),
       preHandler: canRequestDecrypt,
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
+    }, (request) => {
       const projectId = DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'artifact library is unavailable');
-      }
       const cursor = request.query.cursor;
       const result = services.listArtifacts({
         offset: cursor ? 0 : request.query.offset ?? 0,
@@ -129,9 +120,8 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
       const artifact = services.getArtifactById(request.params.id);
-      const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
-      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) {
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId)) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
       }
@@ -164,9 +154,8 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
       const artifact = services.getArtifactById(request.params.id);
-      const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
-      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) {
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId)) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
       }
@@ -189,7 +178,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
     }, async (request, reply) => {
       const artifact = services.getArtifactById(request.params.id);
       const session = getFastifySession(request)!;
-      const allowed = artifact?.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)) ?? false;
+      const allowed = artifact?.projectIds.includes(DEFAULT_PROJECT_ID) ?? false;
       if (!artifact || !services.artifactFileAvailable(artifact) || !allowed) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
@@ -219,7 +208,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       const artifacts = request.body.ids.map((id) => services.getArtifactById(id));
       const allAccessible = artifacts.every((artifact) => artifact
         && services.artifactFileAvailable(artifact)
-        && artifact.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)));
+        && artifact.projectIds.includes(DEFAULT_PROJECT_ID));
       if (!allAccessible) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or more artifacts were not found');
@@ -252,8 +241,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       preHandler: canManageStorage,
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
-      const resolved = resolveMatchingArtifacts(request.body.filter, session);
-      if (resolved.status === 'not-found') return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'artifact library is unavailable'));
+      const resolved = resolveMatchingArtifacts(request.body.filter);
       if (resolved.status === 'too-many') return reply.code(413).send(createHttpErrorEnvelope(request.id, 413, 'select a narrower filter; query-wide actions are limited to 5,000 artifacts'));
       const ids = resolved.artifacts.map((artifact) => artifact.id);
       const result = await services.setArtifactsPinned(ids, request.body.pinned);
@@ -274,8 +262,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       preHandler: canManageStorage,
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
-      const resolved = resolveMatchingArtifacts(request.body.filter, session);
-      if (resolved.status === 'not-found') return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'artifact library is unavailable'));
+      const resolved = resolveMatchingArtifacts(request.body.filter);
       if (resolved.status === 'too-many') return reply.code(413).send(createHttpErrorEnvelope(request.id, 413, 'select a narrower filter; query-wide actions are limited to 5,000 artifacts'));
       const ids = resolved.artifacts.map((artifact) => artifact.id);
       const result = await services.setArtifactsArchived(ids, request.body.archived);
@@ -297,7 +284,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
     }, async (request, reply) => {
       const artifact = services.getArtifactById(request.params.id);
       const session = getFastifySession(request)!;
-      const allowed = artifact?.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)) ?? false;
+      const allowed = artifact?.projectIds.includes(DEFAULT_PROJECT_ID) ?? false;
       if (!artifact || !services.artifactFileAvailable(artifact) || !allowed) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
@@ -327,7 +314,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       const artifacts = request.body.ids.map((id) => services.getArtifactById(id));
       const allAccessible = artifacts.every((artifact) => artifact
         && services.artifactFileAvailable(artifact)
-        && artifact.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)));
+        && artifact.projectIds.includes(DEFAULT_PROJECT_ID));
       if (!allAccessible) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or more artifacts were not found');
@@ -368,7 +355,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
         const artifact = services.getArtifactById(change.id);
         return artifact
           && services.artifactFileAvailable(artifact)
-          && artifact.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId));
+          && artifact.projectIds.includes(DEFAULT_PROJECT_ID);
       });
       if (!accessible) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'one or more artifacts were not found'));
       const result = await services.undoArtifactStateChanges(request.body.changes);
@@ -388,7 +375,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
     }, async (request, reply) => {
       const artifact = services.getArtifactById(request.params.id);
       const session = getFastifySession(request)!;
-      const allowed = artifact?.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)) ?? false;
+      const allowed = artifact?.projectIds.includes(DEFAULT_PROJECT_ID) ?? false;
       if (!artifact || !services.artifactFileAvailable(artifact) || !allowed) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
@@ -403,11 +390,10 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: { hide: true, body: dashboardArtifactZipBodySchema },
       preHandler: canRequestDecrypt,
     }, async (request, reply) => {
-      const session = getFastifySession(request)!;
       const artifacts = request.body.ids.map((id) => services.getArtifactById(id));
       const allowed = artifacts.every((artifact) => artifact
         && services.artifactFileAvailable(artifact)
-        && artifact.projectIds.some((projectId) => services.canAccessProject(session.sub, session.permissions, projectId)));
+        && artifact.projectIds.includes(DEFAULT_PROJECT_ID));
       if (!allowed) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'one or more artifacts were not found'));
       const entries = artifacts.map((artifact) => ({
         path: artifact!.filePath,
@@ -429,12 +415,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: { hide: true, body: dashboardArtifactCompareBodySchema, response: { 200: dashboardArtifactCompareResponseSchema, 400: ErrorEnvelope, 404: ErrorEnvelope } },
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
-      const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
-      if (!services.canAccessProject(session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return createHttpErrorEnvelope(request.id, 404, 'artifact library is unavailable');
-      }
       const beforeArtifact = services.getArtifactById(request.body.ids[0]!);
       const afterArtifact = services.getArtifactById(request.body.ids[1]!);
       const artifacts = [beforeArtifact, afterArtifact];

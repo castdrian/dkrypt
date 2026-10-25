@@ -87,7 +87,33 @@ test('TypeScript client never sends an API key to a different origin', async () 
 
 test('TypeScript client returns the HTTP error for non-object error JSON', async () => {
   const fetchImpl = (async () => new Response(JSON.stringify('upstream error'), { status: 502 })) as unknown as typeof fetch;
-  const client = new DkryptClient('https://ipa.dylib.dev', { apiKey: 'dk_test_key', fetchImpl });
+  const client = new DkryptClient('https://ipa.dylib.dev', { apiKey: 'dk_test_key', fetchImpl, retry: { baseDelayMs: 0 } });
 
   await expect(client.request({ path: '/v1/jobs/job-1' })).rejects.toThrow('HTTP 502');
+});
+
+test('TypeScript client retries a transient read and respects Retry-After', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response(JSON.stringify({ message: 'try again' }), { status: 503, headers: { 'Retry-After': '0' } })
+      : new Response(JSON.stringify({ id: 'job-1' }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const client = new DkryptClient('https://ipa.dylib.dev', { fetchImpl, retry: { baseDelayMs: 0 } });
+
+  await expect(client.request({ path: '/v1/jobs/job-1' })).resolves.toEqual({ id: 'job-1' });
+  expect(calls).toBe(2);
+});
+
+test('TypeScript client never retries a write without an idempotency key', async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ message: 'unavailable' }), { status: 503 });
+  }) as unknown as typeof fetch;
+  const client = new DkryptClient('https://ipa.dylib.dev', { fetchImpl, retry: { baseDelayMs: 0 } });
+
+  await expect(client.request({ path: '/v1/example', method: 'POST', body: '{}' })).rejects.toThrow('unavailable');
+  expect(calls).toBe(1);
 });

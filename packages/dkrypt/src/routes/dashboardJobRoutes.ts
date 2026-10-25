@@ -1,15 +1,15 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { DashboardJobListRoute, DashboardJobStatusRoute, DashboardJobTimelineRoute } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject, dashboardHistoryEntry } from '#dashboardJobPresentation.js';
+import { dashboardHistoryEntry } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { jobSummary } from '#jobs/http.js';
 import { getJob } from '#jobs/store.js';
 import type { Job, JobExecutionStage } from '#jobs/types.js';
 import type { DeviceTransport } from '#apiCommonContracts.js';
 import { getFailureGuidance } from '#util/failureGuidance.js';
-import { fastifyRequireSession, getFastifySession } from '#session.js';
-import { DEFAULT_PROJECT_ID, getJobHistoryEntryById, getJobHistoryPage } from '#store/state.js';
+import { fastifyRequireSession } from '#session.js';
+import { getJobHistoryEntryById, getJobHistoryPage } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { getOfflineAppStoreReadiness } from '#offlineAppStore.js';
 
@@ -106,13 +106,8 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.addHook('preHandler', fastifyRequireSession);
   server.addHook('preHandler', recordFastifyDashboardActivity);
 
-  server.get<DashboardJobListRoute>('/v1/dashboard/jobs', { schema: getRouteContract('GET', '/v1/dashboard/jobs') }, async (request, reply) => {
-    const session = getFastifySession(request)!;
+  server.get<DashboardJobListRoute>('/v1/dashboard/jobs', { schema: getRouteContract('GET', '/v1/dashboard/jobs') }, async (request) => {
     const query = request.query;
-    const projectId = DEFAULT_PROJECT_ID;
-    if (!canAccessProject(session.sub, session.permissions, projectId)) {
-      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'account data is unavailable'));
-    }
     const limit = Math.min(query.limit ?? 15, 100);
     const cursor = query.cursor;
     const offset = cursor ? 0 : query.offset ?? 0;
@@ -122,7 +117,6 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
     const errorQ = query.errorQ?.trim().slice(0, 200) || undefined;
     const failureCategory = query.failureCategory?.trim().slice(0, 64) || undefined;
     const { entries, total, nextCursor } = getJobHistoryPage(offset, limit, {
-      projectId,
       bundleIdSearch: q,
       source: query.source,
       status: query.status,
@@ -137,23 +131,19 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
   });
 
   server.get<DashboardJobStatusRoute>('/v1/dashboard/jobs/:id/status', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/status') }, async (request, reply) => {
-    const session = getFastifySession(request)!;
     const job = getJob(request.params.id);
-    if (!job || !canAccessProject(session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+    if (!job) {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found (finished jobs are pruned after retention window)'));
     }
     return jobSummary(job);
   });
 
   server.get<DashboardJobTimelineRoute>('/v1/dashboard/jobs/:id/timeline', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/timeline') }, async (request, reply) => {
-    const session = getFastifySession(request)!;
     const active = getJob(request.params.id);
-    if (active && canAccessProject(session.sub, session.permissions, active.projectId ?? DEFAULT_PROJECT_ID)) {
-      return dashboardJobTimeline(active);
-    }
+    if (active) return dashboardJobTimeline(active);
 
     const entry = getJobHistoryEntryById(request.params.id);
-    if (!entry || !canAccessProject(session.sub, session.permissions, entry.projectId ?? DEFAULT_PROJECT_ID)) {
+    if (!entry) {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
     }
     return dashboardJobTimeline(entry);

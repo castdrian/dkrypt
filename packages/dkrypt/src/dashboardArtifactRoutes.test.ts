@@ -50,7 +50,6 @@ test('artifact listing and pinning use native dashboard routes', async () => {
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     listArtifacts: (options) => {
       listCalls.push(options);
       return { artifacts: [record], total: 1, totalBytes: 4, maxBytes: 10, nextCursor: 'next-page' };
@@ -117,7 +116,6 @@ test('artifact package contents are paginated and filterable without a project s
   const record = artifact({ projectIds: ['default'] });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     artifactFileAvailable: () => true,
     getArtifactById: () => record,
     readIpaStructure: () => [
@@ -148,7 +146,6 @@ test('artifact listing and pinning keep their permission boundaries across the s
   const record = artifact();
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     artifactFileAvailable: () => true,
     getArtifactById: () => record,
   }));
@@ -193,7 +190,6 @@ test('single artifact mutations report no-op state so clients do not offer undo'
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: () => true,
     artifactFileAvailable: () => true,
     getArtifactById: () => record,
     setArtifactPinned: async () => ({ artifact: record, changed: false }),
@@ -225,7 +221,6 @@ test('bulk pinning updates artifacts across the shared account library', async (
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     artifactFileAvailable: () => true,
     getArtifactById: (id) => records.get(id),
     setArtifactsPinned: async (ids, pinned) => {
@@ -285,7 +280,6 @@ test('bulk pinning requires storage permission and rejects oversized selections'
     });
   });
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: () => true,
     artifactFileAvailable: () => true,
     getArtifactById: (id) => artifact({ id }),
     setArtifactsPinned: async (ids) => ({ artifacts: ids.map((id) => artifact({ id })), changedIds: ids, missingIds: [], previousPinnedAtById: {} }),
@@ -321,7 +315,6 @@ test('archive and restore require storage permission and record audit events acr
   const audits: Array<[string, string, string, string?, Array<{ field: string; before: unknown; after: unknown }> ?]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     artifactFileAvailable: () => true,
     getArtifactById: (id) => records.get(id),
     setArtifactArchived: async (id, archived) => {
@@ -412,7 +405,6 @@ test('query-wide artifact pinning stays project-scoped and ZIP export uses expli
   const pinCalls: string[][] = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     artifactFileAvailable: () => true,
     getArtifactById: (id) => records.find((record) => record.id === id),
     listArtifacts: (options) => {

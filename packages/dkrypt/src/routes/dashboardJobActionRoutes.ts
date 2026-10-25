@@ -9,7 +9,6 @@ import type {
   DashboardManualDecryptRoute,
 } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { canAccessProject } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { fastifyBlockDuringMaintenance, fastifyBlockManualMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
@@ -33,7 +32,6 @@ import {
   DEFAULT_PROJECT_ID,
   getJobHistoryEntryById,
   getPrimaryDevice,
-  getProject,
   getUserPriority,
   jobResolutionMessage,
   recordJobResolutionNotice,
@@ -48,11 +46,9 @@ export interface DashboardJobActionServices {
   prioritizeQueuedJob: typeof prioritizeQueuedJob;
   reorderQueue: typeof reorderQueue;
   getJobHistoryEntryById: typeof getJobHistoryEntryById;
-  getProject: typeof getProject;
   enqueueDecryptJob: typeof enqueueDecryptJob;
   getPrimaryDevice: typeof getPrimaryDevice;
   getUserPriority: typeof getUserPriority;
-  canAccessProject: typeof canAccessProject;
   resolveDecryptTarget: typeof resolveDecryptTarget;
   getAuthProfile: typeof getAuthProfile;
   canSendDirectMailToUser: typeof canSendDirectMailToUser;
@@ -67,11 +63,9 @@ const defaultServices: DashboardJobActionServices = {
   prioritizeQueuedJob,
   reorderQueue,
   getJobHistoryEntryById,
-  getProject,
   enqueueDecryptJob,
   getPrimaryDevice,
   getUserPriority,
-  canAccessProject,
   resolveDecryptTarget,
   getAuthProfile,
   canSendDirectMailToUser,
@@ -87,10 +81,6 @@ const log = scopedLogger('jobs');
 
 function sendJobError(requestId: string, statusCode: number, message: string) {
   return createHttpErrorEnvelope(requestId, statusCode, message);
-}
-
-function hasProjectAccess(services: DashboardJobActionServices, userId: string, permissions: bigint, projectId: string): boolean {
-  return services.canAccessProject(userId, permissions, projectId);
 }
 
 async function resolveMinimumOsVersion(
@@ -132,15 +122,6 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
-      const project = services.getProject(projectId);
-      if (!project || !hasProjectAccess(services, session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return sendJobError(request.id, 404, 'account data is unavailable');
-      }
-      if (project.archivedAt !== undefined) {
-        reply.code(409);
-        return sendJobError(request.id, 409, 'decrypt operations are unavailable');
-      }
       const bundleId = request.body.bundleId.trim();
       const externalVersionId = request.body.externalVersionId && externalVersionIdPattern.test(request.body.externalVersionId)
         ? request.body.externalVersionId
@@ -177,7 +158,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
-      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+      if (!job) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -194,7 +175,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
-      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+      if (!job) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -211,7 +192,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, (request, reply) => {
       const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
-      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+      if (!job) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -226,9 +207,8 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/prioritize'),
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
-      const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
-      if (!job || !hasProjectAccess(services, session.sub, session.permissions, job.projectId ?? DEFAULT_PROJECT_ID)) {
+      if (!job) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -242,13 +222,8 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     server.post<DashboardJobReorderRoute>('/v1/dashboard/jobs/reorder', {
       schema: getRouteContract('POST', '/v1/dashboard/jobs/reorder'),
       preHandler: canRequestDecrypt,
-    }, (request, reply) => {
-      const session = getFastifySession(request)!;
+    }, (request) => {
       const projectId = DEFAULT_PROJECT_ID;
-      if (!hasProjectAccess(services, session.sub, session.permissions, projectId)) {
-        reply.code(404);
-        return sendJobError(request.id, 404, 'account data is unavailable');
-      }
       const scopedJobs = request.body.ids.every((id) => {
         const job = services.getJob(id);
         return job && (job.projectId ?? DEFAULT_PROJECT_ID) === projectId;
@@ -266,16 +241,11 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
       const entry = services.getJobHistoryEntryById(request.params.id);
-      const projectId = entry?.projectId ?? DEFAULT_PROJECT_ID;
-      if (!entry || !hasProjectAccess(services, session.sub, session.permissions, projectId)) {
+      if (!entry) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job history entry not found');
       }
-      if (services.getProject(projectId)?.archivedAt !== undefined) {
-        reply.code(409);
-        return sendJobError(request.id, 409, 'decrypt operations are unavailable');
-      }
-
+      const projectId = DEFAULT_PROJECT_ID;
       const preferredDeviceId = request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;
       const minimumOsVersion = await resolveMinimumOsVersion(services, {
         bundleId: entry.bundleId,
@@ -303,9 +273,9 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       return jobSummary(job);
     });
 
-    const resolutionNoticePreview = (id: string, userId: string, permissions: bigint) => {
+    const resolutionNoticePreview = (id: string) => {
       const entry = services.getJobHistoryEntryById(id);
-      if (!entry || !hasProjectAccess(services, userId, permissions, entry.projectId ?? DEFAULT_PROJECT_ID)) return undefined;
+      if (!entry) return undefined;
       if (entry.status !== 'failed' || entry.source !== 'manual' || !entry.queuedBy) return null;
       const recipient = services.getAuthProfile(entry.queuedBy);
       if (!recipient) return null;
@@ -325,8 +295,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       schema: { ...getRouteContract('GET', '/v1/dashboard/jobs/:id/resolution-notice'), hide: true },
       preHandler: canNotifyFailedJobOwners,
     }, async (request, reply) => {
-      const session = getFastifySession(request)!;
-      const preview = resolutionNoticePreview(request.params.id, session.sub, session.permissions);
+      const preview = resolutionNoticePreview(request.params.id);
       if (preview === undefined) return reply.code(404).send(sendJobError(request.id, 404, 'job not found'));
       if (preview === null) return reply.code(409).send(sendJobError(request.id, 409, 'job has no requester to notify'));
       return preview.response;
@@ -337,7 +306,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       preHandler: canNotifyFailedJobOwners,
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
-      const preview = resolutionNoticePreview(request.params.id, session.sub, session.permissions);
+      const preview = resolutionNoticePreview(request.params.id);
       if (preview === undefined) return reply.code(404).send(sendJobError(request.id, 404, 'job not found'));
       if (preview === null) return reply.code(409).send(sendJobError(request.id, 409, 'job has no requester to notify'));
       if (preview.entry.resolutionNotice) return preview.response;
@@ -355,7 +324,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
           log.warn('failed-job resolution email could not be delivered', { jobId: request.params.id, error: String(error) });
         }
       }
-      return resolutionNoticePreview(request.params.id, session.sub, session.permissions)!.response;
+      return resolutionNoticePreview(request.params.id)!.response;
     });
 
     server.get<DashboardJobDiagnosticRoute>('/v1/dashboard/jobs/:id/diagnostic', {
@@ -364,9 +333,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
     }, (request, reply) => {
       const active = services.getJob(request.params.id);
       const entry = active ? undefined : services.getJobHistoryEntryById(request.params.id);
-      const projectId = active?.projectId ?? entry?.projectId ?? DEFAULT_PROJECT_ID;
-      const session = getFastifySession(request)!;
-      if ((!active && !entry) || !hasProjectAccess(services, session.sub, session.permissions, projectId)) {
+      if (!active && !entry) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }

@@ -682,7 +682,7 @@ export function getOfflineAppStoreReadiness(job?: Pick<Job, 'testflight'>): Offl
   return defaultProcessor.readiness(job);
 }
 
-export async function checkAppleDownloaderNetwork(): Promise<{ reachable: boolean; latencyMs: number; endpoint: string; diagnostic?: string }> {
+export async function checkAppleDownloaderNetwork(): Promise<{ reachable: boolean; latencyMs: number; endpoint: string; redirected: boolean; rangeSupported?: boolean; rateLimited: boolean; retryAfterSeconds?: number; diagnostic?: string }> {
   const homeDirectory = await mkdtemp(path.join(SESSION_WORKSPACE_ROOT, 'dkrypt-appstore-network-'));
   await chmod(homeDirectory, 0o700);
   try {
@@ -702,6 +702,10 @@ export async function checkAppleDownloaderNetwork(): Promise<{ reachable: boolea
       reachable: response.network_reachable,
       latencyMs: response.network_latency_ms,
       endpoint: response.network_endpoint,
+      redirected: response.network_redirected ?? false,
+      rangeSupported: response.network_range_supported,
+      rateLimited: response.network_rate_limited ?? false,
+      retryAfterSeconds: response.network_retry_after_seconds,
       diagnostic: response.diagnostic,
     };
   } finally {

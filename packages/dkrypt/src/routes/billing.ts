@@ -58,6 +58,7 @@ import {
 } from '#cryptoBilling.js';
 import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpayments.js';
 import { getDecryptQuotaJournal, getDecryptQuotaUsage } from '#jobs/repository.js';
+import { getAccountApiRateUsage } from '#auth.js';
 import { getAuthProfile, resolveAuthUserId } from '#identity.js';
 import { log } from '#logger.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
@@ -548,6 +549,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       legacyBilling: hasLegacyBillingRecord(userId),
       entitlement,
       quota,
+      apiRateUsage: getAccountApiRateUsage(userId),
       usageForecast: {
         sampleDays,
         jobsInSample: recentQuotaAdmissions.length,

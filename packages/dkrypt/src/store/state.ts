@@ -57,6 +57,9 @@ export interface ApiKeyOutcomeUsage {
   clientError: number;
   serverError: number;
   lastAt: number;
+  latencyCount?: number;
+  averageLatencyMs?: number;
+  maxLatencyMs?: number;
 }
 
 export interface Role {
@@ -1806,49 +1809,21 @@ export function listRoles(): Role[] {
   return state.roles.map((role) => structuredClone(role)).sort((a, b) => a.position - b.position);
 }
 
-export interface CreateProjectInput {
-  name: string;
-  description?: string;
-  memberIds?: string[];
-  storageQuotaBytes?: number;
+export interface AccountJobQuotaLimits {
   dailyJobQuota?: number;
   maxConcurrentJobs?: number;
 }
 
-export interface UpdateProjectInput {
-  name?: string;
-  description?: string | null;
-  memberIds?: string[];
-  storageQuotaBytes?: number | null;
-  dailyJobQuota?: number | null;
-  maxConcurrentJobs?: number | null;
-  archived?: boolean;
-}
-
-export function getProject(_id: string): ProjectRecord | undefined {
-  return projectRepository.findById(DEFAULT_PROJECT_ID);
-}
-
-export function listProjectsForUser(_userId: string, _includeAll = false): ProjectRecord[] {
+export function getAccountJobQuotaLimits(): AccountJobQuotaLimits {
   const account = projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject();
-  return [{ ...account, name: 'dkrypt', memberIds: [] }];
-}
-
-export function userCanAccessProject(_userId: string, _projectId: string): boolean {
-  return true;
+  return {
+    dailyJobQuota: account.dailyJobQuota,
+    maxConcurrentJobs: account.maxConcurrentJobs,
+  };
 }
 
 function normalizeProjectMemberIds(memberIds: string[]): string[] {
   return [...new Set(memberIds.map((memberId) => memberId.trim().toLowerCase()).filter(Boolean))];
-}
-
-export function createProject(_input: CreateProjectInput, _actor: string): { ok: boolean; project: ProjectRecord } {
-  const account = projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject();
-  return { ok: true, project: { ...account, name: 'dkrypt', memberIds: [] } };
-}
-
-export function updateProject(_id: string, _patch: UpdateProjectInput, _actor: string): { ok: false; error: string } {
-  return { ok: false, error: 'dkrypt uses one shared account space' };
 }
 
 export function getRole(id: string): Role | undefined {
@@ -2721,13 +2696,19 @@ export function getApiKeyBundleUsage(id: string, limit = 10): { bundleId: string
 
 const MAX_TRACKED_OUTCOMES_PER_KEY = 30;
 
-export function recordApiKeyOutcome(id: string, method: string, path: string, status: number): void {
+export function recordApiKeyOutcome(id: string, method: string, path: string, status: number, durationMs?: number): void {
   const route = `${method} ${path}`;
   const perKey = state.apiKeyOutcomeUsage[id] ?? {};
   const outcome = perKey[route] ?? { route, success: 0, clientError: 0, serverError: 0, lastAt: Date.now() };
   if (status < 400) outcome.success += 1;
   else if (status < 500) outcome.clientError += 1;
   else outcome.serverError += 1;
+  if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) {
+    const latencyCount = outcome.latencyCount ?? 0;
+    outcome.averageLatencyMs = Math.round((((outcome.averageLatencyMs ?? 0) * latencyCount) + durationMs) / (latencyCount + 1));
+    outcome.maxLatencyMs = Math.max(outcome.maxLatencyMs ?? 0, Math.round(durationMs));
+    outcome.latencyCount = latencyCount + 1;
+  }
   outcome.lastAt = Date.now();
   perKey[route] = outcome;
   if (Object.keys(perKey).length > MAX_TRACKED_OUTCOMES_PER_KEY) {

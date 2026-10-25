@@ -12,6 +12,11 @@ export type DkryptRoute =
 export interface DkryptClientOptions {
   apiKey?: string;
   fetchImpl?: typeof fetch;
+  retry?: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+  };
 }
 
 export interface DkryptRequestInit extends RequestInit {
@@ -41,6 +46,7 @@ export class DkryptClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryOptions: Required<NonNullable<DkryptClientOptions['retry']>>;
 
   constructor(baseUrl: string, options?: DkryptClientOptions);
   constructor(baseUrl: string, fetchImpl?: typeof fetch);
@@ -49,24 +55,29 @@ export class DkryptClient {
     this.baseUrl = baseUrl;
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retryOptions = {
+      maxAttempts: Math.max(1, Math.min(5, Math.floor(options.retry?.maxAttempts ?? 3))),
+      baseDelayMs: Math.max(0, Math.min(30_000, Math.floor(options.retry?.baseDelayMs ?? 250))),
+      maxDelayMs: Math.max(0, Math.min(30_000, Math.floor(options.retry?.maxDelayMs ?? 30_000))),
+    };
   }
 
   async request<T>(init: DkryptRequestInit): Promise<T> {
     const { path, ...request } = init;
-    const response = await this.fetchImpl(this.buildUrl(path), {
+    const response = await this.fetchWithRetry(this.buildUrl(path), {
       ...request,
       headers: this.createHeaders(request.headers, 'application/json'),
-    });
+    }, this.canRetry(request));
     if (!response.ok) throw new Error(await this.responseError(response));
     return await response.json() as T;
   }
 
   async download(path: string, init: Pick<RequestInit, 'headers' | 'signal'> = {}): Promise<ArrayBuffer> {
-    const response = await this.fetchImpl(this.buildUrl(path), {
+    const response = await this.fetchWithRetry(this.buildUrl(path), {
       ...init,
       method: 'GET',
       headers: this.createHeaders(init.headers, 'application/octet-stream'),
-    });
+    }, true);
     if (!response.ok) throw new Error(await this.responseError(response));
     return response.arrayBuffer();
   }
@@ -119,6 +130,33 @@ export class DkryptClient {
     return result;
   }
 
+  private canRetry(request: RequestInit): boolean {
+    const method = (request.method ?? 'GET').toUpperCase();
+    if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+    return new Headers(request.headers).has('Idempotency-Key');
+  }
+
+  private async fetchWithRetry(url: URL, request: RequestInit, retryable: boolean): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, request);
+      } catch (error) {
+        if (!retryable || attempt + 1 >= this.retryOptions.maxAttempts || request.signal?.aborted || isAbortError(error)) throw error;
+        await abortableDelay(this.retryDelay(attempt), request.signal ?? undefined);
+        continue;
+      }
+      if (!retryable || attempt + 1 >= this.retryOptions.maxAttempts || ![429, 502, 503, 504].includes(response.status)) return response;
+      const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
+      await response.body?.cancel().catch(() => {});
+      await abortableDelay(retryAfter ?? this.retryDelay(attempt), request.signal ?? undefined);
+    }
+  }
+
+  private retryDelay(attempt: number): number {
+    return Math.min(this.retryOptions.maxDelayMs, this.retryOptions.baseDelayMs * 2 ** attempt);
+  }
+
   private buildUrl(path: string): URL {
     const baseUrl = new URL(this.baseUrl);
     const url = new URL(path, baseUrl);
@@ -138,4 +176,32 @@ export class DkryptClient {
     }
     return detail ?? `dkrypt request failed with HTTP ${response.status}`;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'name' in error && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(30_000, seconds * 1000);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.min(30_000, Math.max(0, timestamp - Date.now())) : undefined;
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }

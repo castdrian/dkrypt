@@ -1,5 +1,4 @@
 import { createPublicKey, verify, type webcrypto } from 'node:crypto';
-import { getProject } from '#store/state.js';
 import { listGithubOidcPolicies, type GithubOidcPolicy } from '#store/integrationRepository.js';
 
 const issuer = 'https://token.actions.githubusercontent.com';
@@ -75,10 +74,7 @@ export async function authenticateGithubOidc(token: string): Promise<GithubOidcP
     if (!jwk) return undefined;
     const claims = verifyGithubOidcSignature(token, jwk);
     if (!claims) return undefined;
-    return policies.find((policy) => {
-      const project = getProject(policy.projectId);
-      return Boolean(project && !project.archivedAt && githubOidcPolicyMatches(policy, claims));
-    });
+    return policies.find((policy) => githubOidcPolicyMatches(policy, claims));
   } catch {
     return undefined;
   }

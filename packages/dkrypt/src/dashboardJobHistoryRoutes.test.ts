@@ -38,10 +38,6 @@ function historyEntry(overrides: Partial<JobHistoryEntry> = {}): JobHistoryEntry
 function build(overrides: Partial<DashboardJobHistoryServices> = {}) {
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   void server.register(createDashboardJobHistoryRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
-    getProject: (projectId) => projectId === 'default'
-      ? { id: 'default', name: 'Default', memberIds: [], isDefault: true, createdBy: 'root', createdAt: 1, updatedAt: 1 }
-      : undefined,
     ...overrides,
   }));
   return server;
@@ -101,7 +97,7 @@ test('attempt comparison rejects records without stable build identity', async (
   }
 });
 
-test('job history export omits internal scope identifiers and preserves formats and attachment names', async () => {
+test('job history export combines shared account history and omits internal scope identifiers', async () => {
   const entries = [
     historyEntry({ queuedBy: 'Doe, "A"', queueReason: 'Waiting for a compatible device' }),
     historyEntry({ id: 'other-job', projectId: 'other-project' }),
@@ -113,13 +109,13 @@ test('job history export omits internal scope identifiers and preserves formats 
     const json = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?projectId=default', headers });
     const csv = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?format=csv&projectId=default', headers });
     const unsupportedFormat = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?format=other&projectId=default', headers });
-    const deniedProject = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?projectId=other-project', headers });
+    const sharedHistory = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export', headers });
     const unauthenticated = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export' });
 
     expect(json.statusCode).toBe(200);
     expect(json.headers['content-disposition']).toBe('attachment; filename="dkrypt-job-history.json"');
     const exported = JSON.parse(json.body) as Array<Record<string, unknown>>;
-    expect(exported).toHaveLength(1);
+    expect(exported).toHaveLength(2);
     expect(exported[0]).toMatchObject({ id: entries[0]!.id, bundleId: entries[0]!.bundleId, status: entries[0]!.status });
     expect(exported[0]).not.toHaveProperty('projectId');
     expect(csv.statusCode).toBe(200);
@@ -130,14 +126,15 @@ test('job history export omits internal scope identifiers and preserves formats 
     expect(csv.body).toContain('Waiting for a compatible device');
     expect(unsupportedFormat.statusCode).toBe(200);
     expect(unsupportedFormat.headers['content-disposition']).toBe('attachment; filename="dkrypt-job-history.json"');
-    expect(deniedProject.statusCode).toBe(200);
+    expect(sharedHistory.statusCode).toBe(200);
+    expect(JSON.parse(sharedHistory.body)).toHaveLength(2);
     expect(unauthenticated.statusCode).toBe(401);
   } finally {
     await server.close();
   }
 });
 
-test('bulk preview deduplicates ids and hides history outside the accessible project', async () => {
+test('bulk preview deduplicates ids in shared account history', async () => {
   const entry = historyEntry();
   const activeJob = {
     id: 'active-job-12345678',
@@ -147,7 +144,7 @@ test('bulk preview deduplicates ids and hides history outside the accessible pro
     status: 'queued',
   } as Job;
   const server = build({
-    getJobHistoryEntryById: (id) => id === entry.id ? entry : id === 'foreign-job' ? historyEntry({ id, projectId: 'other-project' }) : undefined,
+    getJobHistoryEntryById: (id) => id === entry.id ? entry : undefined,
     getActiveJobs: () => [activeJob],
     getAverageJobDurationMs: () => 1200,
   });
@@ -204,7 +201,7 @@ test('bulk preview deduplicates ids and hides history outside the accessible pro
   }
 });
 
-test('job diff validates project and bundle ownership and returns sorted plist changes', async () => {
+test('job diff validates bundle ownership and returns sorted plist changes', async () => {
   const first = historyEntry({
     id: 'history-a',
     ipaInfoPlist: { CFBundleName: 'Old', CFBundleVersion: '1', unchanged: true },
@@ -237,7 +234,7 @@ test('job diff validates project and bundle ownership and returns sorted plist c
       url: `/v1/dashboard/jobs/diff?bundleId=com.other.app&a=${first.id}&b=${second.id}&projectId=default`,
       headers,
     });
-    const foreignProject = await server.inject({
+    const missingEntry = await server.inject({
       method: 'GET',
       url: `/v1/dashboard/jobs/diff?bundleId=${first.bundleId}&a=${first.id}&b=foreign-job&projectId=default`,
       headers,
@@ -255,7 +252,7 @@ test('job diff validates project and bundle ownership and returns sorted plist c
       ],
     });
     expect(mismatchedBundle.statusCode).toBe(400);
-    expect(foreignProject.statusCode).toBe(404);
+    expect(missingEntry.statusCode).toBe(404);
   } finally {
     await server.close();
   }

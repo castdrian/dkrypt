@@ -382,6 +382,7 @@ const BillingResponse = object({
   legacyBilling: Type.Boolean(),
   entitlement: JsonObject,
   quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
+  apiRateUsage: Type.Optional(object({ limit: Type.Integer({ minimum: 1 }), used: Type.Integer({ minimum: 0 }), remaining: Type.Integer({ minimum: 0 }), resetAt: Type.Number() })),
   usageForecast: object({ sampleDays: Type.Integer({ minimum: 1 }), jobsInSample: Type.Integer({ minimum: 0 }), averagePerDay: Type.Number({ minimum: 0 }), daysUntilAllowanceUsed: Type.Union([Type.Number(), Type.Null()]) }),
 });
 const BillingSubscriptionPage = object({ subscriptions: Type.Array(JsonObject), total: Type.Integer({ minimum: 0 }), nextCursor: PageCursor });

@@ -53,7 +53,6 @@ function createHistoryEntry(id = 'history-1'): JobHistoryEntry {
 function build(overrides: Partial<DashboardJobActionServices> = {}) {
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   void server.register(createDashboardJobActionRoutes({
-    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
     ...overrides,
   }));
   return server;
@@ -84,7 +83,6 @@ test('manual decrypt submission preserves project, device, and version selection
   let enqueueArgs: unknown[] = [];
   const queuedJob = createJob('manual-decrypt-job');
   const server = build({
-    getProject: () => ({ id: 'default', name: 'Default', memberIds: [], isDefault: true, createdBy: 'root', createdAt: 1, updatedAt: 1 }),
     getPrimaryDevice: () => ({ id: 'device-primary' }) as ReturnType<DashboardJobActionServices['getPrimaryDevice']>,
     getUserPriority: () => 4,
     resolveDecryptTarget: async (bundleId, selector) => ({ bundleId, selector, channel: 'appstore', versionLabel: selector ?? 'latest', minimumOsVersion: '17.0', artifactKey: 'appstore-artifact' }),
@@ -196,7 +194,6 @@ test('retry uses the requested primary device and retains source job metadata', 
   const retriedJob = createJob('retry-job');
   const server = build({
     getJobHistoryEntryById: () => createHistoryEntry(),
-    getProject: () => ({ id: 'default', name: 'Default', memberIds: [], isDefault: true, createdBy: 'root', createdAt: 1, updatedAt: 1 }),
     getPrimaryDevice: () => ({ id: 'device-primary' }) as ReturnType<DashboardJobActionServices['getPrimaryDevice']>,
     getUserPriority: () => 4,
     enqueueDecryptJob: (...args) => {
@@ -233,7 +230,7 @@ test('retry uses the requested primary device and retains source job metadata', 
   }
 });
 
-test('failed-job resolution notices require permission and project access and are sent only once', async () => {
+test('failed-job resolution notices require permission and are sent only once', async () => {
   const entry = createHistoryEntry();
   let mailSends = 0;
   let noticeCreates = 0;
@@ -278,8 +275,8 @@ test('failed-job resolution notices require permission and project access and ar
     expect(mailSends).toBe(1);
 
     entry.projectId = 'other';
-    expect((await server.inject({ method: 'GET', url, headers: manager })).statusCode).toBe(404);
-    expect((await server.inject({ method: 'POST', url, headers: manager })).statusCode).toBe(404);
+    expect((await server.inject({ method: 'GET', url, headers: manager })).statusCode).toBe(200);
+    expect((await server.inject({ method: 'POST', url, headers: manager })).statusCode).toBe(200);
   } finally {
     await server.close();
   }
@@ -356,10 +353,9 @@ test('job actions require decrypt permission before accessing jobs', async () =>
   }
 });
 
-test('job actions hide jobs outside the caller project scope', async () => {
+test('job actions use one shared account scope after permission checks', async () => {
   let cancellations = 0;
   const server = build({
-    canAccessProject: () => false,
     getJob: () => createJob(),
     cancelJob: () => {
       cancellations += 1;
@@ -374,8 +370,8 @@ test('job actions hide jobs outside the caller project scope', async () => {
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
     });
 
-    expect(response.statusCode).toBe(404);
-    expect(cancellations).toBe(0);
+    expect(response.statusCode).toBe(200);
+    expect(cancellations).toBe(1);
   } finally {
     await server.close();
   }

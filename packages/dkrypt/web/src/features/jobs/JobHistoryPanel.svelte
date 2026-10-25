@@ -813,7 +813,7 @@
 
 <Card title="Job history" id="job-history">
 	{#snippet headerExtra()}
-		<div class="flex flex-wrap items-center gap-1.5">
+		<div class="one-thumb-job-actions flex flex-wrap items-center gap-1.5" data-selected={selected.size > 0 ? 'true' : 'false'}>
 			<div class="inline-flex rounded-md border border-border/70 p-0.5" role="group" aria-label={viewMessage('viewMode.label')}>
 				<Button variant={homeViewModesState.value.jobHistory === 'list' ? 'secondary' : 'ghost'} size="icon" class="h-7 w-7" aria-label={viewMessage('viewMode.list')} aria-pressed={homeViewModesState.value.jobHistory === 'list'} onclick={() => void pushHomeViewMode('jobHistory', 'list')}><List class="h-3.5 w-3.5" /></Button>
 				<Button variant={homeViewModesState.value.jobHistory === 'cards' ? 'secondary' : 'ghost'} size="icon" class="h-7 w-7" aria-label={viewMessage('viewMode.cards')} aria-pressed={homeViewModesState.value.jobHistory === 'cards'} onclick={() => void pushHomeViewMode('jobHistory', 'cards')}><Grid2X2 class="h-3.5 w-3.5" /></Button>

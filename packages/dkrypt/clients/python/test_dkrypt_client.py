@@ -1,11 +1,15 @@
 import unittest
 from email.message import Message
+from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
 from dkrypt_client import DkryptClient, DkryptRedirectHandler
 
 
 class Response:
+    def __init__(self, body=b'IPA'):
+        self.body = body
+
     def __enter__(self):
         return self
 
@@ -13,7 +17,7 @@ class Response:
         return False
 
     def read(self):
-        return b'IPA'
+        return self.body
 
 
 class DkryptClientTests(unittest.TestCase):
@@ -118,6 +122,37 @@ class DkryptClientTests(unittest.TestCase):
             client.download('https://ipa.dylib.dev:443/collect')
 
         build_opener.assert_not_called()
+
+    @patch('dkrypt_client.sleep')
+    @patch('dkrypt_client.build_opener')
+    def test_read_retries_rate_limit_and_honors_retry_after(self, build_opener, sleep_for):
+        opener = MagicMock()
+        error = HTTPError('https://ipa.dylib.dev/v1/jobs/job-1', 429, 'limited', Message(), None)
+        error.headers = Message()
+        error.headers['Retry-After'] = '2'
+        opener.open.side_effect = [error, Response(b'{"id":"job-1"}')]
+        build_opener.return_value = opener
+        client = DkryptClient('https://ipa.dylib.dev', retry_base_delay=0)
+
+        result = client.request('GET', '/v1/jobs/job-1')
+
+        self.assertEqual(result, {"id": "job-1"})
+        self.assertEqual(opener.open.call_count, 2)
+        sleep_for.assert_called_once_with(2.0)
+
+    @patch('dkrypt_client.sleep')
+    @patch('dkrypt_client.build_opener')
+    def test_write_without_idempotency_key_is_not_retried(self, build_opener, sleep_for):
+        opener = MagicMock()
+        opener.open.side_effect = HTTPError('https://ipa.dylib.dev/v1/decrypts', 503, 'unavailable', Message(), None)
+        build_opener.return_value = opener
+        client = DkryptClient('https://ipa.dylib.dev')
+
+        with self.assertRaisesRegex(RuntimeError, 'HTTP 503'):
+            client.request('POST', '/v1/decrypts', {'bundleId': 'com.example.app'})
+
+        self.assertEqual(opener.open.call_count, 1)
+        sleep_for.assert_not_called()
 
 
 if __name__ == '__main__':

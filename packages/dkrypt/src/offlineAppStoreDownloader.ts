@@ -17,6 +17,10 @@ export interface AppStoreDownloaderResponse {
   network_reachable?: boolean;
   network_latency_ms?: number;
   network_endpoint?: string;
+  network_redirected?: boolean;
+  network_range_supported?: boolean;
+  network_rate_limited?: boolean;
+  network_retry_after_seconds?: number;
 }
 
 export interface AppStoreDownloaderRequestOptions {

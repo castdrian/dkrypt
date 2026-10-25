@@ -174,7 +174,7 @@
 					{#each outcomeUsage as outcome (outcome.route)}
 						<div class="flex items-center justify-between gap-2">
 							<span class="truncate font-mono text-muted" title={outcome.route}>{outcome.route}</span>
-							<span class="shrink-0"><span class="text-ok">{fmtNumber(outcome.success, 0)} ok</span> · <span class={outcome.clientError || outcome.serverError ? 'text-err' : 'text-muted'}>{fmtNumber(outcome.clientError + outcome.serverError, 0)} failed</span></span>
+							<span class="shrink-0 text-right"><span class="text-ok">{fmtNumber(outcome.success, 0)} ok</span> · <span class={outcome.clientError || outcome.serverError ? 'text-err' : 'text-muted'}>{fmtNumber(outcome.clientError + outcome.serverError, 0)} failed</span>{#if outcome.latencyCount}<span class="ml-1 text-muted">· {fmtNumber(outcome.averageLatencyMs ?? 0, 0)} ms avg</span>{/if}</span>
 						</div>
 					{/each}
 				</div>

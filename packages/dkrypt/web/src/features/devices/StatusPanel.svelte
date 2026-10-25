@@ -81,6 +81,26 @@
 		return fmtCalendarDate(date, { month: "short", day: "numeric" });
 	}
 
+	function sourceStateLabel(state: NonNullable<DeviceHealth['subsystems']>['appStore']): string {
+		if (state === 'ready') return 'Available';
+		if (state === 'idle') return 'Idle';
+		if (state === 'degraded') return 'Needs attention';
+		if (state === 'offline') return 'Unavailable';
+		if (state === 'unsupported') return 'Not supported';
+		return 'Not checked';
+	}
+
+	function sourceStateExplanation(source: 'appStore' | 'testFlight', state: NonNullable<DeviceHealth['subsystems']>['appStore']): string {
+		if (state === 'idle') return source === 'appStore'
+			? 'No App Store install is running. Idle does not mean the App Store is disconnected.'
+			: 'No TestFlight operation is running. Idle does not mean TestFlight access is unavailable.';
+		if (state === 'ready') return 'The latest device check verified this source.';
+		if (state === 'degraded') return 'The latest device check found a partial issue.';
+		if (state === 'offline') return 'The latest device check could not reach this source.';
+		if (state === 'unsupported') return 'This device or installed bridge does not support this check.';
+		return 'No successful check has established availability yet.';
+	}
+
 	let volume = $state<{ label: string; value: number }[] | null>(null);
 	let volumeUnavailable = $state(false);
 	let health = $state<DeviceHealth | null>(null);
@@ -580,6 +600,15 @@
 						>
 					{/snippet}
 					<div class="flex flex-col gap-1 whitespace-nowrap">
+						{#each ['appStore', 'testFlight'] as source}
+							{@const detail = h.subsystemDetails?.[source as 'appStore' | 'testFlight']}
+							{@const state = detail?.state ?? h.subsystems?.[source as 'appStore' | 'testFlight'] ?? 'unknown'}
+							<div class="font-medium">{source === 'appStore' ? 'App Store' : 'TestFlight'} · {sourceStateLabel(state)}</div>
+							<div class="max-w-xs whitespace-normal text-muted">{sourceStateExplanation(source as 'appStore' | 'testFlight', state)}</div>
+							{#if detail?.reason}<div class="max-w-xs whitespace-normal">{detail.reason}</div>{/if}
+							{#if detail?.lastChangedAt}<div class="text-muted">State changed <RelativeTime ms={detail.lastChangedAt} /></div>{/if}
+						{/each}
+						<div class="text-muted">Last health check <RelativeTime ms={h.checkedAt} /></div>
 						{#if h.testFlightBridgeReachable !== undefined}
 							<div>
 								<span class="text-muted">Bridge</span> · {h.testFlightBridgeReachable

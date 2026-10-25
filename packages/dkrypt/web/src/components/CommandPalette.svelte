@@ -5,6 +5,7 @@
 		fetchDashboardQuickSearch,
 		fetchMyKeys,
 		fetchUsers,
+		artifactDownloadUrl,
 		jobHistoryExportUrl,
 		retryJob,
 		type JobHistoryEntry,
@@ -297,6 +298,16 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 				subtitle: result.subtitle,
 				run: () => navigateQuickResult(result),
 			});
+			if (result.kind === 'artifact') {
+				base.push({
+					id: `download-${result.id}`,
+					label: `Download ${result.title}`,
+					keywords: `${result.id} ${result.subtitle ?? ''} IPA download`,
+					category: 'Actions',
+					subtitle: 'Download this IPA',
+					run: () => window.open(artifactDownloadUrl(result.id), '_blank', 'noopener,noreferrer'),
+				});
+			}
 		}
 		if (sessionHasPermission(PermissionFlag.viewLogs)) {
 			base.push({

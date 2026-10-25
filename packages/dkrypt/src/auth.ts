@@ -8,6 +8,7 @@ import { getBillingEntitlements } from '#billing.js';
 import { SlidingWindowRateLimiter } from '#util/rateLimit.js';
 
 const fastifyApiKeyContext = new WeakMap<FastifyRequest, ApiKeyAuthResult>();
+const fastifyApiKeyRequestStartedAt = new WeakMap<FastifyRequest, number>();
 const accountApiRateLimiter = new SlidingWindowRateLimiter(60_000);
 
 function permitAccountApiRequest(ownerId: string, request: FastifyRequest, reply: FastifyReply): boolean {
@@ -27,6 +28,24 @@ export function getFastifyApiKeyContext(request: FastifyRequest): ApiKeyAuthResu
   return fastifyApiKeyContext.get(request);
 }
 
+export function getAccountApiRateUsage(ownerId: string): { limit: number; used: number; remaining: number; resetAt: number } | undefined {
+  const limit = getBillingEntitlements(ownerId).apiRatePerMinute;
+  if (limit === undefined) return undefined;
+  const usage = accountApiRateLimiter.inspect(ownerId.toLowerCase(), limit);
+  return { limit, used: limit - usage.remaining, remaining: usage.remaining, resetAt: usage.resetAt };
+}
+
+function recordFastifyApiKeyOutcome(request: FastifyRequest, reply: FastifyReply, keyId: string, route: string): void {
+  const startedAt = fastifyApiKeyRequestStartedAt.get(request);
+  reply.raw.once('finish', () => recordApiKeyOutcome(
+    keyId,
+    request.method,
+    route,
+    reply.raw.statusCode,
+    startedAt === undefined ? undefined : Math.max(0, performance.now() - startedAt),
+  ));
+}
+
 function trackApiKeyOutcome(req: Request, res: Response, keyId: string | undefined): void {
   if (!keyId) return;
   res.raw.once('finish', () => recordApiKeyOutcome(keyId, req.method, req.path ?? req.url.split('?')[0], res.raw.statusCode));
@@ -34,7 +53,7 @@ function trackApiKeyOutcome(req: Request, res: Response, keyId: string | undefin
 
 function rejectOutOfScopeApiKey(request: FastifyRequest, reply: FastifyReply, keyId?: string): void {
   const route = request.routeOptions.url ?? request.url.split('?')[0];
-  if (keyId) reply.raw.once('finish', () => recordApiKeyOutcome(keyId, request.method, route, reply.raw.statusCode));
+  if (keyId) recordFastifyApiKeyOutcome(request, reply, keyId, route);
   const message = 'this API key is limited to decrypt and IPA artifact routes';
   reply.code(403).send({ error: message, code: 'public_api_scope_denied', message, requestId: request.id, retryable: false });
 }
@@ -63,6 +82,7 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
 }
 
 export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void {
+  fastifyApiKeyRequestStartedAt.set(request, performance.now());
   const header = request.headers.authorization ?? '';
   const [scheme, token] = header.split(' ');
   const result = scheme === 'Bearer' && token ? verifyApiKey(token, request.ip) : undefined;
@@ -107,7 +127,7 @@ export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyRepl
   if (result.ownerId && !permitAccountApiRequest(result.ownerId, request, reply)) return;
   fastifyApiKeyContext.set(request, result);
   if (keyId) {
-    reply.raw.once('finish', () => recordApiKeyOutcome(keyId, request.method, request.routeOptions.url ?? request.url.split('?')[0], reply.raw.statusCode));
+    recordFastifyApiKeyOutcome(request, reply, keyId, request.routeOptions.url ?? request.url.split('?')[0]);
   }
   done();
 }
