@@ -37,6 +37,11 @@ ${routeUnion};
 export interface DkryptClientOptions {
   apiKey?: string;
   fetchImpl?: typeof fetch;
+  retry?: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+  };
 }
 
 export interface DkryptRequestInit extends RequestInit {
@@ -66,6 +71,7 @@ export class DkryptClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryOptions: Required<NonNullable<DkryptClientOptions['retry']>>;
 
   constructor(baseUrl: string, options?: DkryptClientOptions);
   constructor(baseUrl: string, fetchImpl?: typeof fetch);
@@ -74,24 +80,29 @@ export class DkryptClient {
     this.baseUrl = baseUrl;
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retryOptions = {
+      maxAttempts: Math.max(1, Math.min(5, Math.floor(options.retry?.maxAttempts ?? 3))),
+      baseDelayMs: Math.max(0, Math.min(30_000, Math.floor(options.retry?.baseDelayMs ?? 250))),
+      maxDelayMs: Math.max(0, Math.min(30_000, Math.floor(options.retry?.maxDelayMs ?? 30_000))),
+    };
   }
 
   async request<T>(init: DkryptRequestInit): Promise<T> {
     const { path, ...request } = init;
-    const response = await this.fetchImpl(this.buildUrl(path), {
+    const response = await this.fetchWithRetry(this.buildUrl(path), {
       ...request,
       headers: this.createHeaders(request.headers, 'application/json'),
-    });
+    }, this.canRetry(request));
     if (!response.ok) throw new Error(await this.responseError(response));
     return await response.json() as T;
   }
 
   async download(path: string, init: Pick<RequestInit, 'headers' | 'signal'> = {}): Promise<ArrayBuffer> {
-    const response = await this.fetchImpl(this.buildUrl(path), {
+    const response = await this.fetchWithRetry(this.buildUrl(path), {
       ...init,
       method: 'GET',
       headers: this.createHeaders(init.headers, 'application/octet-stream'),
-    });
+    }, true);
     if (!response.ok) throw new Error(await this.responseError(response));
     return response.arrayBuffer();
   }
@@ -144,6 +155,33 @@ export class DkryptClient {
     return result;
   }
 
+  private canRetry(request: RequestInit): boolean {
+    const method = (request.method ?? 'GET').toUpperCase();
+    if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+    return new Headers(request.headers).has('Idempotency-Key');
+  }
+
+  private async fetchWithRetry(url: URL, request: RequestInit, retryable: boolean): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, request);
+      } catch (error) {
+        if (!retryable || attempt + 1 >= this.retryOptions.maxAttempts || request.signal?.aborted || isAbortError(error)) throw error;
+        await abortableDelay(this.retryDelay(attempt), request.signal ?? undefined);
+        continue;
+      }
+      if (!retryable || attempt + 1 >= this.retryOptions.maxAttempts || ![429, 502, 503, 504].includes(response.status)) return response;
+      const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
+      await response.body?.cancel().catch(() => {});
+      await abortableDelay(retryAfter ?? this.retryDelay(attempt), request.signal ?? undefined);
+    }
+  }
+
+  private retryDelay(attempt: number): number {
+    return Math.min(this.retryOptions.maxDelayMs, this.retryOptions.baseDelayMs * 2 ** attempt);
+  }
+
   private buildUrl(path: string): URL {
     const baseUrl = new URL(this.baseUrl);
     const url = new URL(path, baseUrl);
@@ -164,6 +202,34 @@ export class DkryptClient {
     return detail ?? \`dkrypt request failed with HTTP \${response.status}\`;
   }
 }
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'name' in error && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(30_000, seconds * 1000);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.min(30_000, Math.max(0, timestamp - Date.now())) : undefined;
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
 `;
 }
 
@@ -173,7 +239,9 @@ function renderPython(routes: string[]): string {
 
 import json
 from dataclasses import dataclass
-from urllib.error import HTTPError
+from email.utils import parsedate_to_datetime
+from time import sleep
+from urllib.error import HTTPError, URLError
 from urllib.parse import SplitResult, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -185,6 +253,9 @@ ${routeValues}
 class DkryptClient:
     base_url: str
     api_key: str | None = None
+    retry_attempts: int = 3
+    retry_base_delay: float = 0.25
+    retry_max_delay: float = 30.0
 
     def request(self, method: str, path: str, body: object | None = None) -> object:
         payload = None if body is None else json.dumps(body).encode("utf-8")
@@ -238,16 +309,46 @@ class DkryptClient:
         headers.update(extra_headers or {})
         if payload is not None:
             headers["Content-Type"] = "application/json"
-        request = Request(self._build_url(path), data=payload, headers=headers, method=method.upper())
-        if self.api_key:
-            request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
+        url = self._build_url(path)
+        normalized_method = method.upper()
+        safe_to_retry = normalized_method in ("GET", "HEAD", "OPTIONS") or any(name.lower() == "idempotency-key" for name in headers)
+        attempts = max(1, min(5, int(self.retry_attempts))) if safe_to_retry else 1
+        for attempt in range(attempts):
+            request = Request(url, data=payload, headers=headers, method=normalized_method)
+            if self.api_key:
+                request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
+            try:
+                redirect_handler = DkryptRedirectHandler(self._origin(urlsplit(self.base_url)), self.api_key)
+                with build_opener(redirect_handler).open(request) as response:
+                    return response.read()
+            except HTTPError as error:
+                if attempt + 1 < attempts and error.code in (429, 502, 503, 504):
+                    delay = self._retry_after(error.headers.get("Retry-After"))
+                    error.close()
+                    sleep(self._retry_delay(attempt) if delay is None else delay)
+                    continue
+                detail = error.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"dkrypt request failed with HTTP {error.code}: {detail}") from error
+            except URLError:
+                if attempt + 1 >= attempts:
+                    raise
+                sleep(self._retry_delay(attempt))
+        raise RuntimeError("dkrypt request could not be completed")
+
+    def _retry_delay(self, attempt: int) -> float:
+        return min(max(0.0, self.retry_max_delay), max(0.0, self.retry_base_delay) * (2 ** attempt))
+
+    def _retry_after(self, value: str | None) -> float | None:
+        if value is None:
+            return None
         try:
-            redirect_handler = DkryptRedirectHandler(self._origin(urlsplit(self.base_url)), self.api_key)
-            with build_opener(redirect_handler).open(request) as response:
-                return response.read()
-        except HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"dkrypt request failed with HTTP {error.code}: {detail}") from error
+            return min(30.0, max(0.0, float(value)))
+        except ValueError:
+            try:
+                from datetime import datetime, timezone
+                return min(30.0, max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()))
+            except (TypeError, ValueError, OverflowError):
+                return None
 
     def _build_url(self, path: str) -> str:
         base_url = self.base_url.rstrip("/") + "/"
