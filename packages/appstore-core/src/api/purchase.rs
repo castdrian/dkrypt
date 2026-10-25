@@ -13,7 +13,7 @@ pub async fn claim_free_license(
     app: &App,
     account: &Account,
 ) -> Result<(), ClientError> {
-    if app.price != 0.0 {
+    if app.price != Some(0.0) {
         return Err(ClientError::UnexpectedResponse(
             "paid_app_purchase_not_supported".into(),
         ));
@@ -133,7 +133,7 @@ mod tests {
     use crate::model::{Account, App};
     use std::collections::HashMap;
 
-    fn app(price: f64) -> App {
+    fn app(price: Option<f64>) -> App {
         App {
             id: 12345,
             bundle_id: "com.example.free".into(),
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn builds_the_free_purchase_request_without_a_guid_query_parameter() {
         let (url, body) =
-            build_purchase_request("AABBCCDDEEFF", &app(0.0), &account(Some("14"))).unwrap();
+            build_purchase_request("AABBCCDDEEFF", &app(Some(0.0)), &account(Some("14"))).unwrap();
         let payload: plist::Dictionary = plist::from_bytes(&body).unwrap();
         assert_eq!(
             url.as_str(),
@@ -204,12 +204,13 @@ mod tests {
 
     #[test]
     fn uses_the_default_purchase_host_without_a_pod() {
-        let (url, _) = build_purchase_request("AABBCCDDEEFF", &app(0.0), &account(None)).unwrap();
+        let (url, _) =
+            build_purchase_request("AABBCCDDEEFF", &app(Some(0.0)), &account(None)).unwrap();
         assert_eq!(url.host_str(), Some("buy.itunes.apple.com"));
     }
 
     #[test]
-    fn refuses_paid_apps_before_building_a_purchase_request() {
+    fn refuses_paid_or_unknown_price_apps_before_building_a_purchase_request() {
         let client = AppleClient::new(
             MachineIdentity {
                 guid: "AABBCCDDEEFF".into(),
@@ -219,15 +220,18 @@ mod tests {
             std::env::temp_dir().join("dkrypt-appstore-purchase-test"),
         )
         .unwrap();
-        let error = tokio::runtime::Builder::new_current_thread()
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap()
-            .block_on(claim_free_license(&client, &app(0.99), &account(None)))
-            .unwrap_err();
-        assert!(
-            matches!(error, ClientError::UnexpectedResponse(reason) if reason == "paid_app_purchase_not_supported")
-        );
+            .unwrap();
+        for price in [Some(0.99), None] {
+            let error = runtime
+                .block_on(claim_free_license(&client, &app(price), &account(None)))
+                .unwrap_err();
+            assert!(
+                matches!(error, ClientError::UnexpectedResponse(reason) if reason == "paid_app_purchase_not_supported")
+            );
+        }
     }
 
     #[test]

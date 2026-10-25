@@ -463,8 +463,8 @@ fn verify_requested_version(
     }
 }
 
-fn should_claim_free_license(price: f64, error: &ClientError) -> bool {
-    price == 0.0 && error.is_license_not_found()
+fn should_claim_free_license(price: Option<f64>, error: &ClientError) -> bool {
+    price == Some(0.0) && error.is_license_not_found()
 }
 
 async fn get_download_info_with_reauthentication(
@@ -1082,16 +1082,20 @@ mod tests {
     #[test]
     fn claims_a_license_only_for_an_unowned_free_app() {
         assert!(should_claim_free_license(
-            0.0,
+            Some(0.0),
             &ClientError::Store(StoreError::LicenseNotFound)
         ));
         assert!(!should_claim_free_license(
-            1.0,
+            Some(1.0),
             &ClientError::Store(StoreError::LicenseNotFound)
         ));
         assert!(!should_claim_free_license(
-            0.0,
+            Some(0.0),
             &ClientError::Store(StoreError::TemporarilyUnavailable)
+        ));
+        assert!(!should_claim_free_license(
+            None,
+            &ClientError::Store(StoreError::LicenseNotFound)
         ));
     }
 
