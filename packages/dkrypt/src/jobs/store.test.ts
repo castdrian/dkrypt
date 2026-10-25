@@ -12,8 +12,7 @@ import { createDevice, deleteDevice, getJobHistoryEntryById, getTestFlightCatalo
 import { traceContextFromHeader } from '#telemetry.js';
 import { getRecentLogs } from '#logger.js';
 import { createOtlpMetricsPayload } from '#metrics.js';
-import { loadPersistedJobs } from '#jobs/repository.js';
-import { getDecryptQuotaUsage } from '#jobs/repository.js';
+import { getDecryptQuotaUsage, loadPersistedJobs, replacePersistedJobs } from '#jobs/repository.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
 import type { Job } from '#jobs/types.js';
 
@@ -799,6 +798,7 @@ describe('enqueueDecryptJob', () => {
     job.status = 'done';
     job.filePath = outputPath;
     job.finishedAt = Date.now();
+    replacePersistedJobs([job]);
     await reclaimJobFile(job);
     expect(getJob(job.id)).toBeUndefined();
     expect(existsSync(outputPath)).toBe(false);

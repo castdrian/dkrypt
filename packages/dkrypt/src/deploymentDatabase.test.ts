@@ -37,6 +37,8 @@ function rewindToSchemaVersion16(database: ReturnType<typeof openStateDatabase>)
     ALTER TABLE billing_events DROP COLUMN event_id;
     ALTER TABLE billing_events DROP COLUMN occurred_at;
     ALTER TABLE billing_events DROP COLUMN processed_at;
+    DROP TABLE job_worker_leases;
+    DROP TABLE job_worker_generations;
       DELETE FROM schema_migrations WHERE version > 16;
   `);
 }

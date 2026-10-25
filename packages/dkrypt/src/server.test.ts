@@ -9,6 +9,7 @@ import { deleteAuthProfile, upsertAuthProfile } from '#identity.js';
 import { scopedLogger } from '#logger.js';
 import { closeDashboardConnections, dashboardEvents, emitBillingChanged, emitJobsChanged } from '#events.js';
 import { cancelJob, cancelQueuedJob, enqueueDecryptJob } from '#jobs/store.js';
+import { replacePersistedJobs } from '#jobs/repository.js';
 import { config } from '#config.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
 import { PermissionFlag, serializeBits } from '#permissions.js';
@@ -1795,6 +1796,7 @@ test('native dashboard job inspection serves timelines and validates history que
   const missingDeviceId = `missing-device-${crypto.randomUUID()}`;
   const activeJob = enqueueDecryptJob(bundleId, 'manual', { queuedBy: 'root', preferredDeviceId: missingDeviceId });
   Object.assign(activeJob, { deviceId: 'test-device', transport: 'usb', attempt: 4, executionStage: 'decrypting', shutdownRecoveryAt: 1234 });
+  replacePersistedJobs([activeJob]);
   const finishedAt = Date.now();
   recordJobHistory({
     id: historyId,
@@ -1859,10 +1861,12 @@ test('native dashboard job inspection serves timelines and validates history que
     expect(activeTimeline.json().executionStage).toBeUndefined();
 
     activeJob.status = 'running';
+    replacePersistedJobs([activeJob]);
     const runningTimeline = await server.inject({ method: 'GET', url: `/v1/dashboard/jobs/${activeJob.id}/timeline`, headers: { cookie } });
     expect(runningTimeline.statusCode).toBe(200);
     expect(runningTimeline.json()).toMatchObject({ id: activeJob.id, status: 'running', executionStage: 'decrypting' });
     activeJob.status = 'queued';
+    replacePersistedJobs([activeJob]);
 
     const missingStatus = await server.inject({ method: 'GET', url: `/v1/dashboard/jobs/${historyId}/status`, headers: { cookie } });
     expect(missingStatus.statusCode).toBe(404);

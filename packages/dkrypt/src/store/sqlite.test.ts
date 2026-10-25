@@ -145,7 +145,7 @@ test('SQLite migration adds persisted Apple Account authentication operations', 
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-sqlite-apple-auth-migration-'));
   try {
     const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
-    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DELETE FROM schema_migrations WHERE version IN (29, 30, 31);');
+    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32);');
     database.close();
 
     const migrated = openStateDatabase({ stateDir, filename: 'state.sqlite' });
@@ -564,7 +564,7 @@ test('SQLite backup verification accepts an older schema when its applied migrat
     const databasePath = path.join(stateDir, 'state.sqlite');
     const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
     database.writeState({ version: 29, settings: {} });
-    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DELETE FROM schema_migrations WHERE version IN (29, 30, 31);');
+    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32);');
     database.close();
 
     expect(verifyDatabaseBackup(databasePath)).toEqual({ schemaVersion: 28, integrity: 'ok', hasStateSnapshot: true });

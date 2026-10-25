@@ -278,7 +278,15 @@ function mergePersistedJob(saved: Job): boolean {
 
   const previousStatus = existing?.status;
   const previousPayload = existing ? JSON.stringify(serializableJob(existing)) : undefined;
-  const merged = { ...saved, waiters: existing?.waiters ?? [] } as Job;
+  const merged = existing ?? { ...saved, waiters: [] } as Job;
+  if (existing) {
+    const waiters = existing.waiters;
+    const mutableExisting = existing as unknown as Record<string, unknown>;
+    for (const key of Object.keys(mutableExisting)) {
+      if (key !== 'waiters' && key !== 'childProcess' && !Object.hasOwn(saved, key)) delete mutableExisting[key];
+    }
+    Object.assign(existing, saved, { waiters, childProcess: undefined });
+  }
   jobs.set(merged.id, merged);
 
   if (merged.status === 'queued' && merged.pausedAt === undefined) {
@@ -819,6 +827,7 @@ export function mergeActiveJobOwner(targetUserId: string, sourceUserId: string):
 }
 
 export function getQueueInfo(jobId: string): { position: number; total: number } | undefined {
+  syncPersistedJobsFromRepository(true);
   const job = jobs.get(jobId);
   if (!job || job.status === 'done' || job.status === 'failed' || job.pausedAt !== undefined) return undefined;
 
