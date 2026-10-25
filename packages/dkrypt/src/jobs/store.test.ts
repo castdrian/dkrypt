@@ -648,6 +648,7 @@ describe('enqueueDecryptJob', () => {
       expect(latestQueueReason).toContain('USB agent is unavailable');
       expect(job.lastQueueReason).toBe(latestQueueReason);
       job.deadlineAt = Date.now() - 1;
+      replacePersistedJobs([job]);
       setCachedDeviceHealth(testDeviceId, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
       notifyDeviceDispatchStateChanged();
 
