@@ -1097,6 +1097,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     settleDecryptQuota(job.id, true);
   } catch (err) {
     let message = job.cancelledBy ? `cancelled by ${job.cancelledBy}` : err instanceof Error ? err.message : String(err);
+    const preventsDeviceFallback = Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
     if (device && job.offlineFailureReason) message = `${message}; earlier server-side attempt failed: ${job.offlineFailureReason}`;
     if (job.filePath?.startsWith(`${config.artifactDir}/.staging/`)) {
       await rm(job.filePath, { force: true }).catch(() => {});
@@ -1106,7 +1107,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       persistShutdownRecovery(job);
       return;
     }
-    if (!device && !job.cancelledBy && !job.deadlineExceeded && (job.deadlineAt === undefined || Date.now() < job.deadlineAt)) {
+    if (!device && !preventsDeviceFallback && !job.cancelledBy && !job.deadlineExceeded && (job.deadlineAt === undefined || Date.now() < job.deadlineAt)) {
       job.offlineFailureReason = message.replace(/\s+/g, ' ').slice(0, 600);
       job.executionPath = 'device_fallback';
       job.executionStage = undefined;

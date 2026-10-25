@@ -48,6 +48,9 @@ mock.module('./runner.js', () => ({
       });
     }
     if (offlineWorkerEnabled && !offlineWorkerReady) return Promise.reject(new Error('Apple Account session needs verification'));
+    if (job.bundleId.includes('offline-unavailable')) {
+      return Promise.reject(Object.assign(new Error('This app is not available in the signed-in Apple Account storefront'), { retryable: false, fallbackToDevice: false }));
+    }
     if (job.bundleId.includes('offline-fallback')) {
       offlineWorkerAttempts += 1;
       return Promise.reject(new Error('App Store provider download failed'));
@@ -288,6 +291,45 @@ describe('enqueueDecryptJob', () => {
       offlineWorkerReady = false;
       if (job.status === 'queued') cancelQueuedJob(job.id, 'offline fallback test cleanup');
       if (job.status === 'running') cancelJob(job.id, 'offline fallback test cleanup');
+      await waitForJob(job, 1_000);
+      replaceBillingSnapshot(previousBilling);
+    }
+  });
+
+  test('does not send a storefront-unavailable App Store job to the device', async () => {
+    await clearActiveTestJobs();
+    const previousBilling = exportBillingSnapshot();
+    const ownerId = `offline-unavailable-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    replaceBillingSnapshot({
+      ...previousBilling,
+      subscriptions: [...previousBilling.subscriptions, { provider: 'stripe', subscriptionId: `sub_${ownerId}`, customerId: `cus_${ownerId}`, userId: ownerId, status: 'active', planId: 'access', priceId: 'price_access', productId: 'prod_access', occurredAt: now, updatedAt: now }],
+    });
+    offlineWorkerEnabled = true;
+    offlineWorkerReady = true;
+    offlineWorkerRunCount = 0;
+    const bundleId = `com.test.offline-unavailable.${crypto.randomUUID()}`;
+    const job = enqueueDecryptJob(bundleId, 'manual', { queuedBy: ownerId, preferredDeviceId: testDeviceId });
+
+    try {
+      for (let attempt = 0; attempt < 200 && job.status !== 'failed'; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      expect(offlineWorkerRunCount).toBe(1);
+      expect(job).toMatchObject({
+        status: 'failed',
+        attempt: 1,
+        executionPath: 'appstore_offline',
+        error: 'This app is not available in the signed-in Apple Account storefront',
+      });
+      expect(job.deviceId).toBeUndefined();
+      expect(job.timeline?.some((event) => event.label.startsWith('Started on '))).toBe(false);
+      expect(getDecryptQuotaUsage(ownerId, 2).used).toBe(0);
+    } finally {
+      offlineWorkerEnabled = false;
+      offlineWorkerReady = false;
+      if (job.status === 'queued') cancelQueuedJob(job.id, 'storefront availability test cleanup');
+      if (job.status === 'running') cancelJob(job.id, 'storefront availability test cleanup');
       await waitForJob(job, 1_000);
       replaceBillingSnapshot(previousBilling);
     }

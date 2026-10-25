@@ -19,7 +19,7 @@ import { createOfflineAppStoreAuthenticationRepository } from '#store/offlineApp
 import { openStateCollectionDatabase } from '#store/sqlite.js';
 import { scopedLogger } from '#logger.js';
 import { sanitizeAppStoreDownloadDiagnostic } from '#offlineAppStoreDiagnostic.js';
-import { runAppStoreDownloaderRequest } from '#offlineAppStoreDownloader.js';
+import { runAppStoreDownloaderRequest, type AppStoreDownloaderResponse } from '#offlineAppStoreDownloader.js';
 import { emitJobsChanged } from '#events.js';
 import { saveAppleAccountFairPlayCredentialForSelector } from '#appleAccountVault.js';
 
@@ -100,6 +100,21 @@ export class OfflineAppStoreAuthenticationError extends Error {
     super(code === 'two_factor_required' ? 'Apple Account verification is required' : 'Apple Account authentication failed');
     this.name = 'OfflineAppStoreAuthenticationError';
   }
+}
+
+export class OfflineAppStoreListingUnavailableError extends Error {
+  readonly retryable = false;
+  readonly fallbackToDevice = false;
+
+  constructor() {
+    super('This app is not available in the signed-in Apple Account storefront');
+    this.name = 'OfflineAppStoreListingUnavailableError';
+  }
+}
+
+export function unavailableAppStoreListingError(response: Pick<AppStoreDownloaderResponse, 'stage' | 'code'>): OfflineAppStoreListingUnavailableError | undefined {
+  if (response.stage !== 'app_lookup' || response.code !== 'app_not_found') return undefined;
+  return new OfflineAppStoreListingUnavailableError();
 }
 
 function statusBlockers(input: {
@@ -415,6 +430,8 @@ async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, output
       code: result.response.code,
       diagnostic: sanitizeAppStoreDownloadDiagnostic(result.diagnostic, secrets),
     });
+    const unavailableListing = unavailableAppStoreListingError(result.response);
+    if (unavailableListing) throw unavailableListing;
     if (result.response.code === 'two_factor_required') {
       clearAppleAccountSessionSnapshot();
       markAppleAccountAuthenticationError('two_factor_required');
