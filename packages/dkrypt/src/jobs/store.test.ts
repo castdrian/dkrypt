@@ -8,7 +8,7 @@ import { exportBillingSnapshot, replaceBillingSnapshot } from '#billing.js';
 import { SCHEDULER_JOB_TIMEOUT_MS } from '#jobs/timeouts.js';
 import { artifactKeyForJob, promoteArtifact } from '#artifacts.js';
 import { currentCorrelation, withCorrelation } from '#correlation.js';
-import { createDevice, createProject, deleteDevice, getJobHistoryEntryById, recordJobHistory, type DeviceRecord } from '#store/state.js';
+import { createDevice, createProject, deleteDevice, getJobHistoryEntryById, getTestFlightCatalogCache, recordJobHistory, setTestFlightCatalogCache, type DeviceRecord } from '#store/state.js';
 import { traceContextFromHeader } from '#telemetry.js';
 import { getRecentLogs } from '#logger.js';
 import { loadPersistedJobs } from '#jobs/repository.js';
@@ -23,6 +23,7 @@ let offlineWorkerEnabled = false;
 let offlineWorkerReady = false;
 let offlineWorkerHold = false;
 let offlineWorkerAttempts = 0;
+let offlineWorkerRunCount = 0;
 let offlineAppStoreDispatchNotifier = () => {};
 
 mock.module('#offlineAppStore.js', () => ({
@@ -38,6 +39,7 @@ mock.module('#offlineAppStore.js', () => ({
 
 mock.module('./runner.js', () => ({
   runOfflineAppStoreDecrypt: (job: Job, signal?: AbortSignal) => {
+    offlineWorkerRunCount += 1;
     if (offlineWorkerHold) {
       return new Promise<void>((_resolve, reject) => {
         const abort = () => reject(signal?.reason instanceof Error ? signal.reason : new Error('operation aborted'));
@@ -45,6 +47,7 @@ mock.module('./runner.js', () => ({
         else signal?.addEventListener('abort', abort, { once: true });
       });
     }
+    if (offlineWorkerEnabled && !offlineWorkerReady) return Promise.reject(new Error('Apple Account session needs verification'));
     if (job.bundleId.includes('offline-fallback')) {
       offlineWorkerAttempts += 1;
       return Promise.reject(new Error('App Store provider download failed'));
@@ -290,16 +293,20 @@ describe('enqueueDecryptJob', () => {
     }
   });
 
-  test('uses the device when server-side App Store processing is unavailable', async () => {
+  test('attempts server-side App Store processing before using a device when it is not ready', async () => {
     await clearActiveTestJobs();
     offlineWorkerEnabled = true;
     offlineWorkerReady = false;
-    offlineWorkerAttempts = 0;
+    offlineWorkerRunCount = 0;
     const job = enqueueDecryptJob(`com.test.offline-not-ready.${crypto.randomUUID()}`, 'manual', { preferredDeviceId: testDeviceId });
 
     try {
-      expect(job).toMatchObject({ status: 'running', executionPath: 'device', deviceId: testDeviceId });
-      expect(offlineWorkerAttempts).toBe(0);
+      for (let attempt = 0; attempt < 200 && (job.executionPath !== 'device_fallback' || job.status !== 'running'); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      expect(job).toMatchObject({ status: 'running', attempt: 2, executionPath: 'device_fallback', deviceId: testDeviceId });
+      expect(offlineWorkerRunCount).toBe(1);
+      expect(job.timeline?.some((event) => event.label.includes('Apple Account session needs verification'))).toBe(true);
     } finally {
       offlineWorkerEnabled = false;
       offlineWorkerReady = false;
@@ -309,15 +316,49 @@ describe('enqueueDecryptJob', () => {
     }
   });
 
+  test('keeps TestFlight jobs on the device workflow when server-side App Store processing is ready', async () => {
+    await clearActiveTestJobs();
+    const previousCatalog = getTestFlightCatalogCache();
+    const bundleId = `com.test.testflight-device.${crypto.randomUUID()}`;
+    const appId = Math.floor(Math.random() * 1_000_000) + 1;
+    const verifiedAt = Date.now();
+    setTestFlightCatalogCache({
+      fetchedAt: verifiedAt,
+      deviceIds: [testDeviceId],
+      apps: [{ appId, bundleId, displayName: 'TestFlight dispatch test', devices: [{ id: testDeviceId, name: 'job-test-device', verifiedAt }], lastVerifiedAt: verifiedAt, deviceSource: true }],
+      complete: true,
+    });
+    offlineWorkerEnabled = true;
+    offlineWorkerReady = true;
+    offlineWorkerRunCount = 0;
+    const job = enqueueDecryptJob(bundleId, 'manual', {
+      preferredDeviceId: testDeviceId,
+      testflight: { appId, build: { id: 1, cfBundleShortVersion: '1.0', cfBundleVersion: '1', bundleId } },
+    });
+
+    try {
+      expect(job).toMatchObject({ status: 'running', executionPath: 'device', deviceId: testDeviceId });
+      expect(offlineWorkerRunCount).toBe(0);
+    } finally {
+      offlineWorkerEnabled = false;
+      offlineWorkerReady = false;
+      if (job.status === 'queued') cancelQueuedJob(job.id, 'TestFlight dispatch test cleanup');
+      if (job.status === 'running') cancelJob(job.id, 'TestFlight dispatch test cleanup');
+      await waitForJob(job, 1_000);
+      setTestFlightCatalogCache(previousCatalog ?? { fetchedAt: 0, deviceIds: [], apps: [], complete: true });
+    }
+  });
+
   test('starts a waiting App Store job when server-side processing becomes ready', async () => {
     await clearActiveTestJobs();
-    offlineWorkerEnabled = true;
+    offlineWorkerEnabled = false;
     offlineWorkerReady = false;
     offlineWorkerHold = true;
     const job = enqueueDecryptJob(`com.test.offline-readiness-recovered.${crypto.randomUUID()}`, 'manual', { preferredDeviceId: 'missing-device' });
 
     try {
       expect(job.status).toBe('queued');
+      offlineWorkerEnabled = true;
       offlineWorkerReady = true;
       offlineAppStoreDispatchNotifier();
       expect(job).toMatchObject({ status: 'running', executionPath: 'appstore_offline' });
