@@ -372,10 +372,7 @@ async fn download(
     let mut client = AppleClient::new(identity, Some(&cookie_path), cache_directory)
         .map_err(|_| DownloaderFailure::new("client_setup", "apple_client_setup_failed"))?;
     client.set_account(account.clone());
-    let country = dkrypt_appstore_core::model::storefront::country_code_from_store_front(
-        &account.store_front,
-    )
-    .unwrap_or("US");
+    let country = country_code_from_storefront(&account.store_front)?;
     let app = api::lookup::lookup(&client, bundle_id, country, Platform::IPhone)
         .await
         .map_err(|error| DownloaderFailure::new("app_lookup", map_lookup_error(&error)))?
@@ -472,6 +469,11 @@ fn verify_requested_version(
 
 fn should_claim_free_license(price: Option<f64>, error: &ClientError) -> bool {
     price == Some(0.0) && error.is_license_not_found()
+}
+
+fn country_code_from_storefront(store_front: &str) -> Result<&'static str, DownloaderFailure> {
+    dkrypt_appstore_core::model::storefront::country_code_from_store_front(store_front)
+        .ok_or_else(|| DownloaderFailure::new("app_lookup", "storefront_unrecognized"))
 }
 
 async fn get_download_info_with_reauthentication(
@@ -983,10 +985,11 @@ fn load_or_create_identity(session_directory: &Path) -> Result<MachineIdentity, 
 #[cfg(test)]
 mod tests {
     use super::{
-        DownloaderFailure, Response, load_account, map_authentication_error,
-        map_download_diagnostic, map_download_error, map_license_claim_error, map_lookup_error,
-        save_account, should_claim_free_license, temporary_download_path, valid_bundle_id,
-        valid_email, valid_verification_code, verify_requested_version,
+        DownloaderFailure, Response, country_code_from_storefront, load_account,
+        map_authentication_error, map_download_diagnostic, map_download_error,
+        map_license_claim_error, map_lookup_error, save_account, should_claim_free_license,
+        temporary_download_path, valid_bundle_id, valid_email, valid_verification_code,
+        verify_requested_version,
     };
     use dkrypt_appstore_core::error::{ClientError, StoreError};
     use dkrypt_appstore_core::model::Account;
@@ -1194,6 +1197,14 @@ mod tests {
             None,
             &ClientError::Store(StoreError::LicenseNotFound)
         ));
+    }
+
+    #[test]
+    fn rejects_unknown_storefronts_instead_of_guessing_a_country() {
+        assert_eq!(country_code_from_storefront("143443-1,29").unwrap(), "DE");
+        let error = country_code_from_storefront("999999").unwrap_err();
+        assert_eq!(error.stage, "app_lookup");
+        assert_eq!(error.code, "storefront_unrecognized");
     }
 
     #[test]
