@@ -129,7 +129,10 @@ fn build_purchase_request(
     ] {
         payload.insert(key.into(), plist::Value::String(value));
     }
-    payload.insert("salableAdamId".into(), plist::Value::Integer(app.id.into()));
+    payload.insert(
+        "salableAdamId".into(),
+        plist::Value::String(app.id.to_string()),
+    );
     let mut body = Vec::new();
     plist::to_writer_xml(&mut body, &plist::Value::Dictionary(payload))
         .map_err(|_| ClientError::UnexpectedResponse("purchase_request_invalid".into()))?;
@@ -274,8 +277,8 @@ mod tests {
         assert_eq!(
             payload
                 .get("salableAdamId")
-                .and_then(plist::Value::as_unsigned_integer),
-            Some(12345)
+                .and_then(plist::Value::as_string),
+            Some("12345")
         );
     }
 
