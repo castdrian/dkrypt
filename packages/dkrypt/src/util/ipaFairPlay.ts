@@ -15,6 +15,14 @@ interface MachOSlice {
   cpuType: number;
 }
 
+export interface IpaFairPlayCompatibility {
+  supported: boolean;
+  licenseFormat: 'sinf' | 'supf' | 'unknown';
+  architectures: string[];
+  selector?: string;
+  reason?: string;
+}
+
 function readUInt32(buffer: Buffer, offset: number, littleEndian: boolean): number | undefined {
   if (offset < 0 || offset + 4 > buffer.length) return undefined;
   return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
@@ -124,6 +132,34 @@ function selectorFromSinf(sinf: Buffer): string {
     throw new Error('downloaded IPA FairPlay license has an invalid selector');
   }
   return createHash('sha256').update(user).update(key).digest('hex');
+}
+
+export function inspectIpaFairPlayCompatibility(ipaPath: string): IpaFairPlayCompatibility {
+  const archive = new AdmZip(ipaPath);
+  const entries = archive.getEntries().filter((entry) => !entry.isDirectory);
+  const infoEntry = entries.find((entry) => /^Payload\/[^/]+\.app\/Info\.plist$/.test(entry.entryName));
+  const appRoot = infoEntry && /^Payload\/([^/]+\.app)\/Info\.plist$/.exec(infoEntry.entryName)?.[1];
+  if (!appRoot || !infoEntry) return { supported: false, licenseFormat: 'unknown', architectures: [], reason: 'primary app bundle metadata is missing' };
+  const info = parseInfoPlist(infoEntry.getData());
+  const executable = typeof info.CFBundleExecutable === 'string' ? info.CFBundleExecutable : undefined;
+  const executableEntry = executable && entries.find((entry) => entry.entryName === `Payload/${appRoot}/${executable}`);
+  if (!executableEntry) return { supported: false, licenseFormat: 'unknown', architectures: [], reason: 'primary app executable is missing' };
+  const slices = readSlices(executableEntry.getData());
+  const architectureNames = new Map<number, string>([[0x0100000c, 'arm64'], [0x01000007, 'x86_64'], [12, 'arm'], [7, 'i386']]);
+  const architectures = [...new Set(slices.map((slice) => architectureNames.get(slice.cpuType) ?? `cpu-${slice.cpuType}`))];
+  const licenseDirectory = `Payload/${appRoot}/SC_Info/`;
+  const sinfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.sinf') && !entry.entryName.endsWith('.v4.sinf'));
+  const supfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.supf'));
+  const licenseFormat = sinfEntries.length > 0 ? 'sinf' : supfEntries.length > 0 ? 'supf' : 'unknown';
+  if (sinfEntries.length !== 1 || supfEntries.length > 0) {
+    return { supported: false, licenseFormat, architectures, reason: licenseFormat === 'supf' ? 'SUPF licenses are not supported by the current server decryptor' : 'IPA must contain exactly one supported SINF license' };
+  }
+  if (!architectures.includes('arm64')) return { supported: false, licenseFormat, architectures, reason: 'primary executable has no supported arm64 slice' };
+  try {
+    return { supported: true, licenseFormat, architectures, selector: selectorFromSinf(sinfEntries[0].getData()) };
+  } catch {
+    return { supported: false, licenseFormat, architectures, reason: 'SINF license layout is not supported by the current server decryptor' };
+  }
 }
 
 export function getIpaFairPlayLicenseSelector(ipaPath: string): string {

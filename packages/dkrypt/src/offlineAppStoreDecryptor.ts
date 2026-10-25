@@ -15,6 +15,7 @@ export interface FairPlayDecryptorInvocation {
   signal?: AbortSignal;
   sensitiveValues?: string[];
   diagnosticLimit?: number;
+  onActivity?: () => void;
 }
 
 function appendTail(current: string, chunk: Buffer | string): string {
@@ -55,7 +56,7 @@ export async function invokeFairPlayDecryptor(options: FairPlayDecryptorInvocati
   };
   options.signal?.addEventListener('abort', abort, { once: true });
   if (options.signal?.aborted) abort();
-  child.stderr?.on('data', (chunk) => { stderr = appendTail(stderr, chunk); });
+  child.stderr?.on('data', (chunk) => { stderr = appendTail(stderr, chunk); options.onActivity?.(); });
 
   try {
     const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {

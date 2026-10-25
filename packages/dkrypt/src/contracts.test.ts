@@ -22,6 +22,7 @@ test('every registered versioned route has an explicit TypeBox contract', async 
     const hiddenRoutes = [
       ['GET', '/v1/dashboard/jobs/:id/resolution-notice'],
       ['POST', '/v1/dashboard/jobs/:id/resolution-notice'],
+      ['GET', '/v1/dashboard/artifacts/:id/contents'],
     ] as const;
     expect(routes.length + hiddenRoutes.length).toBe(contracts.size);
     for (const route of routes) expect(contracts.has(route)).toBe(true);

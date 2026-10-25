@@ -19,6 +19,20 @@ export const billingCheckoutControlBodySchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const billingAccessCodeCreateBodySchema = Type.Object({
+  planId: Type.String({ minLength: 1, maxLength: 64 }),
+  durationDays: Type.Integer({ minimum: 1, maximum: 3650 }),
+  redeemWithinDays: Type.Integer({ minimum: 1, maximum: 365 }),
+}, { additionalProperties: false });
+
+export const billingAccessCodeRedeemBodySchema = Type.Object({
+  code: Type.String({ minLength: 8, maxLength: 128 }),
+}, { additionalProperties: false });
+
+export const billingAccessCodeParamsSchema = Type.Object({
+  id: Type.String({ minLength: 1, maxLength: 128 }),
+}, { additionalProperties: false });
+
 export const billingSubscriptionsQuerySchema = Type.Object(
   {
     cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
@@ -68,6 +82,18 @@ export type BillingCheckoutRoute = {
 
 export type BillingCheckoutControlRoute = {
   Body: Static<typeof billingCheckoutControlBodySchema>;
+};
+
+export type BillingAccessCodeCreateRoute = {
+  Body: Static<typeof billingAccessCodeCreateBodySchema>;
+};
+
+export type BillingAccessCodeRedeemRoute = {
+  Body: Static<typeof billingAccessCodeRedeemBodySchema>;
+};
+
+export type BillingAccessCodeRevokeRoute = {
+  Params: Static<typeof billingAccessCodeParamsSchema>;
 };
 
 export type BillingCancelRoute = {

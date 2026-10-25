@@ -3,6 +3,7 @@ import {
   type BillingSnapshot,
   type BillingSubscription,
   canCreateApiKeyImmediately,
+  createBillingAccessCode,
   exportBillingSnapshot,
   findStripeCheckoutIdempotencyAttempt,
   getBillingCustomerId,
@@ -11,7 +12,10 @@ import {
   hasLegacyBillingRecord,
   isBillingSnapshot,
   listPlans,
+  listBillingAccessCodes,
   recordStripeCheckoutIdempotencyAttempt,
+  redeemBillingAccessCode,
+  revokeBillingAccessCode,
   replaceBillingSnapshot,
   resolveBillingEntitlements,
   upsertBillingSubscription,
@@ -133,6 +137,57 @@ describe('billing provider cutover', () => {
     expect(getBillingCustomerId(userId)).toBeUndefined();
     expect(getBillingEntitlements(userId).planId).toBe('viewer');
     replaceBillingSnapshot({ customers: [], subscriptions: [] });
+  });
+});
+
+describe('prepaid billing access codes', () => {
+  test('grants one fixed access period, stores only a hash, and rejects reuse', () => {
+    const previousSnapshot = exportBillingSnapshot();
+    const userId = `gift-user-${crypto.randomUUID()}`;
+    const now = Date.parse('2026-10-25T12:00:00.000Z');
+
+    try {
+      replaceBillingSnapshot({ customers: [], subscriptions: [] });
+      const created = createBillingAccessCode({ planId: 'standard', durationDays: 30, redeemWithinDays: 14, createdBy: 'manager', now });
+      expect(created).toBeDefined();
+      expect(created?.code).toMatch(/^DKR-(?:[A-F0-9]{4}-){7}[A-F0-9]{4}$/);
+      expect(exportBillingSnapshot().accessCodes?.[0]?.codeHash).not.toContain(created?.code);
+      expect(listBillingAccessCodes()[0]).not.toHaveProperty('codeHash');
+
+      const redeemed = redeemBillingAccessCode(`  ${created!.code.toLowerCase()}  `, userId, now + 1000);
+      expect(redeemed).toMatchObject({ accessCode: { planId: 'standard', redeemedBy: userId, durationDays: 30 } });
+      expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'standard', provider: 'gift', status: 'active', api: false });
+      expect(getBillingEntitlements(userId).expiresAt).toBe(new Date(now + 1000 + 30 * 24 * 60 * 60 * 1000).toISOString());
+      expect(redeemBillingAccessCode(created!.code, `other-${userId}`, now + 2000)).toEqual({ error: 'invalid_or_expired' });
+      expect(redeemBillingAccessCode(created!.code, userId, now + 2000)).toEqual({ error: 'already_has_access' });
+    } finally {
+      replaceBillingSnapshot(previousSnapshot);
+    }
+  });
+
+  test('expires unused codes, revokes active access, and rejects legacy plans', () => {
+    const previousSnapshot = exportBillingSnapshot();
+    const userId = `gift-expiry-${crypto.randomUUID()}`;
+    const now = Date.parse('2026-10-25T12:00:00.000Z');
+
+    try {
+      replaceBillingSnapshot({ customers: [], subscriptions: [] });
+      const expired = createBillingAccessCode({ planId: 'access', durationDays: 10, redeemWithinDays: 1, now });
+      const active = createBillingAccessCode({ planId: 'unlimited_priority', durationDays: 7, redeemWithinDays: 10, now });
+      expect(createBillingAccessCode({ planId: 'priority_api', durationDays: 7, redeemWithinDays: 10, now })).toBeUndefined();
+      expect(redeemBillingAccessCode(expired!.code, userId, now + 24 * 60 * 60 * 1000)).toEqual({ error: 'invalid_or_expired' });
+      expect(redeemBillingAccessCode(active!.code, userId, now + 1000)).toHaveProperty('accessCode');
+      expect(revokeBillingAccessCode(active!.accessCode.id, now + 2000)).toMatchObject({ revokedAt: new Date(now + 2000).toISOString() });
+      expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'viewer', decrypt: false, api: false });
+      expect(listBillingAccessCodes().find((code) => code.id === active!.accessCode.id)).toHaveProperty('revokedAt');
+    } finally {
+      replaceBillingSnapshot(previousSnapshot);
+    }
+  });
+
+  test('accepts pre-feature billing backups without an access-code collection', () => {
+    expect(isBillingSnapshot({ customers: [], subscriptions: [] })).toBe(true);
+    expect(exportBillingSnapshot().accessCodes).toBeDefined();
   });
 });
 

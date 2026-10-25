@@ -185,6 +185,32 @@ test('typed artifact routes enforce API-key bundle scopes and stream downloads',
     expect(deniedFile.json()).toMatchObject({ code: 'bundle_scope_denied' });
     expect(touchedArtifactIds).toEqual([allowedArtifact.id]);
 
+    const resumedFile = await server.inject({
+      method: 'GET',
+      url: `/v1/artifacts/${allowedArtifact.id}/file`,
+      headers: { ...headers, range: 'bytes=4-8' },
+    });
+    expect(resumedFile.statusCode).toBe(206);
+    expect(resumedFile.body).toBe(artifactContents.slice(4, 9));
+    expect(resumedFile.headers['content-range']).toBe(`bytes 4-8/${Buffer.byteLength(artifactContents)}`);
+    expect(resumedFile.headers['accept-ranges']).toBe('bytes');
+
+    const suffixFile = await server.inject({
+      method: 'GET',
+      url: `/v1/artifacts/${allowedArtifact.id}/file`,
+      headers: { ...headers, range: 'bytes=-4' },
+    });
+    expect(suffixFile.statusCode).toBe(206);
+    expect(suffixFile.body).toBe(artifactContents.slice(-4));
+
+    const invalidRange = await server.inject({
+      method: 'GET',
+      url: `/v1/artifacts/${allowedArtifact.id}/file`,
+      headers: { ...headers, range: `bytes=${Buffer.byteLength(artifactContents)}-` },
+    });
+    expect(invalidRange.statusCode).toBe(416);
+    expect(invalidRange.headers['content-range']).toBe(`bytes */${Buffer.byteLength(artifactContents)}`);
+
     const missing = await server.inject({ method: 'GET', url: '/v1/artifacts/missing-artifact', headers });
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toMatchObject({ code: 'request_error', error: 'artifact not found' });
@@ -345,6 +371,7 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
   const enqueued: unknown[][] = [];
   const usage: unknown[][] = [];
   let quotaBlocked = false;
+  let waitTimeoutMs = 0;
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   server.setErrorHandler((error, request, reply) => {
     if (error instanceof DailyDecryptLimitError) {
@@ -385,7 +412,10 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
         return queuedJob;
       },
       getJob: (id) => id === queuedJob.id ? queuedJob : undefined,
-      waitForJob: async (job) => job,
+      waitForJob: async (job, timeoutMs) => {
+        waitTimeoutMs = timeoutMs;
+        return job;
+      },
       getArtifactById: () => undefined,
       recordApiKeyBundleUsage: (...args) => {
         usage.push(args);
@@ -512,6 +542,35 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
     const missingJobDetail = await server.inject({ method: 'GET', url: '/v1/jobs/missing-job', headers: jobHeaders });
     expect(missingJobDetail.statusCode).toBe(404);
     expect(missingJobDetail.json()).toMatchObject({ code: 'request_error' });
+
+    waitTimeoutMs = 0;
+    const waitingJob = await server.inject({ method: 'GET', url: `/v1/jobs/${queuedJob.id}/wait?timeoutSeconds=2`, headers: jobHeaders });
+    expect(waitingJob.statusCode).toBe(202);
+    expect(waitingJob.json()).toMatchObject({ id: queuedJob.id, status: 'queued' });
+    expect(waitTimeoutMs).toBe(2_000);
+    const hiddenWait = await server.inject({ method: 'GET', url: `/v1/jobs/${queuedJob.id}/wait`, headers: { authorization: `Bearer ${deniedKey.key}` } });
+    expect(hiddenWait.statusCode).toBe(404);
+    expect(hiddenWait.json()).toMatchObject({ code: 'request_error' });
+    const batchStatuses = await server.inject({
+      method: 'POST',
+      url: '/v1/jobs/status',
+      headers: jobHeaders,
+      payload: { ids: [queuedJob.id, 'missing-job'] },
+    });
+    expect(batchStatuses.statusCode).toBe(200);
+    expect(batchStatuses.json()).toMatchObject({ jobs: [
+      { id: queuedJob.id, state: 'found', job: { id: queuedJob.id, status: 'queued' } },
+      { id: 'missing-job', state: 'not_found' },
+    ] });
+    const hiddenBatchStatus = await server.inject({
+      method: 'POST',
+      url: '/v1/jobs/status',
+      headers: { authorization: `Bearer ${deniedKey.key}` },
+      payload: { ids: [queuedJob.id] },
+    });
+    expect(hiddenBatchStatus.json()).toMatchObject({ jobs: [{ id: queuedJob.id, state: 'not_found' }] });
+    const invalidBatch = await server.inject({ method: 'POST', url: '/v1/jobs/status', headers: jobHeaders, payload: { ids: [queuedJob.id, queuedJob.id] } });
+    expect(invalidBatch.statusCode).toBe(400);
 
     const testFlightPayload = {
       bundleId: 'com.example.allowed',

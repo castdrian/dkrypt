@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { ErrorEnvelope } from '#contracts.js';
-import type { DashboardArtifactArchiveRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute } from '#dashboardArtifactContracts.js';
-import { dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema } from '#dashboardArtifactContracts.js';
+import type { DashboardArtifactArchiveRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactContentsRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute } from '#dashboardArtifactContracts.js';
+import { dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema } from '#dashboardArtifactContracts.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, setArtifactArchived, setArtifactPinned, setArtifactsArchived, setArtifactsPinned, touchArtifact, undoArtifactStateChanges } from '#artifacts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { canAccessProject } from '#dashboardJobPresentation.js';
@@ -31,6 +31,7 @@ interface DashboardArtifactServices {
   touchArtifact: typeof touchArtifact;
   canAccessProject: typeof canAccessProject;
   recordAudit: typeof recordAudit;
+  readIpaStructure: typeof readIpaStructure;
 }
 
 const defaultServices: DashboardArtifactServices = {
@@ -46,6 +47,7 @@ const defaultServices: DashboardArtifactServices = {
   touchArtifact,
   canAccessProject,
   recordAudit,
+  readIpaStructure,
 };
 
 const canRequestDecrypt = fastifyRequirePermission(PermissionFlag.requestDecrypt);
@@ -155,6 +157,30 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
         warnings: artifact.warnings,
         fileUrl: `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
       };
+    });
+
+    server.get<DashboardArtifactContentsRoute>('/v1/dashboard/artifacts/:id/contents', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, querystring: dashboardArtifactContentsQuerySchema, response: { 200: dashboardArtifactContentsResponseSchema, 400: ErrorEnvelope, 404: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      const session = getFastifySession(request)!;
+      const projectId = request.query.projectId ?? DEFAULT_PROJECT_ID;
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId) || !services.canAccessProject(session.sub, session.permissions, projectId)) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
+      }
+      try {
+        const query = request.query.q?.trim().toLowerCase();
+        const entries = services.readIpaStructure(artifact.filePath).filter((entry) => !query || entry.path.toLowerCase().includes(query));
+        const offset = request.query.offset ?? 0;
+        const limit = request.query.limit ?? 100;
+        const page = entries.slice(offset, offset + limit);
+        return { entries: page, total: entries.length, nextOffset: offset + page.length < entries.length ? offset + page.length : undefined };
+      } catch {
+        reply.code(400);
+        return createHttpErrorEnvelope(request.id, 400, 'IPA package contents could not be read');
+      }
     });
 
     server.put<DashboardArtifactArchiveRoute>('/v1/dashboard/artifacts/:id/archive', {

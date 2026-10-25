@@ -4,7 +4,9 @@ export type DkryptRoute =
   | "GET /v1/artifacts/{id}/file"
   | "GET /v1/decrypt"
   | "GET /v1/jobs/{id}"
+  | "GET /v1/jobs/{id}/wait"
   | "POST /v1/decrypts"
+  | "POST /v1/jobs/status"
   | "POST /v1/testflight/decrypt";
 
 export interface DkryptClientOptions {

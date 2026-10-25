@@ -13,14 +13,15 @@
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test --isolate",
+    "test": "bun test --isolate --parallel=2 --max-concurrency=4 --timeout=15000",
     "load-test": "bun scripts/load-test.ts",
     "stripe:seed": "bun scripts/seed-stripe-catalog.ts",
     "stripe:webhook": "bun scripts/configure-stripe-webhook.ts",
     "stripe:verify": "bun scripts/verify-stripe.ts",
     "build:web": "cd web && bun install --frozen-lockfile && bun run build",
     "typecheck:web": "cd web && bun install --frozen-lockfile && bun run typecheck",
-    "clients:generate": "bun scripts/generate-clients.ts"
+    "clients:generate": "bun scripts/generate-clients.ts",
+    "api:mock": "bun scripts/mock-api.ts"
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.3",

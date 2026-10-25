@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, CircleCheck, CircleX, ExternalLink, Gauge, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, ShieldCheck, X, Zap } from 'lucide-svelte';
+  import { Check, CircleCheck, CircleX, Download, ExternalLink, Gauge, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, ShieldCheck, X, Zap } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
@@ -9,6 +9,7 @@
   import { confirmDialog, showToast } from '#lib/ui.svelte';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
+  import { fetchBillingInvoices, redeemBillingAccessCode, type BillingInvoice } from '#lib/api';
 
   type PlanId = 'viewer' | 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
   type CheckoutState = 'success' | 'cancelled' | undefined;
@@ -43,9 +44,11 @@
     decrypt: boolean;
     api: boolean;
     priority: number;
-    provider?: 'stripe' | 'nowpayments' | 'legacy';
+    provider?: 'stripe' | 'nowpayments' | 'legacy' | 'gift';
     status?: string;
     subscriptionId?: string;
+    expiresAt?: string;
+    accessCodeId?: string;
     nextBilledAt?: string;
     scheduledChangeAction?: string;
     scheduledChangeAt?: string;
@@ -56,7 +59,7 @@
 
   interface BillingData {
     enabled: boolean;
-    provider: 'stripe' | 'nowpayments' | 'legacy';
+    provider: 'stripe' | 'nowpayments' | 'legacy' | 'gift';
     environment: 'test' | 'live';
     managedPayments: boolean;
     missingConfiguration: string[];
@@ -74,11 +77,15 @@
   }
 
   let billing = $state<BillingData | undefined>();
+  let invoices = $state<BillingInvoice[]>([]);
+  let invoiceWarnings = $state<string[]>([]);
   let loading = $state(true);
   let loadError = $state(false);
   let openingPlan = $state<PlanId | undefined>();
   let openingPortal = $state(false);
   let cancelling = $state(false);
+  let accessCode = $state('');
+  let redeemingAccessCode = $state(false);
   let cancelIdempotencyKey = $state<string | undefined>();
   let activationStatus = $state<ActivationStatus>('idle');
   let checkoutIdempotencyKey = $state<string | undefined>();
@@ -93,6 +100,13 @@
     const response = await fetch('/v1/billing');
     if (!response.ok) throw new Error('billing unavailable');
     billing = (await response.json()) as BillingData;
+    try {
+      const history = await fetchBillingInvoices();
+      invoices = history.invoices;
+      invoiceWarnings = history.warnings;
+    } catch {
+      invoiceWarnings = ['Payment history is temporarily unavailable'];
+    }
     if (billing.entitlement.provider === 'nowpayments' || (!billing.providers.stripe.enabled && billing.providers.crypto.enabled)) paymentProvider = 'crypto';
   }
 
@@ -160,6 +174,21 @@
       await refreshAfterCheckout();
     } finally {
       cancelling = false;
+    }
+  }
+
+  async function redeemAccessCode(): Promise<void> {
+    if (!accessCode.trim()) return;
+    redeemingAccessCode = true;
+    try {
+      const result = await redeemBillingAccessCode(accessCode);
+      accessCode = '';
+      showToast(`${planLabel(result.planId as PlanId)} access is active until ${formatDate(result.expiresAt)}.`, 'success');
+      await refreshAfterCheckout();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't redeem this access code", 'error');
+    } finally {
+      redeemingAccessCode = false;
     }
   }
 
@@ -321,20 +350,47 @@
       </div>
       {#if billing}
         <div class="flex flex-wrap items-center gap-2">
-          <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={statusVariant(billing.entitlement.status)} class="mt-1">{statusLabel(billing.entitlement.status)}</Badge></div>
+          <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={statusVariant(billing.entitlement.status)} class="mt-1">{billing.entitlement.provider === 'gift' ? 'Prepaid' : statusLabel(billing.entitlement.status)}</Badge></div>
           {#if billing.entitlement.provider === 'stripe' && billing.customerId}<Button variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}><ExternalLink class="h-4 w-4" /> Manage billing</Button>{:else if billing.entitlement.provider === 'nowpayments'}<Button variant="secondary" loading={cancelling} onclick={() => void cancelSubscription()}>Stop crypto renewal</Button>{/if}
         </div>
       {/if}
     </div>
-    {#if billing?.entitlement.subscriptionId}
+    {#if billing && billing.entitlement.planId !== 'viewer'}
       <div class="mt-4 rounded-xl border border-border bg-bg/50 px-3 py-3 text-sm">
         <div class="flex flex-wrap items-center gap-2 font-medium">Your decrypt allowance {#if billing.entitlement.legacy}<Badge variant="secondary">Grandfathered</Badge>{/if}</div>
         <div class="mt-1 text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.remaining ?? 0} of ${billing.quota.limit} new decrypts available in the rolling 24-hour window`}. IPA Library downloads do not use this allowance.</div>
         {#if billing.quota.nextAvailableAt && billing.quota.remaining === 0}<div class="mt-1 text-xs text-muted">Next slot opens {formatDate(new Date(billing.quota.nextAvailableAt).toISOString())}.</div>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-1 text-xs text-muted">API: {billing.entitlement.apiRatePerMinute} requests per minute across your keys.</div>{/if}
+        {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
+        <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a></div>
       </div>
     {/if}
   </Card>
+
+  {#if billing && (invoices.length > 0 || invoiceWarnings.length > 0)}
+    <Card>
+      <div><h3 class="text-sm font-semibold">Invoices and payment receipts</h3><p class="mt-1 text-xs text-muted">Recent Stripe invoices and dkrypt crypto payment records for this account.</p></div>
+      {#if invoiceWarnings.length}<div class="mt-3 text-xs text-muted">{invoiceWarnings.join(' · ')}</div>{/if}
+      {#if invoices.length}
+        <ul class="mt-3 divide-y divide-border/70">
+          {#each invoices as invoice (invoice.id)}
+            <li class="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div class="min-w-0"><div class="font-medium">{planLabel(invoice.planId as PlanId)} · {invoice.provider === 'stripe' ? 'Stripe' : 'Crypto'}</div><div class="mt-1 text-xs text-muted">{formatDate(invoice.createdAt)} · {invoice.status}</div></div><div class="flex items-center gap-3"><span class="font-medium">{fmtCurrency(invoice.amountMinor / 100, invoice.currency)}</span>{#if invoice.invoiceUrl}<a class="rounded-md border border-border p-2" href={invoice.invoiceUrl} target="_blank" rel="noreferrer" aria-label="Open invoice"><ExternalLink class="h-4 w-4" /></a>{/if}</div></li>
+          {/each}
+        </ul>
+      {:else if !invoiceWarnings.length}<p class="mt-3 text-sm text-muted">No payments have been recorded yet.</p>{/if}
+    </Card>
+  {/if}
+
+  {#if billing?.entitlement.planId === 'viewer'}
+    <Card>
+      <div class="font-medium">Have a prepaid access code?</div>
+      <p class="mt-1 text-sm text-muted">Redeem a one-time code for fixed-term access. It will not renew automatically.</p>
+      <form class="mt-3 flex flex-col gap-2 sm:flex-row" onsubmit={(event) => { event.preventDefault(); void redeemAccessCode(); }}>
+        <input class="min-w-0 flex-1 rounded-lg border border-border bg-bg px-3 py-2 font-mono text-sm uppercase text-text" bind:value={accessCode} autocomplete="off" autocapitalize="characters" maxlength="128" placeholder="DKR-XXXX-XXXX-…" aria-label="Prepaid access code" data-sensitive="true" />
+        <Button type="submit" disabled={!accessCode.trim()} loading={redeemingAccessCode}>Redeem code</Button>
+      </form>
+    </Card>
+  {/if}
 
   {#if billing?.legacyBilling}
     <Card class="border-accent/40 bg-accent/5"><div class="text-sm"><div class="font-medium">Previous billing record needs review</div><div class="mt-1 text-muted">Your previous payment-provider record was kept for reconciliation. Contact support before starting a new subscription so the account is not charged twice.</div></div></Card>
@@ -344,10 +400,10 @@
     <Card class="flex min-h-48 items-center justify-center"><LoaderCircle class="h-6 w-6 animate-spin text-muted" /></Card>
   {:else if loadError}
     <Card class="py-12 text-center"><CircleX class="mx-auto mb-3 h-8 w-8 text-err" /><div class="font-medium">Billing could not be loaded</div><div class="mt-1 text-sm text-muted">Check your connection and try again.</div><Button class="mt-5" variant="secondary" onclick={() => void initializeBilling()}>Try again</Button></Card>
-  {:else if !billing?.enabled}
+  {:else if billing && !billing.enabled && billing.entitlement.planId === 'viewer'}
     <Card class="py-12 text-center"><LockKeyhole class="mx-auto mb-3 h-8 w-8 text-muted" /><div class="font-medium">Billing is not configured</div><div class="mx-auto mt-1 max-w-md text-sm text-muted">No payment details are collected while billing is disabled.</div></Card>
-  {:else}
-    {#if !billing.entitlement.subscriptionId}
+  {:else if billing}
+    {#if !billing.entitlement.subscriptionId && billing.entitlement.provider !== 'gift'}
       <Card>
         <div class="mb-3 text-sm font-medium">Payment method</div>
         <div class="grid gap-2 sm:grid-cols-2">
@@ -361,6 +417,9 @@
       </Card>
     {/if}
 
+    {#if billing.entitlement.provider === 'gift'}
+      <Card title="Prepaid access"><p class="text-sm text-muted">Your {planLabel(billing.entitlement.planId)} plan is active until {billing.entitlement.expiresAt ? formatDate(billing.entitlement.expiresAt) : 'its expiry date'}. This grant has no recurring payment.</p></Card>
+    {:else}
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
       {#each billing.plans as plan (plan.id)}
         {@const current = billing.entitlement.planId === plan.id}
@@ -382,5 +441,6 @@
     {#if billing.entitlement.scheduledChangeAt}<Card><div class="text-sm">Your subscription is scheduled to {billing.entitlement.scheduledChangeAction ?? 'change'} on {formatDate(billing.entitlement.scheduledChangeAt)}.</div></Card>{:else if billing.entitlement.nextBilledAt}<div class="text-center text-xs text-muted">Next billing date: {formatDate(billing.entitlement.nextBilledAt)}</div>{/if}
 
     <Card class="text-center text-xs leading-5 text-muted">Stripe handles automatic card or bank renewals. Crypto access lasts 30 days after a verified NOWPayments invoice and renews when you complete another crypto payment. dkrypt does not store payment credentials or private keys.<div class="mt-3"><LegalLinks /></div></Card>
+    {/if}
   {/if}
 </div>

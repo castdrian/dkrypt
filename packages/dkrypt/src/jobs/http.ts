@@ -1,5 +1,6 @@
 import type { Response } from '#http.js';
 import { createReadStream, existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { scopedLogger } from '#logger.js';
 
 const log = scopedLogger('jobs');
@@ -8,7 +9,29 @@ import type { Job } from '#jobs/types.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactForJob, touchArtifact } from '#artifacts.js';
 
 interface CloseAwareRequest {
+  headers: { range?: string | string[] };
   on(event: 'close', listener: () => void): unknown;
+}
+
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+function parseByteRange(value: string | string[] | undefined, size: number): ByteRange | undefined | null {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) || value.length > 200 || size <= 0) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) return null;
+  return { start, end: Math.min(requestedEnd, size - 1) };
 }
 
 export function jobFileAvailable(job: Job | undefined): boolean {
@@ -40,7 +63,11 @@ export function jobSummary(job: Job) {
     transport: job.transport,
     executionPath: job.executionPath,
     offlineAttemptedAt: job.offlineAttemptedAt,
+    offlineAttemptDurationMs: job.offlineAttemptDurationMs,
+    offlineDeviceFallbackStartedAt: job.offlineDeviceFallbackStartedAt,
+    deviceFallbackDurationMs: job.deviceFallbackDurationMs,
     offlineFailureReason: job.offlineFailureReason,
+    offlineCompatibility: job.offlineCompatibility,
     attempt: job.attempt,
     retryCount: job.retryCount,
     deadlineAt: job.deadlineAt ? new Date(job.deadlineAt).toISOString() : undefined,
@@ -74,11 +101,27 @@ export async function streamFilePath(
   fileSizeBytes: number | undefined,
   contextId: string,
 ): Promise<void> {
+  const size = fileSizeBytes ?? (await stat(filePath)).size;
+  const range = parseByteRange(req.headers.range, size);
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  if (fileSizeBytes) res.setHeader('Content-Length', String(fileSizeBytes));
+  res.setHeader('Accept-Ranges', 'bytes');
 
-  const stream = createReadStream(filePath);
+  if (range === null) {
+    res.status(416).setHeader('Content-Range', `bytes */${size}`).setHeader('Content-Length', '0').send(null);
+    return;
+  }
+
+  if (range) {
+    const length = range.end - range.start + 1;
+    res.status(206)
+      .setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
+      .setHeader('Content-Length', String(length));
+  } else {
+    res.setHeader('Content-Length', String(size));
+  }
+
+  const stream = range ? createReadStream(filePath, { start: range.start, end: range.end }) : createReadStream(filePath);
 
   await new Promise<void>((resolve) => {
     let settled = false;

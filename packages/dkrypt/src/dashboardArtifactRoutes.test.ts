@@ -111,6 +111,36 @@ test('artifact listing and pinning use native dashboard routes', async () => {
   }
 });
 
+test('artifact package contents are paginated, filterable, and project-scoped', async () => {
+  const record = artifact({ projectIds: ['default'] });
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardArtifactRoutes({
+    canAccessProject: (_userId, _permissions, projectId) => projectId === 'default',
+    artifactFileAvailable: () => true,
+    getArtifactById: () => record,
+    readIpaStructure: () => [
+      { path: 'Payload/App.app/App', compressedSize: 4, uncompressedSize: 8, crc32: 1 },
+      { path: 'Payload/App.app/Info.plist', compressedSize: 2, uncompressedSize: 3, crc32: 2 },
+      { path: 'Payload/App.app/Frameworks/Kit', compressedSize: 6, uncompressedSize: 10, crc32: 3 },
+    ],
+  }));
+
+  try {
+    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const firstPage = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=default&limit=1', headers });
+    const filtered = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=default&q=info', headers });
+    const hidden = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/contents?projectId=private', headers });
+
+    expect(firstPage.statusCode).toBe(200);
+    expect(firstPage.json()).toMatchObject({ total: 3, nextOffset: 1, entries: [{ path: 'Payload/App.app/App' }] });
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json()).toMatchObject({ total: 1, entries: [{ path: 'Payload/App.app/Info.plist' }] });
+    expect(hidden.statusCode).toBe(404);
+  } finally {
+    await server.close();
+  }
+});
+
 test('artifact listing and pinning keep their permission and project boundaries', async () => {
   const record = artifact({ projectIds: ['private'] });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();

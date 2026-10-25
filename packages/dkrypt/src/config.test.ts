@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
-async function loadDefaultRetention(): Promise<{ jobRetentionMinutes: number; nowpaymentsSupportedAssets: string[]; nowpaymentsDefaultAsset: string; nowpaymentsOutcomeCurrency: string; appStoreOfflineAuthenticationTimeoutSeconds: number; appStoreOfflineMaxWorkers: number }> {
+async function loadDefaultRetention(): Promise<{ jobRetentionMinutes: number; nowpaymentsSupportedAssets: string[]; nowpaymentsDefaultAsset: string; nowpaymentsOutcomeCurrency: string; appStoreOfflineDecryptEnabled: boolean; appStoreOfflineFairPlayAuthorized: boolean; appStoreOfflineAuthenticationTimeoutSeconds: number; appStoreOfflineMaxWorkers: number; appStoreOfflineAttemptTimeoutSeconds: number; appStoreOfflineStallTimeoutSeconds: number; appStoreOfflineFallbackReserveSeconds: number; appStoreOfflineCircuitFailureThreshold: number; appStoreOfflineCircuitCooldownSeconds: number }> {
   const child = Bun.spawn(
     [
       process.execPath,
       '-e',
-      "const { config } = await import('./src/config.ts'); console.log(JSON.stringify({ jobRetentionMinutes: config.jobRetentionMinutes, nowpaymentsSupportedAssets: config.nowpaymentsSupportedAssets, nowpaymentsDefaultAsset: config.nowpaymentsDefaultAsset, nowpaymentsOutcomeCurrency: config.nowpaymentsOutcomeCurrency, appStoreOfflineAuthenticationTimeoutSeconds: config.appStoreOfflineAuthenticationTimeoutSeconds, appStoreOfflineMaxWorkers: config.appStoreOfflineMaxWorkers }));",
+      "const { config } = await import('./src/config.ts'); console.log(JSON.stringify({ jobRetentionMinutes: config.jobRetentionMinutes, nowpaymentsSupportedAssets: config.nowpaymentsSupportedAssets, nowpaymentsDefaultAsset: config.nowpaymentsDefaultAsset, nowpaymentsOutcomeCurrency: config.nowpaymentsOutcomeCurrency, appStoreOfflineDecryptEnabled: config.appStoreOfflineDecryptEnabled, appStoreOfflineFairPlayAuthorized: config.appStoreOfflineFairPlayAuthorized, appStoreOfflineAuthenticationTimeoutSeconds: config.appStoreOfflineAuthenticationTimeoutSeconds, appStoreOfflineMaxWorkers: config.appStoreOfflineMaxWorkers, appStoreOfflineAttemptTimeoutSeconds: config.appStoreOfflineAttemptTimeoutSeconds, appStoreOfflineStallTimeoutSeconds: config.appStoreOfflineStallTimeoutSeconds, appStoreOfflineFallbackReserveSeconds: config.appStoreOfflineFallbackReserveSeconds, appStoreOfflineCircuitFailureThreshold: config.appStoreOfflineCircuitFailureThreshold, appStoreOfflineCircuitCooldownSeconds: config.appStoreOfflineCircuitCooldownSeconds }));",
     ],
     {
       cwd: process.cwd(),
@@ -24,7 +24,7 @@ async function loadDefaultRetention(): Promise<{ jobRetentionMinutes: number; no
     child.exited,
   ]);
   if (exitCode !== 0) throw new Error(`config defaults lookup failed: ${stderr}`);
-  return JSON.parse(stdout) as { jobRetentionMinutes: number; nowpaymentsSupportedAssets: string[]; nowpaymentsDefaultAsset: string; nowpaymentsOutcomeCurrency: string; appStoreOfflineAuthenticationTimeoutSeconds: number; appStoreOfflineMaxWorkers: number };
+  return JSON.parse(stdout) as { jobRetentionMinutes: number; nowpaymentsSupportedAssets: string[]; nowpaymentsDefaultAsset: string; nowpaymentsOutcomeCurrency: string; appStoreOfflineDecryptEnabled: boolean; appStoreOfflineFairPlayAuthorized: boolean; appStoreOfflineAuthenticationTimeoutSeconds: number; appStoreOfflineMaxWorkers: number; appStoreOfflineAttemptTimeoutSeconds: number; appStoreOfflineStallTimeoutSeconds: number; appStoreOfflineFallbackReserveSeconds: number; appStoreOfflineCircuitFailureThreshold: number; appStoreOfflineCircuitCooldownSeconds: number };
 }
 
 async function loadOfflineWorkerLimit(value: number): Promise<number> {
@@ -139,8 +139,15 @@ describe('config defaults', () => {
       nowpaymentsSupportedAssets: ['USDC', 'USDT'],
       nowpaymentsDefaultAsset: 'USDC',
       nowpaymentsOutcomeCurrency: 'USDC',
+      appStoreOfflineDecryptEnabled: true,
+      appStoreOfflineFairPlayAuthorized: true,
       appStoreOfflineAuthenticationTimeoutSeconds: 300,
       appStoreOfflineMaxWorkers: 1,
+      appStoreOfflineAttemptTimeoutSeconds: 900,
+      appStoreOfflineStallTimeoutSeconds: 300,
+      appStoreOfflineFallbackReserveSeconds: 180,
+      appStoreOfflineCircuitFailureThreshold: 3,
+      appStoreOfflineCircuitCooldownSeconds: 300,
     });
   });
 

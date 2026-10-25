@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { AlertTriangle, CreditCard, LoaderCircle, Pause, Play, RefreshCw, RotateCcw, ShieldAlert, WalletCards } from 'lucide-svelte';
+  import { AlertTriangle, Ban, Copy, CreditCard, Gift, LoaderCircle, Pause, Play, RefreshCw, RotateCcw, ShieldAlert, WalletCards } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import Card from '#lib/components/ui/Card.svelte';
   import EmptyState from '#components/EmptyState.svelte';
   import Input from '#lib/components/ui/Input.svelte';
-  import { fetchBillingProviderStatus, fetchBillingRevenue, fetchBillingSubscriptions, fetchBillingWebhookInbox, quarantineBillingWebhook, replayBillingWebhook, setBillingCheckoutPaused, syncStripeBillingWebhookEvents, type BillingManagerSubscription, type BillingProviderStatus, type BillingRevenueSummary, type BillingWebhookInboxRecord } from '#lib/api';
+  import { createBillingAccessCode, fetchBillingAccessCodes, fetchBillingProviderStatus, fetchBillingRevenue, fetchBillingSubscriptions, fetchBillingWebhookInbox, quarantineBillingWebhook, replayBillingWebhook, revokeBillingAccessCode, setBillingCheckoutPaused, syncStripeBillingWebhookEvents, type BillingAccessCode, type BillingManagerSubscription, type BillingProviderStatus, type BillingRevenueSummary, type BillingWebhookInboxRecord } from '#lib/api';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasPermission } from '#lib/session.svelte';
   import { liveState } from '#lib/live.svelte';
@@ -21,6 +21,14 @@
   let revenueLoading = $state(true);
   let revenueRefreshing = $state(false);
   let revenueError = $state<string | undefined>(undefined);
+  let accessCodes = $state<BillingAccessCode[]>([]);
+  let accessCodesLoading = $state(false);
+  let accessCodeCreating = $state(false);
+  let generatedAccessCode = $state<string | undefined>(undefined);
+  let accessCodePlan = $state('access');
+  let accessCodeDuration = $state(30);
+  let accessCodeRedeemWindow = $state(30);
+  let accessCodeAction = $state<string | undefined>(undefined);
   let loading = $state(true);
   let refreshing = $state(false);
   let search = $state('');
@@ -131,6 +139,57 @@
     }
   }
 
+  async function loadAccessCodes(): Promise<void> {
+    if (!canManage) return;
+    accessCodesLoading = true;
+    try {
+      accessCodes = (await fetchBillingAccessCodes()).accessCodes;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't load prepaid codes", 'error');
+    } finally {
+      accessCodesLoading = false;
+    }
+  }
+
+  async function issueAccessCode(): Promise<void> {
+    accessCodeCreating = true;
+    generatedAccessCode = undefined;
+    try {
+      const result = await createBillingAccessCode({ planId: accessCodePlan, durationDays: accessCodeDuration, redeemWithinDays: accessCodeRedeemWindow });
+      generatedAccessCode = result.code;
+      accessCodes = [result.accessCode, ...accessCodes];
+      showToast('Prepaid access code created. Copy it now; it will not be shown again.', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't create prepaid code", 'error');
+    } finally {
+      accessCodeCreating = false;
+    }
+  }
+
+  async function copyAccessCode(): Promise<void> {
+    if (!generatedAccessCode) return;
+    try {
+      await navigator.clipboard.writeText(generatedAccessCode);
+      showToast('Access code copied', 'success');
+    } catch {
+      showToast('Clipboard access was blocked; select and copy the code.', 'error');
+    }
+  }
+
+  async function revokeAccessCode(accessCode: BillingAccessCode): Promise<void> {
+    if (!(await confirmDialog('Revoke this prepaid code now? Any active access from it will end.', { confirmLabel: 'Revoke code' }))) return;
+    accessCodeAction = accessCode.id;
+    try {
+      await revokeBillingAccessCode(accessCode.id);
+      await loadAccessCodes();
+      showToast('Prepaid code revoked', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't revoke prepaid code", 'error');
+    } finally {
+      accessCodeAction = undefined;
+    }
+  }
+
   async function loadWebhooks(cursor?: string): Promise<void> {
     if (!canManage) return;
     webhookLoading = true;
@@ -223,6 +282,7 @@
   onMount(() => {
     void load();
     void loadRevenue();
+    void loadAccessCodes();
   });
 
   $effect(() => {
@@ -283,6 +343,40 @@
         <div class="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-panel-muted/50 p-3 text-sm">
           <span class="text-muted">{revenueError ?? 'Revenue totals are temporarily unavailable.'}</span>
           <Button size="sm" variant="secondary" onclick={() => void loadRevenue(true)}>Try again</Button>
+        </div>
+      {/if}
+    </Card>
+  {/if}
+
+  {#if canManage}
+    <Card title="Prepaid access codes">
+      <p class="mb-4 text-sm text-muted">Create a one-time code for a fixed number of access days. Codes do not start recurring billing and can be revoked.</p>
+      <form class="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(10rem,1fr)_9rem_9rem_auto]" onsubmit={(event) => { event.preventDefault(); void issueAccessCode(); }}>
+        <label class="text-xs text-muted">Plan<select class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text" bind:value={accessCodePlan}><option value="access">Access · €2.50</option><option value="standard">Standard · €5</option><option value="plus">Plus · €10</option><option value="developer">Developer · €15</option><option value="unlimited">Unlimited · €20</option><option value="unlimited_priority">Unlimited Priority · €30</option></select></label>
+        <label class="text-xs text-muted">Access days<Input type="number" min="1" max="3650" bind:value={accessCodeDuration} /></label>
+        <label class="text-xs text-muted">Redeem within days<Input type="number" min="1" max="365" bind:value={accessCodeRedeemWindow} /></label>
+        <div class="flex items-end"><Button type="submit" loading={accessCodeCreating}><Gift class="h-4 w-4" /> Create code</Button></div>
+      </form>
+      {#if generatedAccessCode}
+        <div class="mt-4 rounded-lg border border-accent/40 bg-accent/5 p-3" data-sensitive="true">
+          <div class="text-sm font-medium">Copy this code now</div>
+          <div class="mt-2 flex flex-wrap items-center gap-2"><code class="min-w-0 flex-1 break-all rounded-md bg-bg px-3 py-2 font-mono text-sm">{generatedAccessCode}</code><Button size="sm" variant="secondary" onclick={() => void copyAccessCode()}><Copy class="h-4 w-4" /> Copy</Button></div>
+          <p class="mt-2 text-xs text-muted">The full code is only shown once. The server stores a hash.</p>
+        </div>
+      {/if}
+      <div class="mt-4 flex items-center justify-between gap-2"><h3 class="text-sm font-medium">Issued codes</h3><Button size="sm" variant="secondary" loading={accessCodesLoading} onclick={() => void loadAccessCodes()}><RefreshCw class="h-4 w-4" /> Refresh</Button></div>
+      {#if accessCodesLoading && accessCodes.length === 0}
+        <div class="flex min-h-20 items-center justify-center"><LoaderCircle class="h-5 w-5 animate-spin text-muted" /></div>
+      {:else if accessCodes.length === 0}
+        <p class="mt-3 rounded-lg border border-border/70 px-3 py-4 text-sm text-muted">No prepaid codes have been issued.</p>
+      {:else}
+        <div class="mt-3 divide-y divide-border/70">
+          {#each accessCodes as accessCode (accessCode.id)}
+            <div class="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+              <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="font-medium">{accessCode.planId.replace('_', ' ')} · {accessCode.durationDays} days</span><Badge variant={statusVariant(accessCode.status)}>{accessCode.status}</Badge></div><div class="mt-1 font-mono text-xs text-muted" data-sensitive="true">{accessCode.prefix}</div><div class="mt-1 text-xs text-muted">{accessCode.redeemedAt ? `Redeemed ${date(accessCode.redeemedAt)} · expires ${date(accessCode.expiresAt)}` : `Redeem by ${date(accessCode.redeemBy)}`}{#if accessCode.redeemedBy} · {accessCode.redeemedBy}{/if}</div></div>
+              {#if accessCode.status === 'available' || accessCode.status === 'redeemed'}<Button size="sm" variant="secondary" loading={accessCodeAction === accessCode.id} onclick={() => void revokeAccessCode(accessCode)}><Ban class="h-4 w-4" /> Revoke</Button>{/if}
+            </div>
+          {/each}
         </div>
       {/if}
     </Card>

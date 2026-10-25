@@ -42,6 +42,7 @@ export interface JobRepository {
   findActiveId(lookup: JobBuildLookup): string | undefined;
   findReusableCompletedIds(lookup: JobBuildLookup): string[];
   quotaUsage(ownerId: string, limit: number | undefined, now?: number): DecryptQuotaUsage;
+  quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
   admit(job: Job, ownerId: string, limit: number | undefined): void;
   settleQuota(jobId: string, success: boolean): void;
   reconcileQuota(): void;
@@ -148,6 +149,22 @@ export function createJobRepository(database: Database): JobRepository {
       return rows.map((row) => row.id);
     },
     quotaUsage: (ownerId, limit, now = Date.now()) => quotaUsage(database, ownerId, limit, now),
+    quotaJournal(ownerId, limit = 10_000) {
+      const rows = database.query(`
+        SELECT ledger.job_id, ledger.owner_id, ledger.admitted_at, ledger.state,
+          jobs.bundle_id, jobs.project_id, jobs.source, jobs.status,
+          json_extract(jobs.payload, '$.versionLabel') AS version_label,
+          json_extract(jobs.payload, '$.executionPath') AS execution_path
+        FROM decrypt_quota_ledger AS ledger
+        LEFT JOIN jobs ON jobs.id = ledger.job_id
+        WHERE ledger.owner_id = ?
+        ORDER BY ledger.admitted_at DESC, ledger.job_id DESC
+        LIMIT ?
+      `).all(ownerId.trim().toLowerCase(), Math.max(1, Math.min(10_000, Math.floor(limit)))) as Array<{
+        job_id: string; owner_id: string; admitted_at: number; state: 'reserved' | 'consumed'; bundle_id?: string; project_id?: string; source?: string; status?: string; version_label?: string; execution_path?: string;
+      }>;
+      return rows.map((row) => ({ jobId: row.job_id, ownerId: row.owner_id, admittedAt: row.admitted_at, state: row.state, bundleId: row.bundle_id, projectId: row.project_id, source: row.source, status: row.status, versionLabel: row.version_label, executionPath: row.execution_path }));
+    },
     admit: (job, ownerId, limit) => admitJob(database, job, ownerId, limit),
     settleQuota(jobId, success) {
       if (success) database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
@@ -187,6 +204,10 @@ export function closePersistedJobs(): void {
 
 export function getDecryptQuotaUsage(ownerId: string, limit: number | undefined, now = Date.now()): DecryptQuotaUsage {
   return repository.quotaUsage(ownerId, limit, now);
+}
+
+export function getDecryptQuotaJournal(ownerId: string, limit = 10_000): ReturnType<JobRepository['quotaJournal']> {
+  return repository.quotaJournal(ownerId, limit);
 }
 
 export function admitQuotaJob(job: Job, ownerId: string, limit: number | undefined): void {

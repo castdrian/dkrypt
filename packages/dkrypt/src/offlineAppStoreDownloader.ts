@@ -26,6 +26,7 @@ export interface AppStoreDownloaderRequestOptions {
   request: Record<string, unknown>;
   signal?: AbortSignal;
   childStarted?: (child: ChildProcess) => void;
+  onActivity?: () => void;
 }
 
 function childInput(child: ChildProcess): Writable {
@@ -104,8 +105,8 @@ export async function runAppStoreDownloaderRequest(options: AppStoreDownloaderRe
   };
   options.signal?.addEventListener('abort', abort, { once: true });
   if (options.signal?.aborted) abort();
-  child.stdout?.on('data', (chunk) => { stdout = appendTail(stdout, chunk); });
-  child.stderr?.on('data', (chunk) => { stderr = appendTail(stderr, chunk); });
+  child.stdout?.on('data', (chunk) => { stdout = appendTail(stdout, chunk); options.onActivity?.(); });
+  child.stderr?.on('data', (chunk) => { stderr = appendTail(stderr, chunk); options.onActivity?.(); });
 
   const result = await new Promise<{ code: number | null }>((resolve, reject) => {
     child.once('error', (error) => {

@@ -1,0 +1,10 @@
+{
+  "name": "@unbound-app/dkrypt-cli",
+  "version": "0.1.0",
+  "description": "Command-line client for the dkrypt public API",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "dkrypt": "./src/cli.js" },
+  "scripts": { "test": "node --test" },
+  "files": ["src", "README.md"]
+}

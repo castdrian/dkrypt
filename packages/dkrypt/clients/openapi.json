@@ -3,7 +3,7 @@
   "info": {
     "title": "dkrypt Public API",
     "version": "1.0.0",
-    "description": "Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts."
+    "description": "Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. All responses include X-Dkrypt-API-Version: 1. Additive response fields are compatible within v1; breaking changes use documented deprecation and sunset dates."
   },
   "servers": [
     {
@@ -80,6 +80,15 @@
                 "schema": {
                   "format": "binary",
                   "type": "string"
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -247,8 +256,64 @@
                     "offlineAttemptedAt": {
                       "type": "number"
                     },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
                     "offlineFailureReason": {
                       "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "attempt": {
                       "type": "number"
@@ -419,6 +484,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -457,6 +531,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -499,6 +582,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -539,6 +631,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "404": {
@@ -577,6 +678,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -746,8 +856,64 @@
                         "offlineAttemptedAt": {
                           "type": "number"
                         },
+                        "offlineAttemptDurationMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "offlineDeviceFallbackStartedAt": {
+                          "type": "number"
+                        },
+                        "deviceFallbackDurationMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
                         "offlineFailureReason": {
                           "type": "string"
+                        },
+                        "offlineCompatibility": {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "required": [
+                            "supported",
+                            "licenseFormat",
+                            "architectures"
+                          ],
+                          "properties": {
+                            "supported": {
+                              "type": "boolean"
+                            },
+                            "licenseFormat": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "sinf"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "supf"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "unknown"
+                                  ]
+                                }
+                              ]
+                            },
+                            "architectures": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          }
                         },
                         "attempt": {
                           "type": "number"
@@ -953,6 +1119,15 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "410": {
@@ -993,6 +1168,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "429": {
@@ -1031,6 +1215,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -1200,8 +1393,64 @@
                         "offlineAttemptedAt": {
                           "type": "number"
                         },
+                        "offlineAttemptDurationMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "offlineDeviceFallbackStartedAt": {
+                          "type": "number"
+                        },
+                        "deviceFallbackDurationMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
                         "offlineFailureReason": {
                           "type": "string"
+                        },
+                        "offlineCompatibility": {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "required": [
+                            "supported",
+                            "licenseFormat",
+                            "architectures"
+                          ],
+                          "properties": {
+                            "supported": {
+                              "type": "boolean"
+                            },
+                            "licenseFormat": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "sinf"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "supf"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "unknown"
+                                  ]
+                                }
+                              ]
+                            },
+                            "architectures": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          }
                         },
                         "attempt": {
                           "type": "number"
@@ -1407,6 +1656,15 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -1445,6 +1703,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -1634,8 +1901,64 @@
                     "offlineAttemptedAt": {
                       "type": "number"
                     },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
                     "offlineFailureReason": {
                       "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "attempt": {
                       "type": "number"
@@ -1806,6 +2129,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -1844,6 +2176,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -1886,6 +2227,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -1924,6 +2274,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -1966,6 +2325,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -2004,6 +2372,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -2046,6 +2423,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "500": {
@@ -2086,6 +2472,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -2124,6 +2519,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -2347,8 +2751,64 @@
                     "offlineAttemptedAt": {
                       "type": "number"
                     },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
                     "offlineFailureReason": {
                       "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "attempt": {
                       "type": "number"
@@ -2604,6 +3064,15 @@
                       }
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -2771,8 +3240,64 @@
                     "offlineAttemptedAt": {
                       "type": "number"
                     },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
                     "offlineFailureReason": {
                       "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "attempt": {
                       "type": "number"
@@ -3030,6 +3555,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -3068,6 +3602,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3110,6 +3653,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -3148,6 +3700,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3190,6 +3751,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -3228,6 +3798,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3270,6 +3849,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "429": {
@@ -3308,6 +3896,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3350,6 +3947,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "502": {
@@ -3390,6 +3996,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -3428,6 +4043,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3709,8 +4333,64 @@
                     "offlineAttemptedAt": {
                       "type": "number"
                     },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
                     "offlineFailureReason": {
                       "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "attempt": {
                       "type": "number"
@@ -3881,6 +4561,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -3919,6 +4608,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -3961,6 +4659,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -3999,6 +4706,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4041,6 +4757,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -4079,6 +4804,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4121,6 +4855,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "429": {
@@ -4159,6 +4902,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4201,6 +4953,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -4239,6 +5000,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4440,6 +5210,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -4478,6 +5257,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4520,6 +5308,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -4558,6 +5355,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4600,6 +5406,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -4638,6 +5453,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4680,6 +5504,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "500": {
@@ -4720,6 +5553,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -4758,6 +5600,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4880,6 +5731,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -4918,6 +5778,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -4960,6 +5829,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -4998,6 +5876,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5040,6 +5927,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -5078,6 +5974,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5120,6 +6025,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "500": {
@@ -5160,6 +6074,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -5198,6 +6121,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5243,6 +6175,15 @@
                   "type": "string"
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "400": {
@@ -5281,6 +6222,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5323,6 +6273,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "403": {
@@ -5361,6 +6320,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5403,6 +6371,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "409": {
@@ -5441,6 +6418,15 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }
@@ -5483,6 +6469,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "500": {
@@ -5523,6 +6518,15 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
             }
           },
           "503": {
@@ -5561,6 +6565,2117 @@
                       "properties": {}
                     }
                   }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/status": {
+      "post": {
+        "summary": "POST /v1/jobs/status",
+        "tags": [
+          "public"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "uniqueItems": true,
+                    "type": "array",
+                    "items": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "jobs"
+                  ],
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "state"
+                        ],
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          "state": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "found"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "not_found"
+                                ]
+                              }
+                            ]
+                          },
+                          "job": {
+                            "additionalProperties": true,
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "correlationId",
+                              "bundleId",
+                              "source",
+                              "channel",
+                              "priority",
+                              "status",
+                              "progress",
+                              "createdAt",
+                              "statusUrl"
+                            ],
+                            "properties": {
+                              "id": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "correlationId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "projectId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "bundleId": {
+                                "minLength": 3,
+                                "maxLength": 200,
+                                "pattern": "^[A-Za-z0-9.-]+$",
+                                "type": "string"
+                              },
+                              "externalVersionId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "testflight": {
+                                "additionalProperties": true,
+                                "type": "object",
+                                "required": [
+                                  "appId",
+                                  "buildId"
+                                ],
+                                "properties": {
+                                  "appId": {
+                                    "type": "number"
+                                  },
+                                  "buildId": {
+                                    "type": "number"
+                                  },
+                                  "version": {
+                                    "type": "string"
+                                  },
+                                  "buildNumber": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "versionLabel": {
+                                "type": "string"
+                              },
+                              "minimumOsVersion": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "manual"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "scheduler"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "channel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "appstore"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "testflight"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "queuedBy": {
+                                "type": "string"
+                              },
+                              "priority": {
+                                "type": "number"
+                              },
+                              "deviceId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "preferredDeviceId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "transport": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "wifi"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "usb"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "executionPath": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "appstore_offline"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "device"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "device_fallback"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "offlineAttemptedAt": {
+                                "type": "number"
+                              },
+                              "offlineAttemptDurationMs": {
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "offlineDeviceFallbackStartedAt": {
+                                "type": "number"
+                              },
+                              "deviceFallbackDurationMs": {
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "offlineFailureReason": {
+                                "type": "string"
+                              },
+                              "offlineCompatibility": {
+                                "additionalProperties": false,
+                                "type": "object",
+                                "required": [
+                                  "supported",
+                                  "licenseFormat",
+                                  "architectures"
+                                ],
+                                "properties": {
+                                  "supported": {
+                                    "type": "boolean"
+                                  },
+                                  "licenseFormat": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "sinf"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "supf"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "unknown"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "architectures": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "attempt": {
+                                "type": "number"
+                              },
+                              "retryCount": {
+                                "type": "number"
+                              },
+                              "deadlineAt": {
+                                "type": "string"
+                              },
+                              "deadlineExceeded": {
+                                "type": "boolean"
+                              },
+                              "failureClass": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "device_transport"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "app_store"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "testflight"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "network"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "storage"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "decrypt"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "queue"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "cancelled"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "unknown"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "status": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "queued"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "running"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "done"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "failed"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "progress": {
+                                "type": "string"
+                              },
+                              "warnings": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "error": {
+                                "type": "string"
+                              },
+                              "artifactId": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              },
+                              "artifactUrl": {
+                                "type": "string"
+                              },
+                              "cacheHit": {
+                                "type": "boolean"
+                              },
+                              "sizeBytes": {
+                                "type": "number"
+                              },
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "startedAt": {
+                                "type": "string"
+                              },
+                              "finishedAt": {
+                                "type": "string"
+                              },
+                              "queue": {
+                                "additionalProperties": true,
+                                "type": "object",
+                                "required": [
+                                  "position",
+                                  "total"
+                                ],
+                                "properties": {
+                                  "position": {
+                                    "type": "number"
+                                  },
+                                  "total": {
+                                    "type": "number"
+                                  },
+                                  "predictedStartMs": {
+                                    "minimum": 0,
+                                    "type": "number"
+                                  },
+                                  "predictedCompletionMs": {
+                                    "minimum": 0,
+                                    "type": "number"
+                                  }
+                                }
+                              },
+                              "queueReason": {
+                                "type": "string"
+                              },
+                              "statusUrl": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/wait": {
+      "get": {
+        "summary": "GET /v1/jobs/:id/wait",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 25,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "timeoutSeconds",
+            "required": false
+          },
+          {
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "correlationId",
+                    "bundleId",
+                    "source",
+                    "channel",
+                    "priority",
+                    "status",
+                    "progress",
+                    "createdAt",
+                    "statusUrl"
+                  ],
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "bundleId": {
+                      "minLength": 3,
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z0-9.-]+$",
+                      "type": "string"
+                    },
+                    "externalVersionId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "testflight": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "required": [
+                        "appId",
+                        "buildId"
+                      ],
+                      "properties": {
+                        "appId": {
+                          "type": "number"
+                        },
+                        "buildId": {
+                          "type": "number"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "buildNumber": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "versionLabel": {
+                      "type": "string"
+                    },
+                    "minimumOsVersion": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "manual"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "scheduler"
+                          ]
+                        }
+                      ]
+                    },
+                    "channel": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "appstore"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "testflight"
+                          ]
+                        }
+                      ]
+                    },
+                    "queuedBy": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "number"
+                    },
+                    "deviceId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "preferredDeviceId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "transport": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "wifi"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "usb"
+                          ]
+                        }
+                      ]
+                    },
+                    "executionPath": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "appstore_offline"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device_fallback"
+                          ]
+                        }
+                      ]
+                    },
+                    "offlineAttemptedAt": {
+                      "type": "number"
+                    },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineFailureReason": {
+                      "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "retryCount": {
+                      "type": "number"
+                    },
+                    "deadlineAt": {
+                      "type": "string"
+                    },
+                    "deadlineExceeded": {
+                      "type": "boolean"
+                    },
+                    "failureClass": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device_transport"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "app_store"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "testflight"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "network"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "storage"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "decrypt"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queue"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "cancelled"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "unknown"
+                          ]
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "running"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "done"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "progress": {
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "artifactId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "artifactUrl": {
+                      "type": "string"
+                    },
+                    "cacheHit": {
+                      "type": "boolean"
+                    },
+                    "sizeBytes": {
+                      "type": "number"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "required": [
+                        "position",
+                        "total"
+                      ],
+                      "properties": {
+                        "position": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "predictedStartMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "predictedCompletionMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "queueReason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "correlationId",
+                    "bundleId",
+                    "source",
+                    "channel",
+                    "priority",
+                    "status",
+                    "progress",
+                    "createdAt",
+                    "statusUrl"
+                  ],
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "correlationId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "bundleId": {
+                      "minLength": 3,
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z0-9.-]+$",
+                      "type": "string"
+                    },
+                    "externalVersionId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "testflight": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "required": [
+                        "appId",
+                        "buildId"
+                      ],
+                      "properties": {
+                        "appId": {
+                          "type": "number"
+                        },
+                        "buildId": {
+                          "type": "number"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "buildNumber": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "versionLabel": {
+                      "type": "string"
+                    },
+                    "minimumOsVersion": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "manual"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "scheduler"
+                          ]
+                        }
+                      ]
+                    },
+                    "channel": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "appstore"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "testflight"
+                          ]
+                        }
+                      ]
+                    },
+                    "queuedBy": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "number"
+                    },
+                    "deviceId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "preferredDeviceId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "transport": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "wifi"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "usb"
+                          ]
+                        }
+                      ]
+                    },
+                    "executionPath": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "appstore_offline"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device_fallback"
+                          ]
+                        }
+                      ]
+                    },
+                    "offlineAttemptedAt": {
+                      "type": "number"
+                    },
+                    "offlineAttemptDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineDeviceFallbackStartedAt": {
+                      "type": "number"
+                    },
+                    "deviceFallbackDurationMs": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "offlineFailureReason": {
+                      "type": "string"
+                    },
+                    "offlineCompatibility": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "supported",
+                        "licenseFormat",
+                        "architectures"
+                      ],
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "licenseFormat": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "sinf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "supf"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "unknown"
+                              ]
+                            }
+                          ]
+                        },
+                        "architectures": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "retryCount": {
+                      "type": "number"
+                    },
+                    "deadlineAt": {
+                      "type": "string"
+                    },
+                    "deadlineExceeded": {
+                      "type": "boolean"
+                    },
+                    "failureClass": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "device_transport"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "app_store"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "testflight"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "network"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "storage"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "decrypt"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queue"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "cancelled"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "unknown"
+                          ]
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "running"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "done"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "progress": {
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "artifactId": {
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "artifactUrl": {
+                      "type": "string"
+                    },
+                    "cacheHit": {
+                      "type": "boolean"
+                    },
+                    "sizeBytes": {
+                      "type": "number"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": "string"
+                    },
+                    "queue": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "required": [
+                        "position",
+                        "total"
+                      ],
+                      "properties": {
+                        "position": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "predictedStartMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "predictedCompletionMs": {
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "queueReason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
                 }
               }
             }

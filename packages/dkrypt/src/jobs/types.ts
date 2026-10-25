@@ -4,6 +4,7 @@ import type { TFBuild } from '#testflight.js';
 import type { IpaMetadata } from '#store/state.js';
 import type { TraceContext } from '#telemetry.js';
 import type { JobFailureClass } from '#util/failureCategory.js';
+import type { IpaFairPlayCompatibility } from '#util/ipaFairPlay.js';
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
@@ -23,6 +24,7 @@ export interface JobTimelineEvent {
   at: number;
   label: string;
   status: JobStatus;
+  durationMs?: number;
 }
 
 export interface Job {
@@ -46,8 +48,11 @@ export interface Job {
   executionStage?: JobExecutionStage;
   executionPath?: JobExecutionPath;
   offlineAttemptedAt?: number;
+  offlineAttemptDurationMs?: number;
   offlineDeviceFallbackStartedAt?: number;
+  deviceFallbackDurationMs?: number;
   offlineFailureReason?: string;
+  offlineCompatibility?: IpaFairPlayCompatibility;
   progress: string;
   timeline?: JobTimelineEvent[];
   warnings?: string[];
@@ -83,6 +88,8 @@ export interface Job {
 export function appendJobTimelineEvent(job: Job, label: string, status: JobStatus, at = Date.now()): void {
   const events = job.timeline ?? (job.timeline = []);
   if (events.at(-1)?.label === label) return;
+  const previous = events.at(-1);
+  if (previous && previous.durationMs === undefined) previous.durationMs = Math.max(0, at - previous.at);
   events.push({ at, label, status });
   if (events.length > 80) events.splice(0, events.length - 80);
 }

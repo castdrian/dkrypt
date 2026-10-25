@@ -205,7 +205,7 @@ async function runDecryptOperation(job: Job, device: DeviceRecord, signal?: Abor
   await finalizeDecryptedIpa(job, outputPath, signal, ensureNotCancelled);
 }
 
-export async function runOfflineAppStoreDecrypt(job: Job, signal?: AbortSignal): Promise<void> {
+export async function runOfflineAppStoreDecrypt(job: Job, signal?: AbortSignal, reportActivity: () => void = () => {}): Promise<void> {
   const parentContext = currentCorrelation();
   const span = startSpan('job.decrypt.offline_appstore', { 'job.id': job.id, 'job.bundle_id': job.bundleId }, parentContext?.traceContext);
   return withCorrelation({
@@ -217,6 +217,7 @@ export async function runOfflineAppStoreDecrypt(job: Job, signal?: AbortSignal):
     const setExecutionStage = (stage: JobExecutionStage) => {
       if (job.executionStage === stage) return;
       job.executionStage = stage;
+      reportActivity();
       emitJobsChanged();
     };
     const ensureNotCancelled = () => {
@@ -235,7 +236,8 @@ export async function runOfflineAppStoreDecrypt(job: Job, signal?: AbortSignal):
       appendJobTimelineEvent(job, 'Server-side App Store download started', 'running');
       emitJobsChanged();
       setExecutionStage('offline_download');
-      const result = await offlineAppStoreProcessor.run(job, signal, setExecutionStage);
+      reportActivity();
+      const result = await offlineAppStoreProcessor.run(job, signal, setExecutionStage, reportActivity);
       ensureNotCancelled();
       job.filePath = result.outputPath;
       job.warnings = result.warnings.length > 0 ? result.warnings : undefined;

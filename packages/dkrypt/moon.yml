@@ -2,11 +2,19 @@ dependsOn:
   - web
   - autoinstall
 tasks:
+  cliTest:
+    command: node
+    args:
+      - --test
+      - ../dkrypt-cli/test/cli.test.js
   test:
     command: bun
     args:
       - test
       - --isolate
+      - --parallel=2
+      - --max-concurrency=4
+      - --timeout=15000
     deps:
       - web:build
   typecheck:
@@ -18,6 +26,7 @@ tasks:
     command: 'true'
     deps:
       - '~:test'
+      - '~:cliTest'
       - '~:typecheck'
       - web:typecheck
       - web:build

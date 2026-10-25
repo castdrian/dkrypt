@@ -15,6 +15,9 @@ import {
   authTokenBodySchema,
 } from '#authContracts.js';
 import {
+  billingAccessCodeCreateBodySchema,
+  billingAccessCodeParamsSchema,
+  billingAccessCodeRedeemBodySchema,
   billingCheckoutBodySchema,
   billingCheckoutControlBodySchema,
   billingIdempotencyKeyHeadersSchema,
@@ -89,6 +92,8 @@ import {
   dashboardArtifactBulkArchiveResponseSchema,
   dashboardArtifactBulkPinBodySchema,
   dashboardArtifactBulkPinResponseSchema,
+  dashboardArtifactContentsQuerySchema,
+  dashboardArtifactContentsResponseSchema,
   dashboardArtifactListQuerySchema,
   dashboardArtifactListResponseSchema,
   dashboardArtifactPinBodySchema,
@@ -297,7 +302,11 @@ export const JobSummaryResponse = object({
   transport: Type.Optional(deviceTransportSchema),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   attempt: Type.Optional(Type.Number()),
   retryCount: Type.Optional(Type.Number()),
   deadlineAt: Type.Optional(Type.String()),
@@ -369,7 +378,7 @@ const BillingProviderResponse = object({
 });
 const BillingResponse = object({
   enabled: Type.Boolean(),
-  provider: Type.Union([Type.Literal('stripe'), Type.Literal('nowpayments'), Type.Literal('legacy')]),
+  provider: Type.Union([Type.Literal('stripe'), Type.Literal('nowpayments'), Type.Literal('legacy'), Type.Literal('gift')]),
   environment: ProviderEnvironment,
   managedPayments: Type.Boolean(),
   missingConfiguration: Type.Array(Type.String()),
@@ -383,9 +392,29 @@ const BillingResponse = object({
   quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
 });
 const BillingSubscriptionPage = object({ subscriptions: Type.Array(JsonObject), total: Type.Integer({ minimum: 0 }), nextCursor: PageCursor });
+const ApiJobWaitQuery = object({ timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })) });
+const ApiJobStatusBatchBody = object({ ids: Type.Array(Identifier, { minItems: 1, maxItems: 100, uniqueItems: true }) });
+const ApiJobStatusBatchResponse = object({ jobs: Type.Array(object({ id: Identifier, state: Type.Union([Type.Literal('found'), Type.Literal('not_found')]), job: Type.Optional(JobSummaryResponse) })) });
 const BillingRevenueCurrencyTotal = object({ currency: Type.String({ minLength: 3, maxLength: 3 }), gross: Type.Number({ minimum: 0 }), refunded: Type.Number({ minimum: 0 }), net: Type.Number({ minimum: 0 }) });
 const BillingRevenueProviderSummary = object({ state: Type.Union([Type.Literal('ready'), Type.Literal('unavailable'), Type.Literal('not_configured')]), totals: Type.Array(BillingRevenueCurrencyTotal), paymentCount: Type.Integer({ minimum: 0 }) });
 const BillingRevenueResponse = object({ updatedAt: Type.String({ format: 'date-time' }), complete: Type.Boolean(), totals: Type.Array(BillingRevenueCurrencyTotal), providers: object({ stripe: BillingRevenueProviderSummary, nowpayments: BillingRevenueProviderSummary }), warnings: Type.Array(Type.String()) });
+const BillingAccessCodeResponse = object({
+  id: Identifier,
+  prefix: Type.String(),
+  planId: Identifier,
+  durationDays: Type.Integer({ minimum: 1, maximum: 3650 }),
+  redeemBy: Type.String({ format: 'date-time' }),
+  createdBy: Type.Optional(Type.String()),
+  createdAt: Type.String({ format: 'date-time' }),
+  redeemedBy: Type.Optional(Type.String()),
+  redeemedAt: Type.Optional(Type.String({ format: 'date-time' })),
+  expiresAt: Type.Optional(Type.String({ format: 'date-time' })),
+  revokedAt: Type.Optional(Type.String({ format: 'date-time' })),
+  status: Type.Union([Type.Literal('available'), Type.Literal('redeemed'), Type.Literal('expired'), Type.Literal('revoked')]),
+});
+const BillingAccessCodeListResponse = object({ accessCodes: Type.Array(BillingAccessCodeResponse) });
+const BillingAccessCodeCreateResponse = object({ code: Type.String(), accessCode: BillingAccessCodeResponse });
+const BillingAccessCodeRedeemResponse = object({ planId: Identifier, expiresAt: Type.String({ format: 'date-time' }) });
 const ArtifactPage = object({ artifacts: Type.Array(JsonObject), total: Type.Integer({ minimum: 0 }), totalBytes: Type.Number(), maxBytes: Type.Number(), nextCursor: PageCursor });
 const DeviceListResponse = object({ devices: Type.Array(DeviceResponse) });
 const DeviceDisableImpactResponse = object({ deviceId: Identifier, queuedJobCount: Type.Integer({ minimum: 0 }), runningJobCount: Type.Integer({ minimum: 0 }) });
@@ -404,7 +433,11 @@ export const JobTimelineResponse = object({
   ])),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   shutdownRecoveryAt: Type.Optional(Type.Number()),
   versionLabel: Type.Optional(Type.String()),
   deviceId: Type.Optional(Identifier),
@@ -415,6 +448,12 @@ export const JobTimelineResponse = object({
   ipaMetadata: Type.Optional(JsonObject),
   ipaInfoPlist: Type.Optional(JsonObject),
   events: Type.Array(dashboardJobTimelineEventSchema),
+  dependencies: Type.Optional(Type.Array(Type.Object({
+    id: Type.String(),
+    label: Type.String(),
+    state: Type.Union([Type.Literal('ready'), Type.Literal('active'), Type.Literal('waiting'), Type.Literal('failed'), Type.Literal('blocked'), Type.Literal('not_applicable'), Type.Literal('unknown')]),
+    detail: Type.String(),
+  }, { additionalProperties: false }))),
   guidance: Type.Optional(JsonObject),
 });
 export type ApiErrorEnvelope = Static<typeof ErrorEnvelope>;
@@ -777,6 +816,7 @@ const SupportBundleResponse = Type.Object({
       at: Type.Number(),
       label: Type.String(),
       status: JobStatus,
+      durationMs: Type.Optional(Type.Number({ minimum: 0 })),
     }, { additionalProperties: false }))),
   }, { additionalProperties: false })),
   transportTimeline: Type.Array(Type.Object({
@@ -903,6 +943,10 @@ register('POST', '/v1/billing/checkout', {
   headers: billingIdempotencyKeyHeadersSchema,
   body: billingCheckoutBodySchema,
 });
+register('GET', '/v1/billing/access-codes', {});
+register('POST', '/v1/billing/access-codes', { body: billingAccessCodeCreateBodySchema });
+register('POST', '/v1/billing/access-codes/redeem', { body: billingAccessCodeRedeemBodySchema });
+register('POST', '/v1/billing/access-codes/:id/revoke', { params: billingAccessCodeParamsSchema });
 
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema });
 register('GET', '/v1/billing', {});
@@ -1124,6 +1168,10 @@ register('POST', '/v1/nowpayments/webhook', { headers: object({ 'x-nowpayments-s
 
 register('GET', '/v1/health', { response: { 200: HealthResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 429: ErrorEnvelope } });
 register('GET', '/v1/billing', { response: { 200: BillingResponse } });
+register('GET', '/v1/billing/access-codes', { response: { 200: BillingAccessCodeListResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
+register('POST', '/v1/billing/access-codes', { response: { 201: BillingAccessCodeCreateResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope } });
+register('POST', '/v1/billing/access-codes/redeem', { response: { 200: BillingAccessCodeRedeemResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 409: ErrorEnvelope } });
+register('POST', '/v1/billing/access-codes/:id/revoke', { response: { 200: BillingAccessCodeResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
 register('GET', '/v1/billing/subscriptions', { response: { 200: BillingSubscriptionPage } });
 register('GET', '/v1/billing/revenue', { querystring: billingRevenueQuerySchema, response: { 200: BillingRevenueResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
 register('GET', '/v1/dashboard/overview', { querystring: dashboardOverviewQuerySchema, response: { 200: dashboardOverviewResponseSchema } });
@@ -1266,6 +1314,15 @@ register('GET', '/v1/artifacts', {
 });
 register('GET', '/v1/artifacts/:id', { params: object({ id: Identifier }), querystring: object({ projectId: Type.Optional(Identifier) }), response: { 200: ArtifactSummaryResponse } });
 register('GET', '/v1/jobs/:id', { params: object({ id: Identifier }), response: { 200: JobSummaryResponse } });
+register('GET', '/v1/jobs/:id/wait', {
+  params: object({ id: Identifier }),
+  querystring: ApiJobWaitQuery,
+  response: { 200: JobSummaryResponse, 202: JobSummaryResponse, 404: ErrorEnvelope },
+});
+register('POST', '/v1/jobs/status', {
+  body: ApiJobStatusBatchBody,
+  response: { 200: ApiJobStatusBatchResponse, 400: ErrorEnvelope, 401: ErrorEnvelope },
+});
 register('GET', '/v1/testflight/:appId/trains', {
   params: object({ appId: Type.String({ minLength: 1, maxLength: 32, pattern: '^\\d+$' }) }),
   querystring: object({}),
@@ -1672,6 +1729,11 @@ register('GET', '/v1/artifacts/:id/file', {
 register('GET', '/v1/dashboard/artifacts/:id/file', {
   params: object({ id: Identifier }),
   response: { 200: BinaryFileResponse },
+});
+register('GET', '/v1/dashboard/artifacts/:id/contents', {
+  params: dashboardArtifactParamsSchema,
+  querystring: dashboardArtifactContentsQuerySchema,
+  response: { 200: dashboardArtifactContentsResponseSchema, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope },
 });
 register('DELETE', '/v1/dashboard/devices/:id', {
   params: object({ id: Identifier }),

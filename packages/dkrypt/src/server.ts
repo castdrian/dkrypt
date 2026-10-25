@@ -73,7 +73,7 @@ import { FixedWindowRateLimiter } from '#util/rateLimit.js';
 import { DailyDecryptLimitError } from '#jobs/repository.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { startRustDeviceEventMonitoring } from '#deviceBridgeEvents.js';
-import { createPublicOpenApiDocument } from '#publicApi.js';
+import { createPublicOpenApiDocument, isPublicApiKeyRoute } from '#publicApi.js';
 import { closeIncidentRepository, reconcileOperationalIncidents } from '#store/incidentRepository.js';
 import { closeIntegrationRepository } from '#store/integrationRepository.js';
 import { closeOauthLinkReviewRepository } from '#store/oauthLinkReview.js';
@@ -187,6 +187,7 @@ export async function buildServer(options: {
     const requestId = typeof supplied === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : randomUUID();
     (request as unknown as { id: string }).id = requestId;
     reply.header('X-Request-ID', requestId);
+    if (isPublicApiKeyRoute(request.method, request.url)) reply.header('X-Dkrypt-API-Version', '1');
     const traceparent = typeof request.headers.traceparent === 'string' ? request.headers.traceparent : undefined;
     const trace = startSpan('http.request', { 'http.method': request.method, 'http.request_id': requestId }, traceparent ? traceContextFromHeader(traceparent) : undefined);
     (request as unknown as { traceSpan: SpanHandle }).traceSpan = trace;

@@ -53,6 +53,23 @@ export function createDashboardOfflineAppStoreRoutes(
       return { ...services.readiness(), authentication: services.getAuthenticationStatus(), credentialRetrieval: services.getCredentialRetrievalStatus() };
     });
 
+    server.post('/v1/dashboard/appstore-offline/verify', {
+      schema: { hide: true },
+      preHandler: administrator,
+    }, () => {
+      const readiness = services.readiness();
+      const authentication = services.getAuthenticationStatus();
+      const checks = [
+        { id: 'processing-enabled', ready: readiness.enabled, detail: readiness.enabled ? 'Server-side App Store processing is enabled' : 'Server-side App Store processing is disabled' },
+        { id: 'downloader', ready: readiness.downloaderAvailable, detail: readiness.downloaderAvailable ? 'App Store downloader is executable' : 'App Store downloader is unavailable' },
+        { id: 'decryptor', ready: readiness.decryptorAvailable, detail: readiness.decryptorAvailable ? 'FairPlay decryptor is executable' : 'FairPlay decryptor is unavailable' },
+        { id: 'vault-encryption', ready: readiness.vault.encryptionReady, detail: readiness.vault.encryptionReady ? 'External credential encryption is ready' : 'External credential encryption key is unavailable' },
+        { id: 'apple-session', ready: Boolean(readiness.vault.authenticatedAt) && authentication.state !== 'running', detail: readiness.vault.authenticatedAt ? 'Apple Account session is verified' : 'Apple Account session is not verified' },
+        { id: 'fairplay-key', ready: readiness.vault.credentialConfigured, detail: readiness.vault.credentialConfigured ? 'At least one device-derived FairPlay key is available' : 'No device-derived FairPlay key is configured' },
+      ];
+      return { ok: checks.every((check) => check.ready), checkedAt: new Date().toISOString(), purchaseMade: false, downloadStarted: false, checks };
+    });
+
     server.post('/v1/dashboard/appstore-offline/credential/retrieve', {
       schema: { hide: true, body: Type.Object({ deviceId: Type.String({ minLength: 1, maxLength: 128 }) }, { additionalProperties: false }) },
       preHandler: reauthenticatedAdministrator,

@@ -30,7 +30,8 @@ import { runWithJobDeadline } from '#jobs/deadline.js';
 import { SCHEDULER_JOB_TIMEOUT_MS } from '#jobs/timeouts.js';
 import { delayWithSignal } from '#util/abort.js';
 import { getJobDeviceBlocker, minimumOsVersionForBuild } from '#jobs/deviceDispatch.js';
-import { offlineAppStoreProcessor, setOfflineAppStoreDispatchNotifier } from '#offlineAppStore.js';
+import { OfflineAppStoreUnsupportedPackageError, offlineAppStoreProcessor, setOfflineAppStoreDispatchNotifier } from '#offlineAppStore.js';
+import { computeOfflineAttemptBudgetMs, OfflineAppStoreCircuitBreaker, runWithOfflineAttemptTimeout } from '#jobs/offlineAppStorePolicy.js';
 
 const jobs = new Map<string, Job>();
 
@@ -43,6 +44,11 @@ const runningJobs = new Map<string, Promise<void>>();
 const runningJobControllers = new Map<string, AbortController>();
 const queuedDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const queueSloNotified = new Set<string>();
+const offlineAppStoreCircuit = new OfflineAppStoreCircuitBreaker(
+  config.appStoreOfflineCircuitFailureThreshold,
+  config.appStoreOfflineCircuitCooldownSeconds * 1000,
+);
+let offlineCircuitProbeTimer: ReturnType<typeof setTimeout> | undefined;
 let acceptingJobs = true;
 
 function serializableJob(job: Job): Omit<Job, 'childProcess' | 'waiters'> {
@@ -673,7 +679,8 @@ function getCurrentQueueReason(job: Job): string | undefined {
   if (enabledDevices.length === 0) {
     if (canStartOfflineAttempt(job)) return busyOfflineWorkers.size >= config.appStoreOfflineMaxWorkers ? 'Waiting for a server-side App Store worker' : undefined;
     const fallback = job.offlineFailureReason ? `Server-side attempt failed: ${job.offlineFailureReason} · ` : '';
-    return `${fallback}Waiting for a device accepting jobs`;
+    const offlineBlocker = offlineAppStoreBlocker(job);
+    return `${fallback}Waiting for a device accepting jobs${offlineBlocker ? ` · Server-side processing unavailable: ${offlineBlocker}` : ''}`;
   }
   const devices = job.preferredDeviceId
     ? enabledDevices.filter((device) => device.id === job.preferredDeviceId)
@@ -900,9 +907,24 @@ function getJobDispatchableDeviceCount(job: Job): number {
   return deviceCount + offlineWorkerSlots(job);
 }
 
+function offlineAppStoreBlocker(job: Job): string | undefined {
+  if (job.testflight || !config.appStoreOfflineDecryptEnabled) return undefined;
+  const circuit = offlineAppStoreCircuit.getStatus();
+  if (circuit.state === 'open' && circuit.nextProbeAt !== undefined) return `temporarily paused after repeated failures until ${new Date(circuit.nextProbeAt).toISOString()}`;
+  const readiness = offlineAppStoreProcessor.readiness(job);
+  if (readiness.ready) return undefined;
+  return readiness.blockers.length > 0 ? readiness.blockers.join(' · ') : undefined;
+}
+
 function requiresServerSideAppStoreAttempt(job: Job): boolean {
   if (job.testflight || job.offlineAttemptedAt) return false;
-  return offlineAppStoreProcessor.readiness(job).enabled;
+  if (!offlineAppStoreProcessor.readiness(job).ready || !offlineAppStoreCircuit.canStartAttempt()) return false;
+  return computeOfflineAttemptBudgetMs({
+    now: Date.now(),
+    deadlineAt: job.deadlineAt,
+    maximumAttemptMs: config.appStoreOfflineAttemptTimeoutSeconds * 1000,
+    fallbackReserveMs: config.appStoreOfflineFallbackReserveSeconds * 1000,
+  }) > 0;
 }
 
 function canStartOfflineAttempt(job: Job): boolean {
@@ -912,6 +934,23 @@ function canStartOfflineAttempt(job: Job): boolean {
 function offlineWorkerSlots(job: Job): number {
   if (!canStartOfflineAttempt(job)) return 0;
   return Math.max(0, config.appStoreOfflineMaxWorkers - busyOfflineWorkers.size);
+}
+
+function scheduleOfflineCircuitProbe(): void {
+  if (offlineCircuitProbeTimer) clearTimeout(offlineCircuitProbeTimer);
+  offlineCircuitProbeTimer = undefined;
+  const status = offlineAppStoreCircuit.getStatus();
+  if (status.state !== 'open' || status.nextProbeAt === undefined) return;
+  offlineCircuitProbeTimer = setTimeout(() => {
+    offlineCircuitProbeTimer = undefined;
+    emitJobsChanged();
+    pumpWorkers();
+  }, Math.max(1, status.nextProbeAt - Date.now()));
+  offlineCircuitProbeTimer.unref();
+}
+
+export function getOfflineAppStoreDispatchStatus(): ReturnType<OfflineAppStoreCircuitBreaker['getStatus']> {
+  return offlineAppStoreCircuit.getStatus();
 }
 
 export function notifyDeviceDispatchStateChanged(): void {
@@ -988,6 +1027,12 @@ function takeNextOfflineJobId(): string | undefined {
 }
 
 function startJobWorker(job: Job, device?: DeviceRecord): void {
+  if (!device && !offlineAppStoreCircuit.beginAttempt()) {
+    busyOfflineWorkers.delete(job.id);
+    insertByPriority(job.id, job.priority);
+    scheduleOfflineCircuitProbe();
+    return;
+  }
   if (device) busyDeviceIds.add(device.id);
   else busyOfflineWorkers.add(job.id);
   const run = withCorrelation({
@@ -1066,7 +1111,24 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
   try {
     const remainingMs = job.deadlineAt === undefined ? undefined : Math.max(1, job.deadlineAt - Date.now());
     await runWithJobDeadline(
-      (signal) => device ? runDecrypt(job, device, signal) : runOfflineAppStoreDecrypt(job, signal),
+      (signal) => {
+        if (device) return runDecrypt(job, device, signal);
+        const attemptBudgetMs = computeOfflineAttemptBudgetMs({
+          now: Date.now(),
+          deadlineAt: job.deadlineAt,
+          maximumAttemptMs: config.appStoreOfflineAttemptTimeoutSeconds * 1000,
+          fallbackReserveMs: config.appStoreOfflineFallbackReserveSeconds * 1000,
+        });
+        return runWithOfflineAttemptTimeout(
+          (offlineSignal, reportActivity) => runOfflineAppStoreDecrypt(job, offlineSignal, reportActivity),
+          signal,
+          attemptBudgetMs,
+          () => terminateChildProcess(job.childProcess, 'SIGTERM'),
+          config.jobProcessGraceSeconds * 1000,
+          () => terminateChildProcess(job.childProcess, 'SIGKILL'),
+          config.appStoreOfflineStallTimeoutSeconds * 1000,
+        );
+      },
       controller,
       {
         timeoutMs: remainingMs,
@@ -1094,6 +1156,11 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     if (!device) {
       incrementMetric('appstore_offline_attempts_total', { outcome: 'success' });
       observeMetric('appstore_offline_attempt_duration_ms', Math.max(0, job.finishedAt - startedAt), { outcome: 'success' });
+      job.offlineAttemptDurationMs = Math.max(0, job.finishedAt - startedAt);
+      offlineAppStoreCircuit.recordSuccess();
+      scheduleOfflineCircuitProbe();
+    } else if (job.offlineDeviceFallbackStartedAt !== undefined) {
+      job.deviceFallbackDurationMs = Math.max(0, job.finishedAt - job.offlineDeviceFallbackStartedAt);
     }
     incrementMetric('jobs_completed_total', { source: job.source });
     observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { executionPath: job.executionPath, source: job.source });
@@ -1109,6 +1176,11 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       const outcome = job.deadlineExceeded ? 'deadline' : job.cancelledBy ? 'cancelled' : job.shutdownRecoveryPending ? 'interrupted' : 'failure';
       incrementMetric('appstore_offline_attempts_total', { outcome });
       observeMetric('appstore_offline_attempt_duration_ms', Math.max(0, Date.now() - startedAt), { outcome });
+      job.offlineAttemptDurationMs = Math.max(0, Date.now() - startedAt);
+      if (outcome === 'failure' && !(err instanceof OfflineAppStoreUnsupportedPackageError)) {
+        offlineAppStoreCircuit.recordFailure();
+        scheduleOfflineCircuitProbe();
+      }
     }
     const preventsDeviceFallback = Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
     if (device && job.offlineFailureReason) message = `${message}; earlier server-side attempt failed: ${job.offlineFailureReason}`;

@@ -45,6 +45,17 @@ export const dashboardArtifactListResponseSchema = Type.Object({
 
 export const dashboardArtifactParamsSchema = Type.Object({ id: identifierSchema }, additionalProperties);
 export const dashboardArtifactDetailQuerySchema = Type.Object({ projectId: Type.Optional(projectIdentifierSchema) }, additionalProperties);
+export const dashboardArtifactContentsQuerySchema = Type.Object({
+  projectId: Type.Optional(projectIdentifierSchema),
+  q: Type.Optional(Type.String({ maxLength: 200 })),
+  offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 100_000 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+}, additionalProperties);
+export const dashboardArtifactContentsResponseSchema = Type.Object({
+  entries: Type.Array(Type.Object({ path: Type.String(), compressedSize: Type.Integer({ minimum: 0 }), uncompressedSize: Type.Integer({ minimum: 0 }), crc32: Type.Integer({ minimum: 0 }) }, additionalProperties)),
+  total: Type.Integer({ minimum: 0 }),
+  nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+}, additionalProperties);
 
 export const dashboardArtifactPinBodySchema = Type.Object({ pinned: Type.Boolean() }, additionalProperties);
 
@@ -166,6 +177,12 @@ export type DashboardArtifactDetailRoute = {
   Params: Static<typeof dashboardArtifactParamsSchema>;
   Querystring: Static<typeof dashboardArtifactDetailQuerySchema>;
   Reply: { 200: Static<typeof dashboardArtifactResponseSchema>; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactContentsRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Querystring: Static<typeof dashboardArtifactContentsQuerySchema>;
+  Reply: { 200: Static<typeof dashboardArtifactContentsResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope };
 };
 
 export type DashboardArtifactPinRoute = {

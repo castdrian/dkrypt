@@ -8,7 +8,7 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
 
   try {
     const response = await server.inject({ method: 'GET', url: '/openapi.json' });
-    const document = response.json() as { info?: { description?: string }; paths?: Record<string, Record<string, unknown>> };
+    const document = response.json() as { info?: { description?: string }; paths?: Record<string, Record<string, { responses?: Record<string, { headers?: Record<string, { schema?: { const?: string } }> }> }>> };
     expect(response.statusCode).toBe(200);
     expect(Object.keys(document.paths ?? {}).sort()).toEqual([
       '/v1/artifacts',
@@ -16,10 +16,13 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
       '/v1/artifacts/{id}/file',
       '/v1/decrypt',
       '/v1/decrypts',
+      '/v1/jobs/status',
       '/v1/jobs/{id}',
+      '/v1/jobs/{id}/wait',
       '/v1/testflight/decrypt',
     ]);
     expect(document.info?.description).toContain('decrypt');
+    expect(document.paths?.['/v1/jobs/{id}']?.get?.responses?.['200']?.headers?.['X-Dkrypt-API-Version']?.schema?.const).toBe('1');
     expect(JSON.stringify(document).toLowerCase()).not.toContain('billing');
     expect(JSON.stringify(document).toLowerCase()).not.toContain('/v1/auth');
     expect(JSON.stringify(document).toLowerCase()).not.toContain('/v1/dashboard');
@@ -32,6 +35,8 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
 
 test('API-key route policy matches concrete job and TestFlight paths only', () => {
   expect(isPublicApiKeyRoute('GET', '/v1/jobs/job-123')).toBe(true);
+  expect(isPublicApiKeyRoute('GET', '/v1/jobs/job-123/wait')).toBe(true);
+  expect(isPublicApiKeyRoute('POST', '/v1/jobs/status')).toBe(true);
   expect(isPublicApiKeyRoute('POST', '/v1/testflight/decrypt')).toBe(true);
   expect(isPublicApiKeyRoute('POST', '/v1/decrypt')).toBe(false);
   expect(isPublicApiKeyRoute('GET', '/v1/decryp')).toBe(false);
@@ -43,6 +48,9 @@ test('API-key route policy matches concrete job and TestFlight paths only', () =
   expect(isPublicApiKeyRoute('GET', '/v1/testflight/123/builds')).toBe(false);
   expect(isPublicApiKeyRoute('GET', '/v1/testflight/123/trains')).toBe(false);
   expect(isPublicApiKeyRoute('GET', '/v1/billing')).toBe(false);
+  expect(isPublicApiKeyRoute('GET', '/v1/billing/access-codes')).toBe(false);
+  expect(isPublicApiKeyRoute('POST', '/v1/billing/access-codes')).toBe(false);
+  expect(isPublicApiKeyRoute('POST', '/v1/billing/access-codes/redeem')).toBe(false);
   expect(isPublicApiKeyRoute('POST', '/v1/billing/checkout')).toBe(false);
   expect(isPublicApiKeyRoute('POST', '/v1/billing/cancel')).toBe(false);
   expect(isPublicApiKeyRoute('GET', '/v1/billing/subscriptions')).toBe(false);
@@ -62,14 +70,18 @@ test('generated API keys are rejected outside the decrypt and artifact API allow
 
   try {
     const artifactLibrary = await server.inject({ method: 'GET', url: '/v1/artifacts', headers });
+    expect(artifactLibrary.headers['x-dkrypt-api-version']).toBe('1');
     const internalRequests = [
       ['GET', '/v1/health'],
       ['GET', '/v1/metrics'],
       ['GET', '/v1/billing'],
+      ['GET', '/v1/billing/access-codes'],
       ['GET', '/v1/billing/subscriptions'],
       ['GET', '/v1/billing/revenue'],
       ['GET', '/v1/billing/provider-status'],
       ['POST', '/v1/billing/checkout'],
+      ['POST', '/v1/billing/access-codes'],
+      ['POST', '/v1/billing/access-codes/redeem'],
       ['POST', '/v1/billing/cancel'],
       ['POST', '/v1/billing/portal'],
       ['PUT', '/v1/billing/checkouts'],

@@ -174,9 +174,13 @@ Dashboard-generated API keys use `Authorization: Bearer <generated-key>` and cov
 | `POST /v1/decrypts` | Queue a decrypt by release selector |
 | `POST /v1/testflight/decrypt` | Queue a TestFlight build decrypt |
 | `GET /v1/jobs/:id` | Read job status, attempts, deadline, warnings, and transport evidence |
+| `GET /v1/jobs/:id/wait` | Wait up to 25 seconds for a job update, then poll again if it is still running |
+| `POST /v1/jobs/status` | Read up to 100 job IDs in one status request |
 | `GET /v1/artifacts` | List IPA artifacts |
 | `GET /v1/artifacts/:id` | Read IPA artifact metadata |
 | `GET /v1/artifacts/:id/file` | Download an IPA artifact |
+
+Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility policy](packages/dkrypt/docs/api/compatibility.md) describes response stability and deprecation windows. Find [curl, Python, TypeScript, CLI, and local mock examples](packages/dkrypt/docs/api/examples.md). The local simulator listens only on `127.0.0.1`, accepts the fixed `mock-dkrypt-key`, and never contacts Apple or a payment provider.
 
 Dashboard, billing, account, session, health, and administration routes are internal to dkrypt and are not available to generated API keys. The public OpenAPI document is available at `/openapi.json` and the Scalar reference UI at `/reference`.
 

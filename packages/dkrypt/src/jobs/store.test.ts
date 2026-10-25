@@ -48,6 +48,7 @@ function metricHistogramCount(name: string, labels: Record<string, string>): num
 }
 
 mock.module('#offlineAppStore.js', () => ({
+  OfflineAppStoreUnsupportedPackageError: class OfflineAppStoreUnsupportedPackageError extends Error {},
   setOfflineAppStoreDispatchNotifier: (notifier: () => void) => { offlineAppStoreDispatchNotifier = notifier; },
   offlineAppStoreProcessor: {
     readiness: (job?: Pick<Job, 'testflight'>) => ({
@@ -336,6 +337,7 @@ describe('enqueueDecryptJob', () => {
 
     try {
       expect(job).toMatchObject({ status: 'running', executionPath: 'appstore_offline' });
+      for (let attempt = 0; attempt < 50 && offlineWorkerRunCount === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
       expect(cancelJob(job.id, 'tester')).toBe(true);
       await waitForJob(job, 1_000);
       expect(job).toMatchObject({ status: 'failed', executionPath: 'appstore_offline', cancelledBy: 'tester' });
@@ -390,7 +392,7 @@ describe('enqueueDecryptJob', () => {
     }
   });
 
-  test('attempts server-side App Store processing before using a device when it is not ready', async () => {
+  test('uses a device immediately when server-side App Store prerequisites are not ready', async () => {
     await clearActiveTestJobs();
     offlineWorkerEnabled = true;
     offlineWorkerReady = false;
@@ -398,12 +400,11 @@ describe('enqueueDecryptJob', () => {
     const job = enqueueDecryptJob(`com.test.offline-not-ready.${crypto.randomUUID()}`, 'manual', { preferredDeviceId: testDeviceId });
 
     try {
-      for (let attempt = 0; attempt < 200 && (job.executionPath !== 'device_fallback' || job.status !== 'running'); attempt += 1) {
+      for (let attempt = 0; attempt < 200 && job.status !== 'running'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
-      expect(job).toMatchObject({ status: 'running', attempt: 2, executionPath: 'device_fallback', deviceId: testDeviceId });
-      expect(offlineWorkerRunCount).toBe(1);
-      expect(job.timeline?.some((event) => event.label.includes('Apple Account session needs verification'))).toBe(true);
+      expect(job).toMatchObject({ status: 'running', attempt: 1, executionPath: 'device', deviceId: testDeviceId });
+      expect(offlineWorkerRunCount).toBe(0);
     } finally {
       offlineWorkerEnabled = false;
       offlineWorkerReady = false;

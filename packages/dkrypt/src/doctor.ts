@@ -1,4 +1,5 @@
-import { accessSync, constants, existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
+import { cpus, freemem, totalmem } from 'node:os';
 import { config, cryptoBillingEnabled, isValidStripeSecretKeyRotation, nowpaymentsConfigured, stripeEnabled, stripeEnvironment } from '#config.js';
 import { getRustDeviceBridgeStatus } from '#idevice.js';
 import { getNowPaymentsProviderStatus } from '#nowpayments.js';
@@ -18,6 +19,53 @@ function rotationCheck(id: string, current: string, previous: string, minimumLen
     id,
     status: valid ? 'ok' : 'error',
     detail: valid ? (previous ? 'Current and previous credentials are ready for rotation' : 'No overlapping previous credential is configured') : 'Current and previous credentials must both meet the minimum length and be different',
+  };
+}
+
+function readNumericLimit(path: string): number | undefined {
+  try {
+    const value = readFileSync(path, 'utf8').trim();
+    if (!/^\d+$/.test(value) || value === String(Number.MAX_SAFE_INTEGER)) return undefined;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function checkFilePermissions(id: string, targetPath: string, description: string): DoctorCheck {
+  try {
+    const mode = statSync(targetPath).mode & 0o777;
+    const exposedBits = mode & 0o077;
+    return {
+      id,
+      status: exposedBits === 0 ? 'ok' : 'warn',
+      detail: exposedBits === 0 ? `${description} is restricted to its owner` : `${description} grants access to group or other users; review its filesystem permissions`,
+    };
+  } catch {
+    return { id, status: 'warn', detail: `${description} permissions could not be checked` };
+  }
+}
+
+function runtimeCapacityCheck(): DoctorCheck {
+  const hostCpuCount = cpus().length;
+  const hostMemory = totalmem();
+  const availableMemory = freemem();
+  const memoryLimit = readNumericLimit('/sys/fs/cgroup/memory.max');
+  let cpuLimit = readNumericLimit('/sys/fs/cgroup/cpu.max');
+  if (cpuLimit === undefined) {
+    try {
+      const [quota, period] = readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim().split(/\s+/).map(Number);
+      if (Number.isFinite(quota) && quota > 0 && Number.isFinite(period) && period > 0) cpuLimit = Math.max(1, Math.floor(quota / period));
+    } catch {}
+  }
+  const effectiveCpu = cpuLimit ?? hostCpuCount;
+  const effectiveMemory = Math.min(hostMemory, memoryLimit ?? hostMemory);
+  const status = effectiveCpu < 2 || effectiveMemory < 2 * 1024 ** 3 || availableMemory < 512 * 1024 ** 2 ? 'warn' : 'ok';
+  return {
+    id: 'worker-capacity',
+    status,
+    detail: `${effectiveCpu} effective CPU core(s), ${Math.round(effectiveMemory / 1024 ** 3)} GiB memory limit, ${Math.round(availableMemory / 1024 ** 2)} MiB currently free`,
   };
 }
 
@@ -49,11 +97,13 @@ export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt
   try {
     accessSync(config.stateDir, constants.R_OK | constants.W_OK);
     checks.push({ id: 'state', status: 'ok', detail: 'State volume is readable and writable' });
+    checks.push(checkFilePermissions('state-permissions', config.stateDir, 'State directory'));
   } catch {
     checks.push({ id: 'state', status: 'error', detail: 'State volume is not readable and writable' });
   }
   const disk = getDiskUsage(config.artifactDir);
   checks.push({ id: 'artifacts', status: disk ? disk.usedPercent >= 0.95 ? 'error' : disk.usedPercent >= 0.85 ? 'warn' : 'ok' : 'error', detail: disk ? `${Math.round(disk.usedPercent * 100)}% used with ${disk.freeBytes} bytes free` : 'Artifact storage is unavailable' });
+  checks.push(runtimeCapacityCheck());
   const backup = verifyLatestDatabaseBackup();
   checks.push({ id: 'backup-restore-drill', status: backup.ok ? 'ok' : backup.detail.startsWith('No verified') ? 'warn' : 'error', detail: backup.detail });
   if (config.deviceBridgeSecret.length < 32) checks.push({ id: 'device-bridge', status: 'error', detail: 'Rust device bridge secret is missing or too short' });
@@ -77,6 +127,8 @@ export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt
   checks.push(rotationCheck('discord-oauth-secret-rotation', config.discordOauthClientSecret, config.discordOauthClientSecretPrevious, 16));
   checks.push(rotationCheck('smtp-secret-rotation', config.smtpPass, config.smtpPassPrevious, 1));
   checks.push({ id: 'pairing-store', status: existsSync(config.devicePairingStore) ? 'ok' : 'warn', detail: existsSync(config.devicePairingStore) ? 'Device pairing store exists' : 'Device pairing store will be created on first bridge start' });
+  if (existsSync(config.devicePairingStore)) checks.push(checkFilePermissions('pairing-store-permissions', config.devicePairingStore, 'Device pairing store'));
+  checks.push({ id: 'security-posture', status: config.publicBaseUrl.startsWith('https://') && checks.some((check) => check.id === 'backup-restore-drill' && check.status === 'ok') ? 'ok' : 'warn', detail: config.publicBaseUrl.startsWith('https://') ? 'Secure public origin is configured; backup and credential checks are listed above' : 'Use HTTPS for the public origin and keep verified backups current' });
   const otelSignals = [
     config.otelExporterOtlpEndpoint || config.otelExporterOtlpTracesEndpoint ? 'traces' : undefined,
     config.otelExporterOtlpEndpoint || config.otelExporterOtlpMetricsEndpoint ? 'metrics' : undefined,

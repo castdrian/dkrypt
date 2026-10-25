@@ -3,6 +3,9 @@ import Stripe from 'stripe';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type {
+  BillingAccessCodeCreateRoute,
+  BillingAccessCodeRedeemRoute,
+  BillingAccessCodeRevokeRoute,
   BillingCancelRoute,
   BillingCheckoutControlRoute,
   BillingCheckoutRoute,
@@ -17,11 +20,13 @@ import type {
 import { getRouteContract } from '#contracts.js';
 import {
   acquireBillingCheckoutLock,
+  createBillingAccessCode,
   getBillingCustomerId,
   getBillingSubscriptionById,
   getBillingEntitlements,
   getBillingSubscription,
   getBillingUserId,
+  listBillingAccessCodes,
   getPlan,
   getPurchasablePlan,
   isBillingSubscriptionActive,
@@ -31,11 +36,14 @@ import {
   hasLegacyBillingRecord,
   linkBillingCustomer,
   listBillingSubscriptions,
+  listCryptoCheckouts,
   listPlans,
   planForPrice,
   upsertBillingCustomer,
   upsertBillingSubscription,
   releaseBillingCheckoutLock,
+  redeemBillingAccessCode,
+  revokeBillingAccessCode,
   recordStripeCheckoutIdempotencyAttempt,
 } from '#billing.js';
 import { config, stripeEnabled, stripeEnvironment, stripeMissingConfiguration, stripeNewCatalogMissingConfiguration } from '#config.js';
@@ -49,7 +57,7 @@ import {
   verifyNowPaymentsEvent,
 } from '#cryptoBilling.js';
 import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpayments.js';
-import { getDecryptQuotaUsage } from '#jobs/repository.js';
+import { getDecryptQuotaJournal, getDecryptQuotaUsage } from '#jobs/repository.js';
 import { getAuthProfile, resolveAuthUserId } from '#identity.js';
 import { log } from '#logger.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
@@ -458,6 +466,58 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   const callStripe = <T>(request: (client: Stripe) => Promise<T>): Promise<T> => options.stripeClient
     ? request(options.stripeClient())
     : stripeRequest(request);
+  server.get('/v1/billing/usage.csv', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const rows = getDecryptQuotaJournal(userId);
+    const headers = ['job_id', 'admitted_at', 'reservation_state', 'bundle_id', 'version', 'project_id', 'source', 'job_status', 'execution_path'];
+    const csv = [headers, ...rows.map((row) => [row.jobId, new Date(row.admittedAt).toISOString(), row.state, row.bundleId ?? '', row.versionLabel ?? '', row.projectId ?? '', row.source ?? '', row.status ?? 'pruned', row.executionPath ?? ''])]
+      .map((values) => values.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(','))
+      .join('\r\n');
+    return reply.type('text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="dkrypt-usage.csv"').send(`${csv}\r\n`);
+  });
+
+  server.get('/v1/billing/invoices', { schema: { hide: true }, preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const invoices: Array<{ id: string; provider: 'stripe' | 'nowpayments'; planId: string; status: string; createdAt: string; amountMinor: number; currency: string; invoiceUrl?: string; paymentId?: string }> = [];
+    const warnings: string[] = [];
+    const customerId = getBillingCustomerId(userId);
+    if (stripeEnabled && customerId) {
+      try {
+        const result = await callStripe((client) => client.invoices.list({ customer: customerId, limit: 100 }));
+        for (const invoice of result.data) {
+          const subscriptionId = invoiceSubscriptionId(invoice);
+          const subscription = subscriptionId ? getBillingSubscription(userId, subscriptionId) : undefined;
+          invoices.push({
+            id: invoice.id,
+            provider: 'stripe',
+            planId: subscription?.planId ?? 'unknown',
+            status: invoice.status ?? 'unknown',
+            createdAt: new Date(invoice.created * 1000).toISOString(),
+            amountMinor: invoice.amount_paid || invoice.total,
+            currency: invoice.currency.toUpperCase(),
+            invoiceUrl: invoice.invoice_pdf ?? invoice.hosted_invoice_url ?? undefined,
+          });
+        }
+      } catch {
+        warnings.push('Stripe invoice history is temporarily unavailable');
+      }
+    }
+    for (const checkout of listCryptoCheckouts().filter((entry) => entry.userId === userId)) {
+      invoices.push({
+        id: checkout.checkoutId,
+        provider: 'nowpayments',
+        planId: checkout.planId,
+        status: checkout.status,
+        createdAt: checkout.createdAt,
+        amountMinor: Math.round(checkout.amount * 100),
+        currency: checkout.currency.toUpperCase(),
+        paymentId: checkout.providerPaymentId,
+      });
+    }
+    invoices.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    return reply.send({ invoices: invoices.slice(0, 100), warnings });
+  });
+
   server.get('/v1/billing', { schema: getRouteContract('GET', '/v1/billing'), preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const profile = getAuthProfile(userId);
@@ -507,6 +567,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
 
   server.post<BillingCheckoutRoute>('/v1/billing/checkout', { schema: getRouteContract('POST', '/v1/billing/checkout'), preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
+    if (getBillingEntitlements(userId).provider === 'gift') return sendBillingError(request, reply, 409, 'gift access is active until it expires; a paid plan can be started afterward', 'gift_access_active');
     const target = getPurchasablePlan(request.body.planId, userId);
     if (!target) return sendBillingError(request, reply, 400, 'unknown plan');
     const provider = request.body.provider ?? 'stripe';
@@ -636,6 +697,48 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   });
 
   const requireBillingManager = fastifyRequirePermission(PermissionFlag.manageBilling);
+
+  server.get('/v1/billing/access-codes', { schema: getRouteContract('GET', '/v1/billing/access-codes'), preHandler: requireBillingManager }, (_request, reply) => {
+    const now = Date.now();
+    const accessCodes = listBillingAccessCodes().map((accessCode) => ({
+      ...accessCode,
+      status: accessCode.revokedAt ? 'revoked' : accessCode.redeemedAt ? Date.parse(accessCode.expiresAt ?? '') <= now ? 'expired' : 'redeemed' : Date.parse(accessCode.redeemBy) <= now ? 'expired' : 'available',
+    }));
+    return reply.send({ accessCodes });
+  });
+
+  server.post<BillingAccessCodeCreateRoute>('/v1/billing/access-codes', { schema: getRouteContract('POST', '/v1/billing/access-codes'), preHandler: requireBillingManager }, (request, reply) => {
+    const actor = getFastifySession(request)!.sub;
+    const created = createBillingAccessCode({ ...request.body, createdBy: actor });
+    if (!created) return sendBillingError(request, reply, 400, 'choose an available plan and valid access and redemption durations');
+    recordAudit(actor, 'billing.access_code.create', created.accessCode.id, `created ${created.accessCode.planId} access for ${created.accessCode.durationDays} days`);
+    return reply.code(201).send({
+      code: created.code,
+      accessCode: { ...created.accessCode, status: 'available' },
+    });
+  });
+
+  server.post<BillingAccessCodeRedeemRoute>('/v1/billing/access-codes/redeem', { schema: getRouteContract('POST', '/v1/billing/access-codes/redeem'), preHandler: fastifyRequireSession }, (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const result = redeemBillingAccessCode(request.body.code, userId);
+    if ('error' in result) {
+      if (result.error === 'already_has_access') return sendBillingError(request, reply, 409, 'this account already has active billing access', 'billing_access_exists');
+      return sendBillingError(request, reply, 400, 'this access code is invalid, expired, already redeemed, or revoked', 'access_code_unavailable');
+    }
+    recordAudit(userId, 'billing.access_code.redeem', result.accessCode.id, `redeemed ${result.accessCode.planId} access`);
+    return reply.send({ planId: result.accessCode.planId, expiresAt: result.accessCode.expiresAt });
+  });
+
+  server.post<BillingAccessCodeRevokeRoute>('/v1/billing/access-codes/:id/revoke', { schema: getRouteContract('POST', '/v1/billing/access-codes/:id/revoke'), preHandler: requireBillingManager }, (request, reply) => {
+    const actor = getFastifySession(request)!.sub;
+    const revoked = revokeBillingAccessCode(request.params.id);
+    if (!revoked) return sendBillingError(request, reply, 404, 'access code was not found or has already been revoked');
+    recordAudit(actor, 'billing.access_code.revoke', revoked.id, 'revoked access code');
+    const now = Date.now();
+    const status = revoked.redeemedAt && Date.parse(revoked.expiresAt ?? '') <= now ? 'expired' : 'revoked';
+    const { codeHash: _codeHash, ...safeRecord } = revoked;
+    return reply.send({ ...safeRecord, status });
+  });
 
   const readRevenue = options.billingRevenue ?? (options.stripeClient
     ? createBillingRevenueReader({

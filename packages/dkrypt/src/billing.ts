@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { openStateCollectionDatabase, writeStateMirror, type StateCollectionReplacement } from '#store/sqlite.js';
@@ -146,6 +146,22 @@ export interface BillingSnapshot {
   processedEvents: BillingEventRecord[];
   entitlementHistory?: BillingEntitlementEvent[];
   stripeCheckoutIdempotency?: StripeCheckoutIdempotencyAttempt[];
+  accessCodes?: BillingAccessCode[];
+}
+
+export interface BillingAccessCode {
+  id: string;
+  codeHash: string;
+  prefix: string;
+  planId: Exclude<PlanId, 'viewer'>;
+  durationDays: number;
+  redeemBy: string;
+  createdBy?: string;
+  createdAt: string;
+  redeemedBy?: string;
+  redeemedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
 }
 
 export const STRIPE_CHECKOUT_IDEMPOTENCY_TTL_MS = 23 * 60 * 60 * 1000;
@@ -155,9 +171,11 @@ export interface BillingEntitlements {
   decrypt: boolean;
   api: boolean;
   priority: number;
-  provider?: BillingProvider;
+  provider?: BillingProvider | 'gift';
   status?: string;
   subscriptionId?: string;
+  accessCodeId?: string;
+  expiresAt?: string;
   nextBilledAt?: string;
   scheduledChangeAction?: string;
   scheduledChangeAt?: string;
@@ -246,7 +264,7 @@ const checkoutLocks = new Set<string>();
 let loadedFromLegacyFile = false;
 
 function emptySnapshot(): BillingSnapshot {
-  return { customers: [], subscriptions: [], cryptoCheckouts: [], cryptoCharges: [], processedEvents: [], entitlementHistory: [], stripeCheckoutIdempotency: [] };
+  return { customers: [], subscriptions: [], cryptoCheckouts: [], cryptoCharges: [], processedEvents: [], entitlementHistory: [], stripeCheckoutIdempotency: [], accessCodes: [] };
 }
 
 function load(): BillingSnapshot {
@@ -427,6 +445,16 @@ export function anonymizeBillingUser(userId: string): void {
     event.userId = undefined;
     changed = true;
   }
+  for (const accessCode of state.accessCodes ?? []) {
+    if (accessCode.createdBy === userId) {
+      accessCode.createdBy = undefined;
+      changed = true;
+    }
+    if (accessCode.redeemedBy === userId) {
+      accessCode.redeemedBy = undefined;
+      changed = true;
+    }
+  }
   const retainedAttempts = (state.stripeCheckoutIdempotency ?? []).filter((attempt) => attempt.userId !== userId);
   if (retainedAttempts.length !== (state.stripeCheckoutIdempotency ?? []).length) {
     state.stripeCheckoutIdempotency = retainedAttempts;
@@ -448,7 +476,98 @@ export function listBillingEntitlementHistory(subscriptionId?: string): BillingE
 }
 
 export function getBillingEntitlements(userId: string): BillingEntitlements {
-  return resolveBillingEntitlements(billingRepository.listSubscriptions({ userId }));
+  const subscriptionEntitlements = resolveBillingEntitlements(billingRepository.listSubscriptions({ userId }));
+  if (subscriptionEntitlements.planId !== 'viewer') return subscriptionEntitlements;
+  const accessCode = activeBillingAccessCode(userId);
+  if (!accessCode) return subscriptionEntitlements;
+  const plan = planDefinitions.find((definition) => definition.id === accessCode.planId);
+  if (!plan) return subscriptionEntitlements;
+  return {
+    planId: plan.id,
+    decrypt: plan.decrypt,
+    api: plan.api,
+    priority: plan.priority,
+    provider: 'gift',
+    status: 'active',
+    accessCodeId: accessCode.id,
+    expiresAt: accessCode.expiresAt,
+    dailyDecryptLimit: plan.dailyDecryptLimit,
+    apiRatePerMinute: plan.apiRatePerMinute,
+    legacy: plan.legacy,
+  };
+}
+
+export function createBillingAccessCode(input: { planId: string; durationDays: number; redeemWithinDays: number; createdBy?: string; now?: number }): { code: string; accessCode: BillingAccessCode } | undefined {
+  const plan = planDefinitions.find((definition) => definition.id === input.planId);
+  if (!plan || plan.legacy || !Number.isInteger(input.durationDays) || input.durationDays < 1 || input.durationDays > 3650 || !Number.isInteger(input.redeemWithinDays) || input.redeemWithinDays < 1 || input.redeemWithinDays > 365) return undefined;
+  const code = formatBillingAccessCode(randomBytes(16).toString('hex'));
+  const normalized = normalizeBillingAccessCode(code);
+  const now = input.now ?? Date.now();
+  const accessCode: BillingAccessCode = {
+    id: `gift_${randomBytes(12).toString('hex')}`,
+    codeHash: hashBillingAccessCode(normalized),
+    prefix: `${code.slice(0, 12)}…`,
+    planId: plan.id,
+    durationDays: input.durationDays,
+    redeemBy: new Date(now + input.redeemWithinDays * 24 * 60 * 60 * 1000).toISOString(),
+    createdBy: input.createdBy,
+    createdAt: new Date(now).toISOString(),
+  };
+  state.accessCodes ??= [];
+  state.accessCodes.push(accessCode);
+  persist();
+  emitBillingChanged();
+  return { code, accessCode: structuredClone(accessCode) };
+}
+
+export function listBillingAccessCodes(): Array<Omit<BillingAccessCode, 'codeHash'>> {
+  return (state.accessCodes ?? []).map(({ codeHash: _codeHash, ...accessCode }) => structuredClone(accessCode));
+}
+
+export function revokeBillingAccessCode(id: string, now = Date.now()): BillingAccessCode | undefined {
+  const accessCode = (state.accessCodes ?? []).find((candidate) => candidate.id === id);
+  if (!accessCode || accessCode.revokedAt) return undefined;
+  accessCode.revokedAt = new Date(now).toISOString();
+  persist();
+  emitBillingChanged();
+  return structuredClone(accessCode);
+}
+
+export function redeemBillingAccessCode(inputCode: string, userId: string, now = Date.now()): { accessCode: BillingAccessCode } | { error: 'invalid_or_expired' | 'already_has_access' } {
+  if (getBillingEntitlements(userId).planId !== 'viewer') return { error: 'already_has_access' };
+  const normalized = normalizeBillingAccessCode(inputCode);
+  const candidateHash = Buffer.from(hashBillingAccessCode(normalized), 'hex');
+  let selected: BillingAccessCode | undefined;
+  for (const accessCode of state.accessCodes ?? []) {
+    const storedHash = Buffer.from(accessCode.codeHash, 'hex');
+    const matches = storedHash.length === candidateHash.length && timingSafeEqual(storedHash, candidateHash);
+    if (matches) selected = accessCode;
+  }
+  if (!selected || selected.redeemedAt || selected.revokedAt || Date.parse(selected.redeemBy) <= now) return { error: 'invalid_or_expired' };
+  selected.redeemedBy = userId;
+  selected.redeemedAt = new Date(now).toISOString();
+  selected.expiresAt = new Date(now + selected.durationDays * 24 * 60 * 60 * 1000).toISOString();
+  persist();
+  emitBillingChanged();
+  return { accessCode: structuredClone(selected) };
+}
+
+export function activeBillingAccessCode(userId: string, now = Date.now()): BillingAccessCode | undefined {
+  return (state.accessCodes ?? []).find((accessCode) => accessCode.redeemedBy === userId && !accessCode.revokedAt && Date.parse(accessCode.expiresAt ?? '') > now);
+}
+
+function normalizeBillingAccessCode(value: string): string {
+  const normalized = value.trim().toUpperCase().replace(/^DKR-?/, '').replace(/[-\s]/g, '');
+  return /^[A-F0-9]{32}$/.test(normalized) ? normalized : '';
+}
+
+function formatBillingAccessCode(value: string): string {
+  const normalized = value.toUpperCase();
+  return `DKR-${normalized.match(/.{1,4}/g)?.join('-') ?? normalized}`;
+}
+
+function hashBillingAccessCode(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export function hasActiveBillingSubscription(userId: string): boolean {
@@ -506,6 +625,16 @@ export function mergeBillingAccounts(targetUserId: string, sourceUserId: string)
   for (const attempt of state.stripeCheckoutIdempotency ?? []) {
     if (attempt.userId === sourceUserId) {
       attempt.userId = targetUserId;
+      changed = true;
+    }
+  }
+  for (const accessCode of state.accessCodes ?? []) {
+    if (accessCode.redeemedBy === sourceUserId) {
+      accessCode.redeemedBy = targetUserId;
+      changed = true;
+    }
+    if (accessCode.createdBy === sourceUserId) {
+      accessCode.createdBy = targetUserId;
       changed = true;
     }
   }
@@ -652,6 +781,7 @@ export function replaceBillingSnapshot(snapshot: BillingSnapshot | { customers: 
   state.processedEvents = normalized.processedEvents;
   state.entitlementHistory = normalized.entitlementHistory ?? [];
   state.stripeCheckoutIdempotency = normalized.stripeCheckoutIdempotency ?? [];
+  state.accessCodes = normalized.accessCodes ?? [];
   if (options.persist !== false) persist();
 }
 
@@ -751,7 +881,32 @@ function normalizeBillingSnapshot(value: unknown): BillingSnapshot | undefined {
     processedEvents: Array.isArray(snapshot.processedEvents) ? snapshot.processedEvents.map(normalizeRetiredBillingProvider).filter(isBillingEvent).map((item) => structuredClone(item)) : [],
     entitlementHistory: Array.isArray(snapshot.entitlementHistory) ? snapshot.entitlementHistory.map(normalizeRetiredBillingProvider).filter(isEntitlementEvent).map((item) => structuredClone(item)) : [],
     stripeCheckoutIdempotency: Array.isArray(snapshot.stripeCheckoutIdempotency) ? snapshot.stripeCheckoutIdempotency.filter(isStripeCheckoutIdempotencyAttempt).map((item) => structuredClone(item)) : [],
+    accessCodes: Array.isArray(snapshot.accessCodes) ? snapshot.accessCodes.filter(isBillingAccessCode).map((item) => structuredClone(item)) : [],
   };
+}
+
+function isBillingAccessCode(value: unknown): value is BillingAccessCode {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string'
+    && typeof record.codeHash === 'string'
+    && /^[a-f0-9]{64}$/.test(record.codeHash)
+    && typeof record.prefix === 'string'
+    && typeof record.planId === 'string'
+    && planDefinitions.some((plan) => plan.id === record.planId)
+    && typeof record.durationDays === 'number'
+    && Number.isInteger(record.durationDays)
+    && record.durationDays >= 1
+    && record.durationDays <= 3650
+    && typeof record.redeemBy === 'string'
+    && Number.isFinite(Date.parse(record.redeemBy))
+    && typeof record.createdAt === 'string'
+    && Number.isFinite(Date.parse(record.createdAt))
+    && (record.createdBy === undefined || typeof record.createdBy === 'string')
+    && (record.redeemedBy === undefined || typeof record.redeemedBy === 'string')
+    && (record.redeemedAt === undefined || (typeof record.redeemedAt === 'string' && Number.isFinite(Date.parse(record.redeemedAt))))
+    && (record.expiresAt === undefined || (typeof record.expiresAt === 'string' && Number.isFinite(Date.parse(record.expiresAt))))
+    && (record.revokedAt === undefined || (typeof record.revokedAt === 'string' && Number.isFinite(Date.parse(record.revokedAt))));
 }
 
 function isStripeCheckoutIdempotencyAttempt(value: unknown): value is StripeCheckoutIdempotencyAttempt {

@@ -1307,6 +1307,63 @@ describe('Stripe billing webhooks', () => {
     }
   });
 
+  test('issues, redeems, hides, and revokes a prepaid access code through session routes', async () => {
+    const previousBillingSnapshot = exportBillingSnapshot();
+    replaceBillingSnapshot({ customers: [], subscriptions: [] });
+    const server = await buildTestServer({ includePublicRoutes: false });
+    const managerCookie = createSessionCookie(PermissionFlag.manageBilling);
+    const memberCookie = createSessionCookie(0n);
+
+    try {
+      const denied = await server.inject({ method: 'GET', url: '/v1/billing/access-codes', headers: { cookie: memberCookie } });
+      const created = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/access-codes',
+        headers: { cookie: managerCookie },
+        payload: { planId: 'standard', durationDays: 30, redeemWithinDays: 7 },
+      });
+      const issued = created.json() as { code: string; accessCode: { id: string } };
+      const redeemed = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/access-codes/redeem',
+        headers: { cookie: memberCookie },
+        payload: { code: issued.code },
+      });
+      const repeated = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/access-codes/redeem',
+        headers: { cookie: memberCookie },
+        payload: { code: issued.code },
+      });
+      const checkoutBlocked = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/checkout',
+        headers: { cookie: memberCookie },
+        payload: { planId: 'access' },
+      });
+      const listed = await server.inject({ method: 'GET', url: '/v1/billing/access-codes', headers: { cookie: managerCookie } });
+      const record = (listed.json() as { accessCodes: Array<Record<string, unknown>> }).accessCodes.find((accessCode) => accessCode.id === issued.accessCode.id);
+      const entitlementAfterRedeem = getBillingEntitlements('root');
+      const revoked = await server.inject({ method: 'POST', url: `/v1/billing/access-codes/${issued.accessCode.id}/revoke`, headers: { cookie: managerCookie } });
+
+      expect(denied.statusCode).toBe(403);
+      expect(created.statusCode).toBe(201);
+      expect(issued.code).toMatch(/^DKR-/);
+      expect(redeemed.statusCode).toBe(200);
+      expect(entitlementAfterRedeem).toMatchObject({ planId: 'standard', provider: 'gift', api: false });
+      expect(repeated.statusCode).toBe(409);
+      expect(checkoutBlocked.statusCode).toBe(409);
+      expect(record).toMatchObject({ status: 'redeemed', redeemedBy: 'root' });
+      expect(record).not.toHaveProperty('codeHash');
+      expect(record).not.toHaveProperty('code');
+      expect(revoked.statusCode).toBe(200);
+      expect(getBillingEntitlements('root').planId).toBe('viewer');
+    } finally {
+      replaceBillingSnapshot(previousBillingSnapshot);
+      await server.close();
+    }
+  });
+
   test('requires an idempotency key before cancellation', async () => {
     const server = await buildTestServer({ includePublicRoutes: false });
     const login = await server.inject({

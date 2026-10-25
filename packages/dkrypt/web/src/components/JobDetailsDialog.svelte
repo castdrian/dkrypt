@@ -8,7 +8,7 @@
   import Dialog from '#lib/components/ui/Dialog.svelte';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasPermission } from '#lib/session.svelte';
-  import { fmtSize, fmtTime } from '#lib/format.svelte';
+  import { fmtDurationApprox, fmtSize, fmtTime } from '#lib/format.svelte';
   import { buttonVariants, statusToBadgeVariant } from '#lib/components/ui/variants';
   import { showToast } from '#lib/ui.svelte';
   import { projectSelectionState } from '#lib/projectSelection.svelte';
@@ -94,6 +94,29 @@
       {#if timeline.deviceId}<span class="text-xs text-muted">Device: <span data-sensitive="true">{timeline.deviceId}</span></span>{/if}
       {#if timeline.sizeBytes}<span class="text-xs text-muted">{fmtSize(timeline.sizeBytes)}</span>{/if}
     </div>
+    {#if timeline.dependencies?.length}
+      <section class="mb-4 rounded-xl border border-border/70 p-3" aria-labelledby="job-dependencies-heading">
+        <h3 id="job-dependencies-heading" class="text-xs font-semibold">What this job depends on</h3>
+        <ul class="mt-2 grid gap-2 sm:grid-cols-2">
+          {#each timeline.dependencies as dependency (dependency.id)}
+            <li class="rounded-lg bg-muted/20 p-2.5">
+              <div class="flex items-center justify-between gap-2"><span class="text-xs font-medium">{dependency.label}</span><Badge variant={dependency.state === 'ready' ? 'success' : dependency.state === 'failed' || dependency.state === 'blocked' ? 'warning' : 'outline'}>{dependency.state.replaceAll('_', ' ')}</Badge></div>
+              <p class="mt-1 break-words text-[11px] text-muted">{dependency.detail}</p>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+    {#if timeline.executionPath === 'appstore_offline' || timeline.executionPath === 'device_fallback'}
+      <section class="mb-4 rounded-xl border border-border/70 bg-muted/20 p-3" aria-label="Processing path">
+        <div class="text-xs font-semibold">Processing path</div>
+        <div class="mt-2 flex flex-wrap gap-2 text-xs">
+          {#if timeline.offlineAttemptDurationMs !== undefined}<span class="rounded-full border border-border px-2 py-1">Server attempt · {fmtDurationApprox(timeline.offlineAttemptDurationMs)}</span>{/if}
+          {#if timeline.executionPath === 'device_fallback' && timeline.offlineFailureReason}<span class="max-w-full rounded-full border border-border px-2 py-1">Fallback · {timeline.offlineFailureReason}</span>{/if}
+          {#if timeline.deviceFallbackDurationMs !== undefined}<span class="rounded-full border border-border px-2 py-1">Device attempt · {fmtDurationApprox(timeline.deviceFallbackDurationMs)}</span>{/if}
+        </div>
+      </section>
+    {/if}
     {#if timeline.warnings?.length}
       <Alert variant="warning" class="mb-4">
         <div class="font-medium">Completed with warnings</div>
@@ -166,7 +189,7 @@
           </div>
           <div class="min-w-0 pb-2">
             <div class="text-sm text-text">{event.label}</div>
-            <div class="mt-0.5 text-xs text-muted">{fmtTime(event.at)}</div>
+            <div class="mt-0.5 text-xs text-muted">{fmtTime(event.at)}{#if event.durationMs !== undefined} · {fmtDurationApprox(event.durationMs)}{/if}</div>
           </div>
         </li>
       {/each}

@@ -332,6 +332,42 @@ export function createDecryptRoutes(
     );
 
     server.get(
+      '/v1/jobs/:id/wait',
+      { schema: getRouteContract('GET', '/v1/jobs/:id/wait'), preHandler: fastifyRequireApiKey },
+      async (request, reply) => {
+        const apiKey = getFastifyApiKeyContext(request);
+        const { id } = request.params as { id: string };
+        const query = request.query as { timeoutSeconds?: number };
+        const job = services.getJob(id);
+        if (!job || !apiKeyCanAccessProject(apiKey, job.projectId ?? DEFAULT_PROJECT_ID) || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
+          reply.code(404);
+          return apiErrorEnvelope('job not found (finished jobs are pruned after retention window)', 'request_error', request.id);
+        }
+        const finished = await services.waitForJob(job, Math.max(1, Math.min(25, query.timeoutSeconds ?? 20)) * 1000);
+        if (finished.status === 'queued' || finished.status === 'running') return reply.code(202).send(jobSummary(finished));
+        return jobSummary(finished);
+      },
+    );
+
+    server.post(
+      '/v1/jobs/status',
+      { schema: getRouteContract('POST', '/v1/jobs/status'), preHandler: fastifyRequireApiKey },
+      async (request) => {
+        const apiKey = getFastifyApiKeyContext(request);
+        const { ids } = request.body as { ids: string[] };
+        return {
+          jobs: ids.map((id) => {
+            const job = services.getJob(id);
+            if (!job || !apiKeyCanAccessProject(apiKey, job.projectId ?? DEFAULT_PROJECT_ID) || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
+              return { id, state: 'not_found' as const };
+            }
+            return { id, state: 'found' as const, job: jobSummary(job) };
+          }),
+        };
+      },
+    );
+
+    server.get(
       '/v1/jobs/:id',
       { schema: getRouteContract('GET', '/v1/jobs/:id'), preHandler: fastifyRequireApiKey },
       async (request, reply) => {

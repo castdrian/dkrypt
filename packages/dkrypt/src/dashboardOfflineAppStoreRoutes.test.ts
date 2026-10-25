@@ -105,6 +105,30 @@ test('offline App Store authentication accepts only a six-digit one-time code', 
   }
 });
 
+test('no-purchase readiness check reports setup without starting account or package operations', async () => {
+  let authStarted = false;
+  let downloadStarted = false;
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardOfflineAppStoreRoutes({
+    readiness,
+    startAuthentication: () => { authStarted = true; return { state: 'running', operationId: 'unexpected' }; },
+    retrieveCredential: () => { downloadStarted = true; return { state: 'running', operationId: 'unexpected' }; },
+  }));
+
+  try {
+    const member = await server.inject({ method: 'POST', url: '/v1/dashboard/appstore-offline/verify', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) } });
+    const result = await server.inject({ method: 'POST', url: '/v1/dashboard/appstore-offline/verify', headers: { cookie: sessionCookie(PermissionFlag.administrator) } });
+    expect(member.statusCode).toBe(403);
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ ok: false, purchaseMade: false, downloadStarted: false });
+    expect(result.json().checks).toHaveLength(6);
+    expect(authStarted).toBeFalse();
+    expect(downloadStarted).toBeFalse();
+  } finally {
+    await server.close();
+  }
+});
+
 test('Apple Account verification returns its durable background status without awaiting Apple', async () => {
   const authentication = { state: 'running' as const, operationId: 'operation-1', startedAt: 123 };
   const overrides = {

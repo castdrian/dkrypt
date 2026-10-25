@@ -464,6 +464,27 @@ export function fetchDashboardArtifact(id: string, projectId = projectSelectionS
   return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}?${params}`);
 }
 
+export interface ArtifactPackageEntry {
+  path: string;
+  compressedSize: number;
+  uncompressedSize: number;
+  crc32: number;
+}
+
+export interface ArtifactPackageContentsPage {
+  entries: ArtifactPackageEntry[];
+  total: number;
+  nextOffset?: number;
+}
+
+export function fetchDashboardArtifactContents(id: string, options: { projectId?: string; q?: string; offset?: number; limit?: number } = {}): Promise<ArtifactPackageContentsPage> {
+  const params = new URLSearchParams({ projectId: options.projectId ?? projectSelectionState.id });
+  if (options.q) params.set('q', options.q);
+  if (options.offset) params.set('offset', String(options.offset));
+  if (options.limit) params.set('limit', String(options.limit));
+  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/contents?${params}`);
+}
+
 export interface ArtifactStructureComparison {
   before: { id: string; bundleId: string; versionLabel?: string; fileSizeBytes: number };
   after: { id: string; bundleId: string; versionLabel?: string; fileSizeBytes: number };
@@ -485,6 +506,7 @@ export interface JobTimelineEvent {
   at: number;
   label: string;
   status: 'queued' | 'running' | 'done' | 'failed';
+  durationMs?: number;
 }
 
 export interface JobTimeline {
@@ -495,7 +517,11 @@ export interface JobTimeline {
   executionStage?: 'preparing' | 'installing' | 'decrypting' | 'offline_download' | 'offline_decrypting' | 'finalizing';
   executionPath?: 'appstore_offline' | 'device' | 'device_fallback';
   offlineAttemptedAt?: number;
+  offlineAttemptDurationMs?: number;
+  offlineDeviceFallbackStartedAt?: number;
+  deviceFallbackDurationMs?: number;
   offlineFailureReason?: string;
+  dependencies?: Array<{ id: string; label: string; state: 'ready' | 'active' | 'waiting' | 'failed' | 'blocked' | 'not_applicable' | 'unknown'; detail: string }>;
   events: JobTimelineEvent[];
   warnings?: string[];
   queueReason?: string;
@@ -1742,6 +1768,16 @@ export function fetchOfflineAppStoreStatus(options?: RequestInit): Promise<Offli
   return apiJson('/v1/dashboard/appstore-offline/status', options);
 }
 
+export interface OfflineAppStoreReadinessCheck {
+  id: string;
+  ready: boolean;
+  detail: string;
+}
+
+export function verifyOfflineAppStoreReadiness(): Promise<{ ok: boolean; checkedAt: string; purchaseMade: false; downloadStarted: false; checks: OfflineAppStoreReadinessCheck[] }> {
+  return apiJson('/v1/dashboard/appstore-offline/verify', { method: 'POST' });
+}
+
 export function saveOfflineAppStoreAccount(appleId: string, password: string): Promise<OfflineAppStoreStatus> {
   return saveOfflineAppStoreAccountRequest(apiJson, appleId, password);
 }
@@ -2425,6 +2461,37 @@ export function fetchBillingSubscriptions(filters: { q?: string; provider?: stri
   return apiJson(`/v1/billing/subscriptions${query ? `?${query}` : ''}`);
 }
 
+export interface BillingAccessCode {
+  id: string;
+  prefix: string;
+  planId: string;
+  durationDays: number;
+  redeemBy: string;
+  createdBy?: string;
+  createdAt: string;
+  redeemedBy?: string;
+  redeemedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  status: 'available' | 'redeemed' | 'expired' | 'revoked';
+}
+
+export function fetchBillingAccessCodes(): Promise<{ accessCodes: BillingAccessCode[] }> {
+  return apiJson('/v1/billing/access-codes');
+}
+
+export function createBillingAccessCode(input: { planId: string; durationDays: number; redeemWithinDays: number }): Promise<{ code: string; accessCode: BillingAccessCode }> {
+  return apiJson('/v1/billing/access-codes', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function redeemBillingAccessCode(code: string): Promise<{ planId: string; expiresAt: string }> {
+  return apiJson('/v1/billing/access-codes/redeem', { method: 'POST', body: JSON.stringify({ code }) });
+}
+
+export function revokeBillingAccessCode(id: string): Promise<BillingAccessCode> {
+  return apiJson(`/v1/billing/access-codes/${encodeURIComponent(id)}/revoke`, { method: 'POST' });
+}
+
 export interface BillingWebhookInboxRecord {
   id: string;
   provider: 'stripe' | 'nowpayments';
@@ -2500,6 +2567,22 @@ export interface BillingRevenueSummary {
 
 export function fetchBillingRevenue(refresh = false): Promise<BillingRevenueSummary> {
   return apiJson(`/v1/billing/revenue${refresh ? '?refresh=true' : ''}`);
+}
+
+export interface BillingInvoice {
+  id: string;
+  provider: 'stripe' | 'nowpayments';
+  planId: string;
+  status: string;
+  createdAt: string;
+  amountMinor: number;
+  currency: string;
+  invoiceUrl?: string;
+  paymentId?: string;
+}
+
+export function fetchBillingInvoices(): Promise<{ invoices: BillingInvoice[]; warnings: string[] }> {
+  return apiJson('/v1/billing/invoices');
 }
 
 export function fetchBillingProviderStatus(refresh = false): Promise<BillingProviderStatus> {

@@ -6,7 +6,7 @@ import { jobFailureClassSchema } from '#util/failureCategory.js';
 
 const JobStatus = Type.Union([Type.Literal('queued'), Type.Literal('running'), Type.Literal('done'), Type.Literal('failed')]);
 const JsonObject = Type.Object({}, { additionalProperties: true });
-export const dashboardJobTimelineEventSchema = Type.Object({ at: Type.Number(), label: Type.String(), status: JobStatus }, { additionalProperties: true });
+export const dashboardJobTimelineEventSchema = Type.Object({ at: Type.Number(), label: Type.String(), status: JobStatus, durationMs: Type.Optional(Type.Number({ minimum: 0 })) }, { additionalProperties: true });
 const TestFlightBuild = Type.Object({
   id: Type.Number(),
   cfBundleShortVersion: Type.String(),
@@ -50,7 +50,11 @@ export const dashboardJobExportEntrySchema = Type.Object({
   transport: Type.Optional(deviceTransportSchema),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   ipaMetadata: Type.Optional(dashboardJobIpaMetadataSchema),
   ipaInfoPlist: Type.Optional(JsonObject),
   timeline: Type.Optional(Type.Array(dashboardJobTimelineEventSchema)),
@@ -138,7 +142,11 @@ const dashboardJobAttemptSnapshotSchema = Type.Object({
   transport: Type.Optional(deviceTransportSchema),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   cacheHit: Type.Optional(Type.Boolean()),
   deadlineExceeded: Type.Optional(Type.Boolean()),
   error: Type.Optional(Type.String()),
@@ -180,7 +188,11 @@ const DashboardJobHistoryEntry = Type.Object({
   transport: Type.Optional(deviceTransportSchema),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   ipaMetadata: Type.Optional(dashboardJobIpaMetadataSchema),
   ipaInfoPlist: Type.Optional(JsonObject),
   timeline: Type.Optional(Type.Array(dashboardJobTimelineEventSchema)),
@@ -339,7 +351,11 @@ export const dashboardJobDiagnosticJobSchema = Type.Object({
   transport: Type.Optional(deviceTransportSchema),
   executionPath: Type.Optional(Type.Union([Type.Literal('appstore_offline'), Type.Literal('device'), Type.Literal('device_fallback')])),
   offlineAttemptedAt: Type.Optional(Type.Number()),
+  offlineAttemptDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
+  deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   ipaMetadata: Type.Optional(dashboardJobIpaMetadataSchema),
   ipaInfoPlist: Type.Optional(JsonObject),
   createdAt: Type.Number(),

@@ -12,6 +12,8 @@ export const publicApiOperations = {
   '/v1/decrypt': ['get'],
   '/v1/decrypts': ['post'],
   '/v1/jobs/{id}': ['get'],
+  '/v1/jobs/{id}/wait': ['get'],
+  '/v1/jobs/status': ['post'],
   '/v1/testflight/decrypt': ['post'],
   '/v1/artifacts': ['get'],
   '/v1/artifacts/{id}': ['get'],
@@ -41,7 +43,12 @@ export function createPublicOpenApiDocument(value: unknown): PublicApiDocument {
     const selected = Object.fromEntries(Object.entries(pathItem).filter(([key]) =>
       !isHttpMethod(key) || allowedMethods.has(key.toLowerCase()),
     ));
-    if (Object.keys(selected).length > 0) paths[path] = selected;
+    if (Object.keys(selected).length > 0) {
+      paths[path] = Object.fromEntries(Object.entries(selected).map(([key, value]) => [
+        key,
+        isHttpMethod(key) ? withApiCompatibilityHeader(value) : value,
+      ]));
+    }
   }
 
   const sourceComponents = document.components ?? {};
@@ -61,7 +68,7 @@ export function createPublicOpenApiDocument(value: unknown): PublicApiDocument {
     info: {
       ...document.info,
       title: 'dkrypt Public API',
-      description: 'Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts.',
+      description: 'Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. All responses include X-Dkrypt-API-Version: 1. Additive response fields are compatible within v1; breaking changes use documented deprecation and sunset dates.',
     },
     servers: document.servers,
     paths,
@@ -80,6 +87,28 @@ function pathPattern(path: string): RegExp {
 
 function isHttpMethod(value: string): boolean {
   return ['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace'].includes(value.toLowerCase());
+}
+
+function withApiCompatibilityHeader(value: unknown): unknown {
+  const operation = asRecord(value);
+  const responses = asRecord(operation.responses);
+  return {
+    ...operation,
+    responses: Object.fromEntries(Object.entries(responses).map(([status, response]) => {
+      const record = asRecord(response);
+      const headers = asRecord(record.headers);
+      return [status, {
+        ...record,
+        headers: {
+          ...headers,
+          'X-Dkrypt-API-Version': {
+            description: 'Public API compatibility version for this response.',
+            schema: { type: 'string', const: '1' },
+          },
+        },
+      }];
+    })),
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
