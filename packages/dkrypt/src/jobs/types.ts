@@ -47,6 +47,7 @@ export interface Job {
   status: JobStatus;
   executionStage?: JobExecutionStage;
   executionPath?: JobExecutionPath;
+  workerAttemptId?: string;
   offlineAttemptedAt?: number;
   offlineAttemptDurationMs?: number;
   offlineDeviceFallbackStartedAt?: number;

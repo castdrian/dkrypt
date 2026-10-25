@@ -212,8 +212,9 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
       }
       throwIfAborted(signal);
       await mkdir(dependencies.stagingDirectory, { recursive: true, mode: 0o700 });
-      const encryptedPath = path.join(dependencies.stagingDirectory, `${job.id}.offline-encrypted.ipa`);
-      const outputPath = path.join(dependencies.stagingDirectory, `${job.id}.offline-decrypted.ipa`);
+      const attemptId = job.workerAttemptId ?? job.attempt ?? 'attempt';
+      const encryptedPath = path.join(dependencies.stagingDirectory, `${job.id}-${attemptId}.offline-encrypted.ipa`);
+      const outputPath = path.join(dependencies.stagingDirectory, `${job.id}-${attemptId}.offline-decrypted.ipa`);
       await rm(encryptedPath, { force: true });
       await rm(outputPath, { force: true });
       try {

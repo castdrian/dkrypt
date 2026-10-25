@@ -19,7 +19,7 @@ import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
 import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, type ArtifactRecord } from '#artifacts.js';
-import { admitQuotaJob, closePersistedJobs, findPersistedActiveJobId, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, loadPersistedJobs, mergeDecryptQuotaOwner, reconcileDecryptQuota, replacePersistedJobs, settleDecryptQuota, type JobBuildLookup } from '#jobs/repository.js';
+import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, loadPersistedActiveJobs, loadPersistedJobs, mergeDecryptQuotaOwner, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, settleDecryptQuota, type JobBuildLookup, type JobWorkerLease } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
@@ -40,9 +40,12 @@ const donePath = path.join(config.stateDir, 'done-jobs.json');
 const activePath = path.join(config.stateDir, 'active-jobs.json');
 const queue: string[] = [];
 const busyDeviceIds = new Set<string>();
-const busyOfflineWorkers = new Set<string>();
+const busyWorkerResourceIds = new Set<string>();
 const runningJobs = new Map<string, Promise<void>>();
 const runningJobControllers = new Map<string, AbortController>();
+const workerInstanceId = randomUUID();
+const workerLeases = new Map<string, { lease: JobWorkerLease; timer: ReturnType<typeof setInterval> }>();
+const lostWorkerLeaseJobIds = new Set<string>();
 const queuedDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const queueSloNotified = new Set<string>();
 const offlineAppStoreCircuit = new OfflineAppStoreCircuitBreaker(
@@ -51,6 +54,14 @@ const offlineAppStoreCircuit = new OfflineAppStoreCircuitBreaker(
 );
 let offlineCircuitProbeTimer: ReturnType<typeof setTimeout> | undefined;
 let acceptingJobs = true;
+let jobSyncTimer: ReturnType<typeof setInterval> | undefined;
+let lastJobSyncAt = 0;
+let syncingPersistedJobs = false;
+let jobStoreClosed = false;
+const JOB_SYNC_INTERVAL_MS = 1_000;
+const JOB_SYNC_THROTTLE_MS = 250;
+const WORKER_LEASE_MS = 60_000;
+const WORKER_LEASE_HEARTBEAT_MS = 15_000;
 
 function serializableJob(job: Job): Omit<Job, 'childProcess' | 'waiters'> {
   const { childProcess: _childProcess, waiters: _waiters, ...rest } = job;
@@ -101,7 +112,7 @@ function persistDoneJobs(): void {
     .filter((j) => j.status === 'done')
     .map(serializableJob);
   writeLegacyMirror(donePath, done);
-  replacePersistedJobs(jobs.values());
+  if (replacePersistedJobs(jobs.values(), workerInstanceId).length > 0) syncPersistedJobsFromRepository(true);
 }
 
 function persistActiveJobs(): void {
@@ -109,7 +120,7 @@ function persistActiveJobs(): void {
     .filter((j) => j.status === 'queued' || j.status === 'running')
     .map(serializableJob);
   writeLegacyMirror(activePath, active);
-  replacePersistedJobs(jobs.values());
+  if (replacePersistedJobs(jobs.values(), workerInstanceId).length > 0) syncPersistedJobsFromRepository(true);
 }
 
 function loadDoneJobs(): void {
@@ -144,6 +155,7 @@ function requeueAfterGracefulShutdown(job: Job, now = Date.now()): Job {
     shutdownRecoveryPending: undefined,
     shutdownRecoveryAt: now,
     executionStage: undefined,
+    workerAttemptId: undefined,
     childProcess: undefined,
   };
   appendJobTimelineEvent(requeued, 'Requeued after graceful shutdown', 'queued', now);
@@ -213,22 +225,23 @@ function loadActiveJobs(): void {
 function loadDatabaseJobs(): boolean {
   const saved = loadPersistedJobs();
   if (saved.length === 0) return false;
-  const { queued, interrupted } = recoverPersistedActiveJobs(saved as Job[]);
   for (const job of saved.filter((entry) => entry.status === 'done' || entry.status === 'failed')) {
     job.filePath = migrateLegacyPath(job.filePath);
     if (job.status === 'done' && job.filePath && !existsSync(job.filePath)) job.filePath = undefined;
     jobs.set(job.id, { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, waiters: [] });
   }
-  for (const job of queued) {
-    const restoredJob = { ...job, waiters: [] };
+  for (const job of saved.filter((entry) => entry.status === 'queued' || entry.status === 'running')) {
+    const restoredJob = { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, executionStage: undefined, childProcess: undefined, waiters: [] } as Job;
     jobs.set(restoredJob.id, restoredJob);
-    if (restoredJob.pausedAt === undefined) {
+    if (restoredJob.status === 'queued' && restoredJob.pausedAt === undefined) {
+      if (restoredJob.source === 'scheduler') {
+        restoredJob.schedulerDeadlineAt ??= restoredJob.createdAt + SCHEDULER_JOB_TIMEOUT_MS;
+        restoredJob.deadlineAt = restoredJob.schedulerDeadlineAt;
+      }
       insertByPriority(restoredJob.id, restoredJob.priority);
       scheduleQueuedDeadline(restoredJob);
     }
   }
-  for (const job of interrupted) recordJobHistory(toHistoryEntry(job));
-  replacePersistedJobs(jobs.values());
   return true;
 }
 
@@ -238,6 +251,166 @@ if (!loadDatabaseJobs()) {
   replacePersistedJobs(jobs.values());
 }
 reconcileDecryptQuota();
+
+function removeQueuedJob(jobId: string): void {
+  const index = queue.indexOf(jobId);
+  if (index !== -1) queue.splice(index, 1);
+}
+
+function mergePersistedJob(saved: Job): boolean {
+  const existing = jobs.get(saved.id);
+  if (existing && runningJobs.has(saved.id)) {
+    if (saved.cancelledBy && saved.cancelledBy !== existing.cancelledBy) {
+      existing.cancelledBy = saved.cancelledBy;
+      existing.progress = saved.progress;
+      existing.timeline = saved.timeline;
+      runningJobControllers.get(saved.id)?.abort(new Error(`cancelled by ${saved.cancelledBy}`));
+      terminateJobProcess(existing);
+      return true;
+    }
+    if (saved.status !== 'running') {
+      lostWorkerLeaseJobIds.add(saved.id);
+      runningJobControllers.get(saved.id)?.abort(new Error('worker lease was recovered by another instance'));
+      terminateJobProcess(existing);
+    }
+    return false;
+  }
+
+  const previousStatus = existing?.status;
+  const previousPayload = existing ? JSON.stringify(serializableJob(existing)) : undefined;
+  const merged = { ...saved, waiters: existing?.waiters ?? [] } as Job;
+  jobs.set(merged.id, merged);
+
+  if (merged.status === 'queued' && merged.pausedAt === undefined) {
+    if (previousStatus !== 'queued' || !queue.includes(merged.id)) insertByPriority(merged.id, merged.priority);
+    scheduleQueuedDeadline(merged);
+  } else {
+    removeQueuedJob(merged.id);
+    clearQueuedDeadline(merged.id);
+  }
+
+  if ((merged.status === 'done' || merged.status === 'failed') && (previousStatus === 'queued' || previousStatus === 'running')) {
+    recordJobHistory(toHistoryEntry(merged));
+    settleDecryptQuota(merged.id, merged.status === 'done');
+    if (existing) settle(existing);
+  }
+
+  return previousPayload !== JSON.stringify(serializableJob(merged));
+}
+
+function syncPersistedJobsFromRepository(force = false): void {
+  if (jobStoreClosed) return;
+  const now = Date.now();
+  if (syncingPersistedJobs || (!force && now - lastJobSyncAt < JOB_SYNC_THROTTLE_MS)) return;
+  syncingPersistedJobs = true;
+  lastJobSyncAt = now;
+  let changed = false;
+  try {
+    const savedActive = loadPersistedActiveJobs() as Job[];
+    const activeIds = new Set(savedActive.map((job) => job.id));
+    for (const saved of savedActive) changed = mergePersistedJob(saved) || changed;
+    for (const local of jobs.values()) {
+      if ((local.status !== 'queued' && local.status !== 'running') || activeIds.has(local.id)) continue;
+      const persisted = findPersistedJobById(local.id);
+      if (persisted) changed = mergePersistedJob(persisted as Job) || changed;
+    }
+  } finally {
+    syncingPersistedJobs = false;
+  }
+  if (changed) emitJobsChanged();
+}
+
+function stopWorkerLeaseHeartbeat(jobId: string): void {
+  const worker = workerLeases.get(jobId);
+  if (worker) clearInterval(worker.timer);
+}
+
+function loseWorkerLease(jobId: string, error?: unknown): void {
+  const worker = workerLeases.get(jobId);
+  if (!worker) return;
+  lostWorkerLeaseJobIds.add(jobId);
+  stopWorkerLeaseHeartbeat(jobId);
+  const job = jobs.get(jobId);
+  runningJobControllers.get(jobId)?.abort(new Error('worker lease expired or was claimed by another instance'));
+  if (job) terminateJobProcess(job);
+  log.warn('job worker lease lost; stopping work before another worker continues', {
+    jobId,
+    resourceId: worker.lease.resourceId,
+    error: error === undefined ? undefined : String(error),
+  });
+}
+
+function renewWorkerLease(jobId: string): boolean {
+  if (jobStoreClosed) return false;
+  const worker = workerLeases.get(jobId);
+  if (!worker) return false;
+  try {
+    if (!renewPersistedJobWorker(worker.lease, WORKER_LEASE_MS)) {
+      loseWorkerLease(jobId);
+      return false;
+    }
+    worker.lease = { ...worker.lease, leaseUntil: Date.now() + WORKER_LEASE_MS };
+    return true;
+  } catch (error) {
+    if (Date.now() >= worker.lease.leaseUntil) {
+      loseWorkerLease(jobId, error);
+      return false;
+    }
+    log.warn('job worker lease heartbeat could not reach SQLite; retrying before lease expiry', {
+      jobId,
+      resourceId: worker.lease.resourceId,
+      error: String(error),
+    });
+    return true;
+  }
+}
+
+function startWorkerLeaseHeartbeat(jobId: string, lease: JobWorkerLease): void {
+  const timer = setInterval(() => {
+    renewWorkerLease(jobId);
+  }, WORKER_LEASE_HEARTBEAT_MS).unref();
+  workerLeases.set(jobId, { lease, timer });
+}
+
+function recoverExpiredWorkerJobs(): void {
+  syncPersistedJobsFromRepository(true);
+  for (const saved of listPersistedExpiredRunningJobs() as Job[]) {
+    const now = Date.now();
+    const local = jobs.get(saved.id);
+    if (runningJobs.has(saved.id)) loseWorkerLease(saved.id);
+    const offlineFailureReason = saved.executionPath === 'appstore_offline'
+      ? saved.offlineFailureReason ?? 'The server-side worker stopped before the attempt completed; retrying on a device'
+      : saved.offlineFailureReason;
+    const recovered: Job = {
+      ...saved,
+      status: 'queued',
+      progress: saved.executionPath === 'appstore_offline' ? 'Server-side worker stopped; waiting for device fallback' : 'Worker stopped; retrying the job',
+      error: undefined,
+      failureClass: undefined,
+      startedAt: undefined,
+      finishedAt: undefined,
+      deadlineExceeded: false,
+      shutdownRecoveryPending: undefined,
+      executionStage: undefined,
+      workerAttemptId: undefined,
+      offlineFailureReason,
+      childProcess: undefined,
+      waiters: local?.waiters ?? [],
+      retryCount: (saved.retryCount ?? 0) + 1,
+      attempt: (saved.attempt ?? 0) + 1,
+    };
+    appendJobTimelineEvent(recovered, 'Recovered after the worker lease expired', 'queued', now);
+    if (!requeuePersistedExpiredRunningJob(recovered)) continue;
+    if (local && runningJobs.has(local.id)) continue;
+    mergePersistedJob(recovered);
+    log.warn('recovered a job after its worker stopped renewing the lease', {
+      jobId: recovered.id,
+      bundleId: recovered.bundleId,
+      previousExecutionPath: saved.executionPath,
+      executionPath: recovered.offlineFailureReason ? 'device_fallback' : 'retry',
+    });
+  }
+}
 
 const RETRY_BACKOFF_MS = 5_000;
 
@@ -255,6 +428,7 @@ function waitForCompletionOrTimeout(completion: Promise<unknown>, timeoutMs: num
 }
 
 function findActiveJobForBundle(lookup: JobBuildLookup): Job | undefined {
+  syncPersistedJobsFromRepository(true);
   const persistedId = findPersistedActiveJobId(lookup);
   const persistedJob = persistedId ? jobs.get(persistedId) : undefined;
   if (persistedJob && isMatchingBuild(persistedJob, lookup) && (persistedJob.status === 'queued' || persistedJob.status === 'running')) return persistedJob;
@@ -538,18 +712,31 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
 
   deferScheduledJobIfUnavailable(source, job, options.deferWhenNoDispatchableDevice);
 
+  let quotaOwnerId: string | undefined;
+  let quotaLimit: number | undefined;
+  let previousUsage: number | undefined;
   if (billingOwnerId) {
     const entitlement = getBillingEntitlements(billingOwnerId);
     if (entitlement.planId !== 'viewer' && !entitlement.legacy) {
-      const previousUsage = entitlement.dailyDecryptLimit === undefined ? undefined : getDecryptQuotaUsage(billingOwnerId, entitlement.dailyDecryptLimit).used;
-      admitQuotaJob(job, billingOwnerId, entitlement.dailyDecryptLimit);
-      if (entitlement.dailyDecryptLimit !== undefined && previousUsage !== undefined) {
-        const nextUsage = getDecryptQuotaUsage(billingOwnerId, entitlement.dailyDecryptLimit).used;
-        for (const threshold of getUserPrefs(billingOwnerId).decryptUsageAlertThresholds ?? []) {
-          if (previousUsage * 100 < entitlement.dailyDecryptLimit * threshold && nextUsage * 100 >= entitlement.dailyDecryptLimit * threshold) {
-            recordDecryptQuotaThresholdNotice(billingOwnerId, nextUsage, entitlement.dailyDecryptLimit, threshold);
-          }
-        }
+      quotaOwnerId = billingOwnerId;
+      quotaLimit = entitlement.dailyDecryptLimit;
+      if (quotaLimit !== undefined) previousUsage = getDecryptQuotaUsage(billingOwnerId, quotaLimit).used;
+    }
+  }
+  const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit);
+  if (admittedId !== job.id) {
+    syncPersistedJobsFromRepository(true);
+    const existing = jobs.get(admittedId);
+    if (!existing) throw new Error('a duplicate active job was admitted but could not be loaded');
+    deferScheduledJobIfUnavailable(source, existing, options.deferWhenNoDispatchableDevice);
+    if (source === 'scheduler') extendJobDeadlineForScheduler(existing);
+    return existing;
+  }
+  if (quotaOwnerId && quotaLimit !== undefined && previousUsage !== undefined) {
+    const nextUsage = getDecryptQuotaUsage(quotaOwnerId, quotaLimit).used;
+    for (const threshold of getUserPrefs(quotaOwnerId).decryptUsageAlertThresholds ?? []) {
+      if (previousUsage * 100 < quotaLimit * threshold && nextUsage * 100 >= quotaLimit * threshold) {
+        recordDecryptQuotaThresholdNotice(quotaOwnerId, nextUsage, quotaLimit, threshold);
       }
     }
   }
@@ -594,14 +781,21 @@ function enforceAccountQuotas(accountId: string): void {
 }
 
 export function getJob(id: string): Job | undefined {
+  syncPersistedJobsFromRepository(true);
+  if (!jobs.has(id)) {
+    const persisted = findPersistedJobById(id);
+    if (persisted) mergePersistedJob(persisted as Job);
+  }
   return jobs.get(id);
 }
 
 export function getActiveJobs(): Job[] {
+  syncPersistedJobsFromRepository(true);
   return [...jobs.values()].filter((j) => j.status === 'queued' || j.status === 'running');
 }
 
 export function getArtifactBackedJobs(): Job[] {
+  syncPersistedJobsFromRepository(true);
   return [...jobs.values()].filter((job) => job.status === 'done' && !!job.filePath);
 }
 
@@ -686,11 +880,11 @@ function getCurrentQueueReason(job: Job): string | undefined {
       const blockers = readiness.blockers?.join(' · ');
       return blockers ? `Waiting for server-side App Store processing · ${blockers}` : 'Waiting for server-side App Store processing';
     }
-    return busyOfflineWorkers.size >= config.appStoreOfflineMaxWorkers ? 'Waiting for a server-side App Store worker' : undefined;
+    return offlineWorkerSlots(job) === 0 ? 'Waiting for a server-side App Store worker' : undefined;
   }
   const enabledDevices = getEffectiveDevices().filter((device) => device.enabled && !device.draining);
   if (enabledDevices.length === 0) {
-    if (canStartOfflineAttempt(job)) return busyOfflineWorkers.size >= config.appStoreOfflineMaxWorkers ? 'Waiting for a server-side App Store worker' : undefined;
+    if (canStartOfflineAttempt(job)) return offlineWorkerSlots(job) === 0 ? 'Waiting for a server-side App Store worker' : undefined;
     const fallback = job.offlineFailureReason ? `Server-side attempt failed: ${job.offlineFailureReason} · ` : '';
     const offlineBlocker = offlineAppStoreBlocker(job);
     return `${fallback}Waiting for a device accepting jobs${offlineBlocker ? ` · Server-side processing unavailable: ${offlineBlocker}` : ''}`;
@@ -707,7 +901,7 @@ function getCurrentQueueReason(job: Job): string | undefined {
     return reasons.length > 0 ? `Waiting for a compatible device · ${reasons.join(' · ')}` : 'Waiting for a compatible device';
   }
 
-  const available = eligible.filter((device) => !busyDeviceIds.has(device.id));
+  const available = eligible.filter((device) => !busyDeviceIds.has(device.id) && !isPersistedWorkerResourceActive(`device:${device.id}`));
   if (available.length === 0) {
     const names = eligible.map((device) => device.name).join(', ');
     return `Waiting for ${names} to become available`;
@@ -795,6 +989,7 @@ function toHistoryEntry(job: Job) {
 }
 
 export function cancelQueuedJob(id: string, cancelledBy: string): boolean {
+  syncPersistedJobsFromRepository(true);
   const job = jobs.get(id);
   if (!job || job.status !== 'queued') return false;
 
@@ -862,17 +1057,18 @@ export function resumePausedJob(id: string, resumedBy: string): boolean {
 }
 
 export function cancelRunningJob(id: string, cancelledBy: string): boolean {
+  syncPersistedJobsFromRepository(true);
   const job = jobs.get(id);
   if (!job || job.status !== 'running') return false;
   if (job.cancelledBy) return true;
-
-  job.cancelledBy = cancelledBy;
-  job.progress = 'cancelling…';
-  appendJobTimelineEvent(job, job.progress, 'running');
+  const persisted = requestPersistedJobCancellation(id, cancelledBy);
+  if (!persisted) return false;
+  const childProcess = job.childProcess;
+  const waiters = job.waiters;
+  Object.assign(job, persisted, { childProcess, waiters });
   runningJobControllers.get(id)?.abort(new Error(`cancelled by ${cancelledBy}`));
   terminateJobProcess(job);
   log.info('job cancel requested', { jobId: id, bundleId: job.bundleId, cancelledBy });
-  persistActiveJobs();
   emitJobsChanged();
   return true;
 }
@@ -960,7 +1156,7 @@ export function getJobEligibleDeviceCount(job: Job): number {
 function getJobDispatchableDeviceCount(job: Job): number {
   if (getJobConcurrencyBlocker(job)) return 0;
   if (requiresServerSideAppStoreAttempt(job)) return offlineWorkerSlots(job);
-  const deviceCount = getEffectiveDevices().filter((device) => device.enabled && !device.draining && !busyDeviceIds.has(device.id) && isJobDispatchable(job, device)).length;
+  const deviceCount = getEffectiveDevices().filter((device) => device.enabled && !device.draining && !busyDeviceIds.has(device.id) && !isPersistedWorkerResourceActive(`device:${device.id}`) && isJobDispatchable(job, device)).length;
   return deviceCount + offlineWorkerSlots(job);
 }
 
@@ -990,7 +1186,7 @@ function canStartOfflineAttempt(job: Job): boolean {
 
 function offlineWorkerSlots(job: Job): number {
   if (!canStartOfflineAttempt(job)) return 0;
-  return Math.max(0, config.appStoreOfflineMaxWorkers - busyOfflineWorkers.size);
+  return Math.max(0, config.appStoreOfflineMaxWorkers - countPersistedActiveWorkers('offline:'));
 }
 
 function scheduleOfflineCircuitProbe(): void {
@@ -1032,20 +1228,11 @@ function deviceScore(device: DeviceRecord, primary: DeviceRecord): number {
 }
 
 function queuedByActiveCount(username: string): number {
-  let count = 0;
-  for (const job of jobs.values()) {
-    if (job.status !== 'running') continue;
-    if (job.queuedBy?.toLowerCase() === username.toLowerCase()) count += 1;
-  }
-  return count;
+  return countPersistedRunningJobs({ queuedBy: username });
 }
 
 function apiKeyActiveCount(apiKeyId: string): number {
-  let count = 0;
-  for (const job of jobs.values()) {
-    if (job.status === 'running' && job.apiKeyId === apiKeyId) count += 1;
-  }
-  return count;
+  return countPersistedRunningJobs({ apiKeyId });
 }
 
 function getJobConcurrencyBlocker(job: Job): string | undefined {
@@ -1065,7 +1252,7 @@ function getJobConcurrencyBlocker(job: Job): string | undefined {
 function takeNextDispatchableJobId(device: DeviceRecord): string | undefined {
   for (let i = 0; i < queue.length; i++) {
     const job = jobs.get(queue[i]);
-    if (!job || job.pausedAt !== undefined || !isJobDispatchable(job, device)) continue;
+    if (!job || runningJobs.has(job.id) || job.status !== 'queued' || job.pausedAt !== undefined || !isJobDispatchable(job, device)) continue;
     if (getJobConcurrencyBlocker(job)) continue;
     queue.splice(i, 1);
     return job.id;
@@ -1076,40 +1263,62 @@ function takeNextDispatchableJobId(device: DeviceRecord): string | undefined {
 function takeNextOfflineJobId(): string | undefined {
   for (let i = 0; i < queue.length; i++) {
     const job = jobs.get(queue[i]);
-    if (!job || job.pausedAt !== undefined || !canStartOfflineAttempt(job) || getJobConcurrencyBlocker(job)) continue;
+    if (!job || runningJobs.has(job.id) || job.status !== 'queued' || job.pausedAt !== undefined || !canStartOfflineAttempt(job) || getJobConcurrencyBlocker(job)) continue;
     queue.splice(i, 1);
     return job.id;
   }
   return undefined;
 }
 
-function startJobWorker(job: Job, device?: DeviceRecord): void {
+function startJobWorker(job: Job, resourceId: string, device?: DeviceRecord): boolean {
+  if (runningJobs.has(job.id)) return false;
+  const lease = claimPersistedJobWorker(job.id, workerInstanceId, resourceId, WORKER_LEASE_MS);
+  if (!lease) {
+    syncPersistedJobsFromRepository(true);
+    return false;
+  }
   if (!device && !offlineAppStoreCircuit.beginAttempt()) {
-    busyOfflineWorkers.delete(job.id);
+    job.status = 'queued';
+    job.startedAt = undefined;
+    job.progress = 'queued';
+    replacePersistedJobs(jobs.values(), workerInstanceId);
+    releasePersistedJobWorker(lease);
     insertByPriority(job.id, job.priority);
     scheduleOfflineCircuitProbe();
-    return;
+    return false;
   }
+  busyWorkerResourceIds.add(resourceId);
+  job.workerAttemptId = `${lease.workerId}-${lease.generation}`;
   if (device) busyDeviceIds.add(device.id);
-  else busyOfflineWorkers.add(job.id);
+  startWorkerLeaseHeartbeat(job.id, lease);
   const run = withCorrelation({
     correlationId: job.correlationId ?? job.id,
     parentCorrelationId: job.parentCorrelationId,
     traceId: job.traceContext?.traceId,
     traceContext: job.traceContext,
-  }, () => runOneJob(device, job));
+  }, () => Promise.resolve().then(() => runOneJob(device, job)));
   runningJobs.set(job.id, run);
   void run.finally(() => {
+    stopWorkerLeaseHeartbeat(job.id);
+    const currentLease = workerLeases.get(job.id)?.lease;
+    if (currentLease && !jobStoreClosed) releasePersistedJobWorker(currentLease);
+    workerLeases.delete(job.id);
     runningJobs.delete(job.id);
+    lostWorkerLeaseJobIds.delete(job.id);
+    busyWorkerResourceIds.delete(resourceId);
     if (device) busyDeviceIds.delete(device.id);
-    else busyOfflineWorkers.delete(job.id);
-    pumpWorkers();
-  });
+    if (!jobStoreClosed) {
+      syncPersistedJobsFromRepository(true);
+      pumpWorkers();
+    }
+  }).catch((error: unknown) => log.error('job worker completion cleanup failed', { jobId: job.id, error: String(error) }));
+  return true;
 }
 
 function pumpWorkers(): void {
+  syncPersistedJobsFromRepository();
   for (const device of getEffectiveDevices()) {
-    if (device.draining && !busyDeviceIds.has(device.id)) updateDevice(device.id, { enabled: false }, 'system');
+    if (device.draining && !busyDeviceIds.has(device.id) && !isPersistedWorkerResourceActive(`device:${device.id}`)) updateDevice(device.id, { enabled: false }, 'system');
   }
   captureQueuedBlockers();
   expireOverdueQueuedJobs();
@@ -1119,11 +1328,13 @@ function pumpWorkers(): void {
   }));
   queue.splice(0, queue.length, ...fairOrder.map((job) => job.id));
   if (!acceptingJobs) return;
-  while (busyOfflineWorkers.size < config.appStoreOfflineMaxWorkers) {
+  for (let slot = 0; slot < config.appStoreOfflineMaxWorkers; slot += 1) {
+    const resourceId = `offline:${slot}`;
+    if (busyWorkerResourceIds.has(resourceId) || isPersistedWorkerResourceActive(resourceId)) continue;
     const jobId = takeNextOfflineJobId();
-    if (!jobId) break;
+    if (!jobId) continue;
     const job = jobs.get(jobId);
-    if (job) startJobWorker(job);
+    if (job) startJobWorker(job, resourceId);
   }
   const devices = getEffectiveDevices().filter((d) => d.enabled && !d.draining);
   if (devices.length === 0) return;
@@ -1131,17 +1342,19 @@ function pumpWorkers(): void {
 
   const rankedDevices = [...devices].sort((a, b) => deviceScore(b, primary) - deviceScore(a, primary));
   for (const device of rankedDevices) {
-    if (busyDeviceIds.has(device.id)) continue;
+    const resourceId = `device:${device.id}`;
+    if (busyDeviceIds.has(device.id) || busyWorkerResourceIds.has(resourceId) || isPersistedWorkerResourceActive(resourceId)) continue;
     const jobId = takeNextDispatchableJobId(device);
     if (!jobId) continue;
     const job = jobs.get(jobId);
     if (!job) continue;
 
-    startJobWorker(job, device);
+    startJobWorker(job, resourceId, device);
   }
 }
 
 async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<void> {
+  if (!renewWorkerLease(job.id)) return;
   clearQueuedDeadline(job.id);
   job.status = 'running';
   const controller = new AbortController();
@@ -1212,6 +1425,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     ).finally(() => {
       if (runningJobControllers.get(job.id) === controller) runningJobControllers.delete(job.id);
     });
+    if (!renewWorkerLease(job.id)) return;
     job.status = 'done';
     job.shutdownRecoveryPending = undefined;
     job.finishedAt = Date.now();
@@ -1233,6 +1447,11 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     persistActiveJobs();
     settleDecryptQuota(job.id, true);
   } catch (err) {
+    if (job.filePath?.startsWith(`${config.artifactDir}/.staging/`)) {
+      await rm(job.filePath, { force: true }).catch(() => {});
+      job.filePath = undefined;
+    }
+    if (lostWorkerLeaseJobIds.has(job.id) || !renewWorkerLease(job.id)) return;
     let message = job.cancelledBy ? `cancelled by ${job.cancelledBy}` : err instanceof Error ? err.message : String(err);
     if (!device) {
       const outcome = job.deadlineExceeded ? 'deadline' : job.cancelledBy ? 'cancelled' : job.shutdownRecoveryPending ? 'interrupted' : 'failure';
@@ -1246,10 +1465,6 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     }
     const preventsDeviceFallback = Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
     if (device && job.offlineFailureReason) message = `${message}; earlier server-side attempt failed: ${job.offlineFailureReason}`;
-    if (job.filePath?.startsWith(`${config.artifactDir}/.staging/`)) {
-      await rm(job.filePath, { force: true }).catch(() => {});
-      job.filePath = undefined;
-    }
     if (job.shutdownRecoveryPending) {
       persistShutdownRecovery(job);
       return;
@@ -1294,6 +1509,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       } finally {
         if (runningJobControllers.get(job.id) === controller) runningJobControllers.delete(job.id);
       }
+      if (lostWorkerLeaseJobIds.has(job.id) || !renewWorkerLease(job.id)) return;
       if (job.cancelledBy) {
         job.status = 'failed';
         job.finishedAt = Date.now();
@@ -1381,6 +1597,7 @@ async function cleanupJob(job: Job): Promise<void> {
       log.warn('failed to remove job file', { jobId: job.id, error: String(err) });
     });
   }
+  deletePersistedJob(job.id);
   jobs.delete(job.id);
   log.info('job cleaned up', { jobId: job.id, bundleId: job.bundleId });
   persistDoneJobs();
@@ -1441,7 +1658,17 @@ async function monitorQueueSlo(): Promise<void> {
 }
 
 export function startJobSweeper(): void {
+  syncPersistedJobsFromRepository(true);
+  recoverExpiredWorkerJobs();
   pumpWorkers();
+  jobSyncTimer ??= setInterval(() => {
+    try {
+      recoverExpiredWorkerJobs();
+      pumpWorkers();
+    } catch (error) {
+      log.error('worker instance synchronization failed', { error: String(error) });
+    }
+  }, JOB_SYNC_INTERVAL_MS).unref();
   const intervalMs = 60_000;
   jobSweepTimer ??= setInterval(() => {
     void trackBackgroundWork('queue-slo-monitor', monitorQueueSlo)
@@ -1463,6 +1690,8 @@ export function startJobSweeper(): void {
 export function stopJobSweeper(): void {
   if (jobSweepTimer) clearInterval(jobSweepTimer);
   jobSweepTimer = undefined;
+  if (jobSyncTimer) clearInterval(jobSyncTimer);
+  jobSyncTimer = undefined;
 }
 
 export function stopAcceptingJobs(): void {
@@ -1475,6 +1704,13 @@ export interface JobShutdownResult {
 }
 
 export function closeJobStore(): void {
+  for (const jobId of workerLeases.keys()) stopWorkerLeaseHeartbeat(jobId);
+  try {
+    releasePersistedWorkersById(workerInstanceId);
+  } catch (error) {
+    log.warn('could not release worker leases during shutdown', { error: String(error) });
+  }
+  jobStoreClosed = true;
   closePersistedJobs();
 }
 
@@ -1491,7 +1727,7 @@ export async function shutdownJobs(timeoutMs = 120_000): Promise<JobShutdownResu
   const drainedBeforeTimeout = await waitForCompletionOrTimeout(runsSettled, timeoutMs);
   if (!drainedBeforeTimeout) {
     for (const job of jobs.values()) {
-      if (job.status !== 'running') continue;
+      if (job.status !== 'running' || !runningJobs.has(job.id)) continue;
       job.shutdownRecoveryPending = true;
       runningJobControllers.get(job.id)?.abort(new Error('dkrypt is shutting down after the drain deadline'));
       terminateJobProcess(job);

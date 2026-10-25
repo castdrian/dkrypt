@@ -1,7 +1,7 @@
 import { config } from '#config.js';
 import type { Job } from '#jobs/types.js';
-import { openStateCollectionDatabase, readStateCollection, replaceStateCollections } from '#store/sqlite.js';
-import type { Database } from 'bun:sqlite';
+import { openStateCollectionDatabase } from '#store/sqlite.js';
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
 
 type StoredJob = Omit<Job, 'childProcess' | 'waiters'>;
 const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -36,14 +36,35 @@ export interface JobBuildLookup {
   testFlightBuildId?: number;
 }
 
+export interface JobWorkerLease {
+  jobId: string;
+  workerId: string;
+  resourceId: string;
+  generation: number;
+  leaseUntil: number;
+}
+
 export interface JobRepository {
   load(): StoredJob[];
-  replace(jobs: Iterable<Job>): void;
+  loadActive(): StoredJob[];
+  findById(jobId: string): StoredJob | undefined;
+  replace(jobs: Iterable<Job>, workerId?: string): string[];
+  delete(jobId: string): boolean;
+  requestCancellation(jobId: string, cancelledBy: string, now?: number): StoredJob | undefined;
   findActiveId(lookup: JobBuildLookup): string | undefined;
   findReusableCompletedIds(lookup: JobBuildLookup): string[];
+  claimWorker(jobId: string, workerId: string, resourceId: string, leaseMs: number, now?: number): JobWorkerLease | undefined;
+  renewWorker(lease: JobWorkerLease, leaseMs: number, now?: number): boolean;
+  releaseWorker(lease: JobWorkerLease): void;
+  releaseWorkersById(workerId: string): void;
+  isResourceActive(resourceId: string, now?: number): boolean;
+  listExpiredRunning(now?: number): StoredJob[];
+  requeueExpiredRunning(job: Job, now?: number): boolean;
+  countActiveWorkers(resourcePrefix: string, now?: number): number;
+  countRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number;
   quotaUsage(ownerId: string, limit: number | undefined, now?: number): DecryptQuotaUsage;
   quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
-  admit(job: Job, ownerId: string, limit: number | undefined): void;
+  admit(job: Job, ownerId?: string, limit?: number): string;
   settleQuota(jobId: string, success: boolean): void;
   reconcileQuota(): void;
   mergeQuotaOwner(targetUserId: string, sourceUserId: string): void;
@@ -56,30 +77,114 @@ function serializableJob(job: Job): StoredJob {
   return rest;
 }
 
-function loadJobs(database: Database): StoredJob[] {
-  const rows = readStateCollection(database, 'jobs');
-  const timelines = new Map<string, unknown>();
-  for (const value of readStateCollection(database, 'job_timelines')) {
-    if (typeof value !== 'object' || value === null || typeof (value as { jobId?: unknown }).jobId !== 'string') throw new Error('persisted job timeline record is malformed');
-    timelines.set((value as { jobId: string }).jobId, (value as { events?: unknown }).events);
-  }
+function loadJobs(database: Database, knownPayloads: Map<string, string>, activeOnly = false): StoredJob[] {
+  const rows = activeOnly
+    ? database.query(`
+        SELECT jobs.id, jobs.payload, job_timelines.payload AS timeline_payload
+        FROM jobs LEFT JOIN job_timelines ON job_timelines.id = jobs.id
+        WHERE jobs.status IN ('queued', 'running')
+        ORDER BY jobs.created_at, jobs.id;
+      `).all() as Array<{ id: string; payload: string; timeline_payload?: string }>
+    : database.query(`
+        SELECT jobs.id, jobs.payload, job_timelines.payload AS timeline_payload
+        FROM jobs LEFT JOIN job_timelines ON job_timelines.id = jobs.id
+        ORDER BY jobs.created_at, jobs.id;
+      `).all() as Array<{ id: string; payload: string; timeline_payload?: string }>;
   const jobs: StoredJob[] = [];
-  for (const value of rows) {
-    if (typeof value !== 'object' || value === null) throw new Error('persisted job record is malformed');
-    const job = value as StoredJob;
-    if (typeof job.id !== 'string' || !['queued', 'running', 'done', 'failed'].includes(job.status)) throw new Error('persisted job record is malformed');
-    const timeline = timelines.get(job.id);
-    jobs.push(Array.isArray(timeline) && !job.timeline ? { ...job, timeline: timeline as Job['timeline'] } : job);
+  for (const row of rows) {
+    const job = JSON.parse(row.payload) as StoredJob;
+    if (typeof job.id !== 'string' || job.id !== row.id || !['queued', 'running', 'done', 'failed'].includes(job.status)) throw new Error('persisted job record is malformed');
+    knownPayloads.set(job.id, row.payload);
+    const timelineRecord = row.timeline_payload ? JSON.parse(row.timeline_payload) as { events?: unknown } : undefined;
+    jobs.push(Array.isArray(timelineRecord?.events) && !job.timeline ? { ...job, timeline: timelineRecord.events as Job['timeline'] } : job);
   }
   return jobs;
 }
 
-function replaceJobs(database: Database, jobs: Iterable<Job>): void {
-  const values = [...jobs];
-  replaceStateCollections(database, [
-    { table: 'jobs', rows: values.map((job) => ({ id: job.id, payload: serializableJob(job), updatedAt: job.finishedAt ?? job.startedAt ?? job.createdAt })) },
-    { table: 'job_timelines', rows: values.map((job) => ({ id: job.id, payload: { jobId: job.id, events: job.timeline ?? [] }, updatedAt: job.finishedAt ?? job.startedAt ?? job.createdAt })) },
-  ]);
+function replaceJobs(database: Database, jobs: Iterable<Job>, knownPayloads: Map<string, string>, workerId?: string): string[] {
+  const conflicts: string[] = [];
+  database.exec('BEGIN IMMEDIATE;');
+  try {
+    for (const job of jobs) {
+      const record = serializableJob(job);
+      const payload = JSON.stringify(record);
+      const expectedPayload = knownPayloads.get(job.id);
+      if (expectedPayload === payload) continue;
+      const updatedAt = Date.now();
+      const values = indexedJobValues(job, payload, updatedAt);
+      let changes = 0;
+      if (expectedPayload === undefined) {
+        const result = database.query(`
+          INSERT INTO jobs (
+            id, payload, updated_at, status, bundle_id, external_version_id, testflight_build_id,
+            project_id, source, priority, created_at, started_at, finished_at, attempt, deadline_at,
+            failure_class, correlation_id, device_id, file_path
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING;
+        `).run(...values);
+        changes = result.changes;
+      } else {
+        const result = database.query(`
+          UPDATE jobs SET
+            payload = ?, updated_at = ?, status = ?, bundle_id = ?, external_version_id = ?,
+            testflight_build_id = ?, project_id = ?, source = ?, priority = ?, created_at = ?,
+            started_at = ?, finished_at = ?, attempt = ?, deadline_at = ?, failure_class = ?,
+            correlation_id = ?, device_id = ?, file_path = ?
+          WHERE id = ? AND payload = ?
+            AND (? = 1 OR EXISTS (
+              SELECT 1 FROM job_worker_leases
+              WHERE job_worker_leases.job_id = jobs.id
+                AND job_worker_leases.worker_id = ?
+                AND job_worker_leases.lease_until > ?
+            ));
+        `).run(...values.slice(1), job.id, expectedPayload, job.startedAt === undefined ? 1 : 0, workerId ?? '', Date.now());
+        changes = result.changes;
+      }
+      if (changes === 0) {
+        conflicts.push(job.id);
+        continue;
+      }
+      writeJobTimeline(database, job, updatedAt);
+      if (job.status !== 'running') database.query('DELETE FROM job_worker_leases WHERE job_id = ?;').run(job.id);
+      knownPayloads.set(job.id, payload);
+    }
+    database.exec('COMMIT;');
+  } catch (error) {
+    database.exec('ROLLBACK;');
+    throw error;
+  }
+  return conflicts;
+}
+
+function indexedJobValues(job: Job, payload: string, updatedAt: number): SQLQueryBindings[] {
+  return [
+    job.id,
+    payload,
+    updatedAt,
+    job.status,
+    job.bundleId,
+    job.externalVersionId ?? null,
+    job.testflight?.build.id ?? null,
+    job.projectId ?? 'default',
+    job.source,
+    job.priority,
+    job.createdAt,
+    job.startedAt ?? null,
+    job.finishedAt ?? null,
+    job.attempt ?? null,
+    job.deadlineAt ?? null,
+    job.failureClass ?? null,
+    job.correlationId ?? null,
+    job.deviceId ?? null,
+    job.filePath ?? null,
+  ];
+}
+
+function writeJobTimeline(database: Database, job: Job, updatedAt: number): void {
+  database.query(`
+    INSERT INTO job_timelines (id, payload, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
+  `).run(job.id, JSON.stringify({ jobId: job.id, events: job.timeline ?? [] }), updatedAt);
 }
 
 function quotaUsage(database: Database, ownerId: string, limit: number | undefined, now: number): DecryptQuotaUsage {
@@ -94,12 +199,23 @@ function quotaUsage(database: Database, ownerId: string, limit: number | undefin
   };
 }
 
-function admitJob(database: Database, job: Job, ownerId: string, limit: number | undefined): void {
-  const normalizedOwnerId = ownerId.trim().toLowerCase();
+function admitJob(database: Database, job: Job, ownerId?: string, limit?: number): string {
+  const normalizedOwnerId = ownerId?.trim().toLowerCase();
   database.exec('BEGIN IMMEDIATE;');
   try {
-    const usage = quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
-    if (limit !== undefined && usage.used >= limit) throw new DailyDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
+    const existing = database.query(`
+      SELECT id FROM jobs
+      WHERE ${exactBuildFilter} AND status IN ('queued', 'running')
+      ORDER BY updated_at DESC LIMIT 1;
+    `).get(job.projectId ?? 'default', job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null) as { id: string } | null;
+    if (existing) {
+      database.exec('COMMIT;');
+      return existing.id;
+    }
+    if (normalizedOwnerId) {
+      const usage = quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
+      if (limit !== undefined && usage.used >= limit) throw new DailyDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
+    }
     database.query(`
       INSERT INTO jobs (
         id, payload, updated_at, status, bundle_id, external_version_id, testflight_build_id,
@@ -108,8 +224,9 @@ function admitJob(database: Database, job: Job, ownerId: string, limit: number |
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(job.id, JSON.stringify(serializableJob(job)), job.createdAt, job.status, job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, job.projectId ?? 'default', job.source, job.priority, job.createdAt, null, null, job.attempt ?? null, job.deadlineAt ?? null, null, job.correlationId ?? null, null, null);
     database.query('INSERT INTO job_timelines (id, payload, updated_at) VALUES (?, ?, ?)').run(job.id, JSON.stringify({ jobId: job.id, events: job.timeline ?? [] }), job.createdAt);
-    database.query('INSERT INTO decrypt_quota_ledger (job_id, owner_id, admitted_at, state) VALUES (?, ?, ?, ?)').run(job.id, normalizedOwnerId, job.createdAt, 'reserved');
+    if (normalizedOwnerId) database.query('INSERT INTO decrypt_quota_ledger (job_id, owner_id, admitted_at, state) VALUES (?, ?, ?, ?)').run(job.id, normalizedOwnerId, job.createdAt, 'reserved');
     database.exec('COMMIT;');
+    return job.id;
   } catch (error) {
     database.exec('ROLLBACK;');
     throw error;
@@ -122,9 +239,92 @@ function reconcileQuota(database: Database): void {
 }
 
 export function createJobRepository(database: Database): JobRepository {
+  const knownPayloads = new Map<string, string>();
   return {
-    load: () => loadJobs(database),
-    replace: (jobs) => replaceJobs(database, jobs),
+    load() {
+      knownPayloads.clear();
+      return loadJobs(database, knownPayloads);
+    },
+    loadActive: () => loadJobs(database, knownPayloads, true),
+    findById(jobId) {
+      const row = database.query(`
+        SELECT jobs.id, jobs.payload, job_timelines.payload AS timeline_payload
+        FROM jobs LEFT JOIN job_timelines ON job_timelines.id = jobs.id
+        WHERE jobs.id = ?;
+      `).get(jobId) as { id: string; payload: string; timeline_payload?: string } | null;
+      if (!row) return undefined;
+      const job = JSON.parse(row.payload) as StoredJob;
+      if (typeof job.id !== 'string' || job.id !== row.id || !['queued', 'running', 'done', 'failed'].includes(job.status)) throw new Error('persisted job record is malformed');
+      knownPayloads.set(job.id, row.payload);
+      const timelineRecord = row.timeline_payload ? JSON.parse(row.timeline_payload) as { events?: unknown } : undefined;
+      return Array.isArray(timelineRecord?.events) && !job.timeline ? { ...job, timeline: timelineRecord.events as Job['timeline'] } : job;
+    },
+    replace: (jobs, workerId) => replaceJobs(database, jobs, knownPayloads, workerId),
+    delete(jobId) {
+      const expectedPayload = knownPayloads.get(jobId);
+      if (expectedPayload === undefined) return false;
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const result = database.query(`
+          DELETE FROM jobs
+          WHERE id = ? AND payload = ? AND status IN ('done', 'failed')
+            AND NOT EXISTS (
+              SELECT 1 FROM job_worker_leases
+              WHERE job_worker_leases.job_id = jobs.id AND job_worker_leases.lease_until > ?
+            );
+        `).run(jobId, expectedPayload, Date.now());
+        if (result.changes === 1) database.query('DELETE FROM job_timelines WHERE id = ?;').run(jobId);
+        database.exec('COMMIT;');
+        if (result.changes === 1) knownPayloads.delete(jobId);
+        return result.changes === 1;
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
+    requestCancellation(jobId, cancelledBy, now = Date.now()) {
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const row = database.query('SELECT payload, status FROM jobs WHERE id = ?;').get(jobId) as { payload: string; status: string } | null;
+        if (!row || row.status !== 'running') {
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        const job = JSON.parse(row.payload) as Job;
+        if (job.cancelledBy) {
+          database.exec('COMMIT;');
+          knownPayloads.set(jobId, row.payload);
+          return job;
+        }
+        const updated = {
+          ...job,
+          cancelledBy,
+          progress: 'cancelling…',
+          timeline: [...(job.timeline ?? []), { at: now, label: 'cancelling…', status: 'running' as const }],
+        };
+        const payload = JSON.stringify(updated);
+        const values = indexedJobValues(updated, payload, now);
+        const result = database.query(`
+          UPDATE jobs SET
+            payload = ?, updated_at = ?, status = ?, bundle_id = ?, external_version_id = ?,
+            testflight_build_id = ?, project_id = ?, source = ?, priority = ?, created_at = ?,
+            started_at = ?, finished_at = ?, attempt = ?, deadline_at = ?, failure_class = ?,
+            correlation_id = ?, device_id = ?, file_path = ?
+          WHERE id = ? AND status = 'running' AND payload = ?;
+        `).run(...values.slice(1), jobId, row.payload);
+        if (result.changes !== 1) {
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        writeJobTimeline(database, updated, now);
+        database.exec('COMMIT;');
+        knownPayloads.set(jobId, payload);
+        return updated;
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
     findActiveId(lookup) {
       const row = database.query(`
         SELECT id
@@ -148,6 +348,136 @@ export function createJobRepository(database: Database): JobRepository {
       `).all(lookup.projectId, lookup.bundleId, lookup.externalVersionId ?? null, lookup.testFlightBuildId ?? null) as Array<{ id: string }>;
       return rows.map((row) => row.id);
     },
+    claimWorker(jobId, workerId, resourceId, leaseMs, now = Date.now()) {
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const job = database.query('SELECT payload, status FROM jobs WHERE id = ?;').get(jobId) as { payload: string; status: string } | null;
+        const expectedPayload = knownPayloads.get(jobId);
+        if (!job || job.status !== 'queued' || expectedPayload === undefined || job.payload !== expectedPayload) {
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        const activeResource = database.query('SELECT job_id FROM job_worker_leases WHERE resource_id = ? AND lease_until > ?;').get(resourceId, now) as { job_id: string } | null;
+        if (activeResource) {
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        const activeJob = database.query('SELECT job_id FROM job_worker_leases WHERE job_id = ? AND lease_until > ?;').get(jobId, now) as { job_id: string } | null;
+        if (activeJob) {
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        const priorResource = database.query('SELECT generation FROM job_worker_generations WHERE resource_id = ?;').get(resourceId) as { generation: number } | null;
+        const generation = (priorResource?.generation ?? 0) + 1;
+        database.query(`
+          INSERT INTO job_worker_generations (resource_id, generation) VALUES (?, ?)
+          ON CONFLICT(resource_id) DO UPDATE SET generation = excluded.generation;
+        `).run(resourceId, generation);
+        const storedJob = JSON.parse(job.payload) as Job;
+        const claimedJob = { ...storedJob, status: 'running' as const, startedAt: storedJob.startedAt ?? now };
+        const payload = JSON.stringify(claimedJob);
+        const values = indexedJobValues(claimedJob, payload, now);
+        database.query('DELETE FROM job_worker_leases WHERE (job_id = ? OR resource_id = ?) AND lease_until <= ?;').run(jobId, resourceId, now);
+        database.query(`
+          INSERT INTO job_worker_leases (job_id, worker_id, resource_id, generation, lease_until, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?);
+        `).run(jobId, workerId, resourceId, generation, now + leaseMs, now);
+        const changed = database.query(`
+          UPDATE jobs SET
+            payload = ?, updated_at = ?, status = ?, bundle_id = ?, external_version_id = ?,
+            testflight_build_id = ?, project_id = ?, source = ?, priority = ?, created_at = ?,
+            started_at = ?, finished_at = ?, attempt = ?, deadline_at = ?, failure_class = ?,
+            correlation_id = ?, device_id = ?, file_path = ?
+          WHERE id = ? AND payload = ? AND status = 'queued';
+        `).run(...values.slice(1), jobId, expectedPayload);
+        if (changed.changes !== 1) {
+          database.query('DELETE FROM job_worker_leases WHERE job_id = ? AND worker_id = ? AND resource_id = ? AND generation = ?;').run(jobId, workerId, resourceId, generation);
+          database.exec('COMMIT;');
+          return undefined;
+        }
+        database.exec('COMMIT;');
+        knownPayloads.set(jobId, payload);
+        return { jobId, workerId, resourceId, generation, leaseUntil: now + leaseMs };
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
+    renewWorker(lease, leaseMs, now = Date.now()) {
+      const result = database.query(`
+        UPDATE job_worker_leases SET lease_until = ?, updated_at = ?
+        WHERE job_id = ? AND worker_id = ? AND resource_id = ? AND generation = ? AND lease_until > ?;
+      `).run(now + leaseMs, now, lease.jobId, lease.workerId, lease.resourceId, lease.generation, now);
+      return result.changes === 1;
+    },
+    releaseWorker(lease) {
+      database.query('DELETE FROM job_worker_leases WHERE job_id = ? AND worker_id = ? AND resource_id = ? AND generation = ?;').run(lease.jobId, lease.workerId, lease.resourceId, lease.generation);
+    },
+    releaseWorkersById(workerId) {
+      database.query('DELETE FROM job_worker_leases WHERE worker_id = ?;').run(workerId);
+    },
+    isResourceActive(resourceId, now = Date.now()) {
+      return Boolean(database.query('SELECT 1 AS active FROM job_worker_leases WHERE resource_id = ? AND lease_until > ?;').get(resourceId, now));
+    },
+    listExpiredRunning(now = Date.now()) {
+      const rows = database.query(`
+        SELECT jobs.payload FROM jobs
+        WHERE jobs.status = 'running'
+          AND NOT EXISTS (
+            SELECT 1 FROM job_worker_leases
+            WHERE job_worker_leases.job_id = jobs.id AND job_worker_leases.lease_until > ?
+          );
+      `).all(now) as Array<{ payload: string }>;
+      return rows.map(({ payload }) => JSON.parse(payload) as StoredJob);
+    },
+    requeueExpiredRunning(job, now = Date.now()) {
+      const record = serializableJob(job);
+      const expectedPayload = knownPayloads.get(job.id);
+      if (expectedPayload === undefined) return false;
+      const payload = JSON.stringify(record);
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const changed = database.query(`
+          UPDATE jobs SET
+            payload = ?, updated_at = ?, status = ?, bundle_id = ?, external_version_id = ?,
+            testflight_build_id = ?, project_id = ?, source = ?, priority = ?, created_at = ?,
+            started_at = ?, finished_at = ?, attempt = ?, deadline_at = ?, failure_class = ?,
+            correlation_id = ?, device_id = ?, file_path = ?
+          WHERE id = ? AND status = 'running' AND payload = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM job_worker_leases
+              WHERE job_worker_leases.job_id = jobs.id AND job_worker_leases.lease_until > ?
+            );
+        `).run(...indexedJobValues(job, payload, now).slice(1), job.id, expectedPayload, now);
+        if (changed.changes !== 1) {
+          database.exec('COMMIT;');
+          return false;
+        }
+        writeJobTimeline(database, job, now);
+        database.query('DELETE FROM job_worker_leases WHERE job_id = ? AND lease_until <= ?;').run(job.id, now);
+        database.exec('COMMIT;');
+        knownPayloads.set(job.id, payload);
+        return true;
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
+    countActiveWorkers(resourcePrefix, now = Date.now()) {
+      const row = database.query('SELECT COUNT(*) AS count FROM job_worker_leases WHERE resource_id LIKE ? AND lease_until > ?;').get(`${resourcePrefix}%`, now) as { count?: number } | null;
+      return row?.count ?? 0;
+    },
+    countRunningJobs(filter) {
+      if (filter.queuedBy !== undefined) {
+        const row = database.query("SELECT COUNT(*) AS count FROM jobs WHERE status = 'running' AND json_extract(payload, '$.queuedBy') = ? COLLATE NOCASE;").get(filter.queuedBy) as { count?: number } | null;
+        return row?.count ?? 0;
+      }
+      if (filter.apiKeyId !== undefined) {
+        const row = database.query("SELECT COUNT(*) AS count FROM jobs WHERE status = 'running' AND json_extract(payload, '$.apiKeyId') = ?;").get(filter.apiKeyId) as { count?: number } | null;
+        return row?.count ?? 0;
+      }
+      return 0;
+    },
     quotaUsage: (ownerId, limit, now = Date.now()) => quotaUsage(database, ownerId, limit, now),
     quotaJournal(ownerId, limit = 10_000) {
       const rows = database.query(`
@@ -165,7 +495,11 @@ export function createJobRepository(database: Database): JobRepository {
       }>;
       return rows.map((row) => ({ jobId: row.job_id, ownerId: row.owner_id, admittedAt: row.admitted_at, state: row.state, bundleId: row.bundle_id, projectId: row.project_id, source: row.source, status: row.status, versionLabel: row.version_label, executionPath: row.execution_path }));
     },
-    admit: (job, ownerId, limit) => admitJob(database, job, ownerId, limit),
+    admit(job, ownerId, limit) {
+      const admittedId = admitJob(database, job, ownerId, limit);
+      if (admittedId === job.id) knownPayloads.set(job.id, JSON.stringify(serializableJob(job)));
+      return admittedId;
+    },
     settleQuota(jobId, success) {
       if (success) database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
       else database.query("DELETE FROM decrypt_quota_ledger WHERE job_id = ? AND state = 'reserved'").run(jobId);
@@ -186,8 +520,24 @@ export function loadPersistedJobs(): StoredJob[] {
   return repository.load();
 }
 
-export function replacePersistedJobs(jobs: Iterable<Job>): void {
-  repository.replace(jobs);
+export function loadPersistedActiveJobs(): StoredJob[] {
+  return repository.loadActive();
+}
+
+export function findPersistedJobById(jobId: string): StoredJob | undefined {
+  return repository.findById(jobId);
+}
+
+export function replacePersistedJobs(jobs: Iterable<Job>, workerId?: string): string[] {
+  return repository.replace(jobs, workerId);
+}
+
+export function deletePersistedJob(jobId: string): boolean {
+  return repository.delete(jobId);
+}
+
+export function requestPersistedJobCancellation(jobId: string, cancelledBy: string): ReturnType<JobRepository['requestCancellation']> {
+  return repository.requestCancellation(jobId, cancelledBy);
 }
 
 export function findPersistedActiveJobId(lookup: JobBuildLookup): string | undefined {
@@ -202,6 +552,42 @@ export function closePersistedJobs(): void {
   repository.close();
 }
 
+export function claimPersistedJobWorker(jobId: string, workerId: string, resourceId: string, leaseMs: number): JobWorkerLease | undefined {
+  return repository.claimWorker(jobId, workerId, resourceId, leaseMs);
+}
+
+export function renewPersistedJobWorker(lease: JobWorkerLease, leaseMs: number): boolean {
+  return repository.renewWorker(lease, leaseMs);
+}
+
+export function releasePersistedJobWorker(lease: JobWorkerLease): void {
+  repository.releaseWorker(lease);
+}
+
+export function releasePersistedWorkersById(workerId: string): void {
+  repository.releaseWorkersById(workerId);
+}
+
+export function isPersistedWorkerResourceActive(resourceId: string): boolean {
+  return repository.isResourceActive(resourceId);
+}
+
+export function listPersistedExpiredRunningJobs(): StoredJob[] {
+  return repository.listExpiredRunning();
+}
+
+export function requeuePersistedExpiredRunningJob(job: Job): boolean {
+  return repository.requeueExpiredRunning(job);
+}
+
+export function countPersistedActiveWorkers(resourcePrefix: string): number {
+  return repository.countActiveWorkers(resourcePrefix);
+}
+
+export function countPersistedRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number {
+  return repository.countRunningJobs(filter);
+}
+
 export function getDecryptQuotaUsage(ownerId: string, limit: number | undefined, now = Date.now()): DecryptQuotaUsage {
   return repository.quotaUsage(ownerId, limit, now);
 }
@@ -210,8 +596,8 @@ export function getDecryptQuotaJournal(ownerId: string, limit = 10_000): ReturnT
   return repository.quotaJournal(ownerId, limit);
 }
 
-export function admitQuotaJob(job: Job, ownerId: string, limit: number | undefined): void {
-  repository.admit(job, ownerId, limit);
+export function admitPersistedJob(job: Job, ownerId?: string, limit?: number): string {
+  return repository.admit(job, ownerId, limit);
 }
 
 export function settleDecryptQuota(jobId: string, success: boolean): void {

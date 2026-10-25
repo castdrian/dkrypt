@@ -816,6 +816,24 @@ const migrations = [
         AND json_extract(payload, '$.isDefault') IN (0, 1);
     `,
   },
+  {
+    version: 32,
+    sql: `
+      CREATE TABLE job_worker_leases (
+        job_id TEXT PRIMARY KEY NOT NULL,
+        worker_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL UNIQUE,
+        generation INTEGER NOT NULL,
+        lease_until INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX job_worker_leases_by_resource ON job_worker_leases(resource_id, lease_until);
+      CREATE TABLE job_worker_generations (
+        resource_id TEXT PRIMARY KEY NOT NULL,
+        generation INTEGER NOT NULL
+      );
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

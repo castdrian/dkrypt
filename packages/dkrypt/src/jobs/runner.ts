@@ -84,7 +84,7 @@ async function runDecryptOperation(job: Job, device: DeviceRecord, signal?: Abor
   if (installBlocker) throw new Error(`decrypt deferred: ${installBlocker}`);
   const stagingDir = path.join(config.artifactDir, '.staging');
   await mkdir(stagingDir, { recursive: true });
-  const outputPath = path.join(stagingDir, `${job.id}.ipa`);
+  const outputPath = path.join(stagingDir, `${job.id}-${job.workerAttemptId ?? job.attempt ?? 'attempt'}.ipa`);
   job.filePath = outputPath;
   job.deviceId = device.id;
 
