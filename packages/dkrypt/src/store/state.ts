@@ -400,6 +400,9 @@ export interface JobHistoryEntry {
   transport?: DeviceTransport;
   executionPath?: JobExecutionPath;
   offlineAttemptedAt?: number;
+  offlineAttemptDurationMs?: number;
+  offlineDeviceFallbackStartedAt?: number;
+  deviceFallbackDurationMs?: number;
   offlineFailureReason?: string;
   ipaMetadata?: IpaMetadata;
   ipaInfoPlist?: Record<string, unknown>;
@@ -605,6 +608,7 @@ export type AuditAction =
   | 'billing.webhook.sync'
   | 'billing.webhook.replay'
   | 'billing.webhook.quarantine'
+  | 'billing.reconciliation.sync'
   | 'billing.checkouts.pause'
   | 'privacy.export'
   | 'privacy.delete'
@@ -3406,6 +3410,15 @@ export interface InsightsSummary {
   failureBreakdown: { category: string; count: number }[];
   byDevice: DeviceThroughputStats[];
   anomalies: PerformanceAnomaly[];
+  executionPath: {
+    serverAttempts: number;
+    serverCompleted: number;
+    deviceFallbacks: number;
+    fallbackCompleted: number;
+    fallbackFailed: number;
+    averageServerAttemptMs?: number;
+    averageDeviceFallbackMs?: number;
+  };
 }
 
 export interface PerformanceAnomaly {
@@ -3487,6 +3500,9 @@ export function getInsightsSummary(topAppsLimit = 5, trendDays = 14, projectId?:
   const doneCount = runs.filter((j) => j.status === 'done').length;
   const failedCount = runs.filter((j) => j.status === 'failed').length;
   const totalSizeBytes = runs.reduce((sum, j) => sum + (j.sizeBytes ?? 0), 0);
+  const serverAttempts = runs.filter((job) => job.offlineAttemptedAt !== undefined || job.executionPath === 'appstore_offline' || job.executionPath === 'device_fallback');
+  const deviceFallbacks = runs.filter((job) => job.executionPath === 'device_fallback');
+  const averageOf = (values: number[]): number | undefined => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : undefined;
 
   const byBundle = new Map<string, InsightsAppStats>();
   const durationsByBundle = new Map<string, number[]>();
@@ -3533,6 +3549,15 @@ export function getInsightsSummary(topAppsLimit = 5, trendDays = 14, projectId?:
     failureBreakdown: getFailureBreakdown(runs),
     byDevice: getDeviceThroughput(projectId),
     anomalies: getPerformanceAnomalies(runs),
+    executionPath: {
+      serverAttempts: serverAttempts.length,
+      serverCompleted: runs.filter((job) => job.status === 'done' && job.executionPath === 'appstore_offline').length,
+      deviceFallbacks: deviceFallbacks.length,
+      fallbackCompleted: deviceFallbacks.filter((job) => job.status === 'done').length,
+      fallbackFailed: deviceFallbacks.filter((job) => job.status === 'failed').length,
+      averageServerAttemptMs: averageOf(serverAttempts.flatMap((job) => job.offlineAttemptDurationMs === undefined ? [] : [job.offlineAttemptDurationMs])),
+      averageDeviceFallbackMs: averageOf(deviceFallbacks.flatMap((job) => job.deviceFallbackDurationMs === undefined ? [] : [job.deviceFallbackDurationMs])),
+    },
   };
 }
 

@@ -97,6 +97,7 @@ export interface JobRepository {
   countRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number;
   quotaUsage(ownerId: string, limit: number | undefined, now?: number): DecryptQuotaUsage;
   quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
+  quotaReceipt(jobId: string, ownerId: string): { admittedAt: number; state: 'reserved' | 'consumed' } | undefined;
   admit(job: Job, ownerId?: string, limit?: number): string;
   settleQuota(jobId: string, success: boolean): void;
   reconcileQuota(): void;
@@ -595,6 +596,10 @@ export function createJobRepository(database: Database): JobRepository {
       }>;
       return rows.map((row) => ({ jobId: row.job_id, ownerId: row.owner_id, admittedAt: row.admitted_at, state: row.state, bundleId: row.bundle_id, projectId: row.project_id, source: row.source, status: row.status, versionLabel: row.version_label, executionPath: row.execution_path }));
     },
+    quotaReceipt(jobId, ownerId) {
+      const row = database.query('SELECT admitted_at, state FROM decrypt_quota_ledger WHERE job_id = ? AND owner_id = ?').get(jobId, ownerId.trim().toLowerCase()) as { admitted_at: number; state: 'reserved' | 'consumed' } | null;
+      return row ? { admittedAt: row.admitted_at, state: row.state } : undefined;
+    },
     admit(job, ownerId, limit) {
       const admittedId = admitJob(database, job, ownerId, limit);
       if (admittedId === job.id) knownPayloads.set(job.id, JSON.stringify(serializableJob(job)));
@@ -714,6 +719,10 @@ export function getDecryptQuotaUsage(ownerId: string, limit: number | undefined,
 
 export function getDecryptQuotaJournal(ownerId: string, limit = 10_000): ReturnType<JobRepository['quotaJournal']> {
   return repository.quotaJournal(ownerId, limit);
+}
+
+export function getDecryptQuotaReceipt(jobId: string, ownerId: string): ReturnType<JobRepository['quotaReceipt']> {
+  return repository.quotaReceipt(jobId, ownerId);
 }
 
 export function admitPersistedJob(job: Job, ownerId?: string, limit?: number): string {

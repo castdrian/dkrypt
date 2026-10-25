@@ -45,11 +45,13 @@ jobs:
         run: bunx @moonrepo/cli@2.4.6 run dkrypt:check
       - name: Verify CLI and n8n integrations
         run: |
+          node --check .github/actions/dkrypt-decrypt/action.mjs
           cd packages/dkrypt-cli
           npm test
           cd ../n8n-nodes-dkrypt
           node --check credentials/DkryptApi.credentials.js
           node --check nodes/Dkrypt/Dkrypt.node.js
+          node --check nodes/Dkrypt/DkryptJobTrigger.node.js
           npm test
       - uses: azure/setup-helm@v4
         with:
@@ -60,8 +62,27 @@ jobs:
           helm template dkrypt deploy/helm/dkrypt --set secrets.existingSecret=dkrypt-runtime > /tmp/dkrypt-helm-rendered.yaml
           test -s /tmp/dkrypt-helm-rendered.yaml
           grep -F 'image: "ghcr.io/castdrian/dkrypt:main"' /tmp/dkrypt-helm-rendered.yaml
+          if helm template dkrypt deploy/helm/dkrypt --set secrets.existingSecret=dkrypt-runtime --set replicaCount=2 >/dev/null 2>&1; then exit 1; fi
+      - uses: helm/kind-action@v1.15.1
+      - name: Install and upgrade the chart in a disposable cluster
+        run: |
+          kubectl create namespace dkrypt-chart-test
+          kubectl create secret generic dkrypt-runtime --namespace dkrypt-chart-test --from-literal=API_KEY=chart-test-api-key --from-literal=SESSION_SIGNING_SECRET=chart-test-session-signing-secret-at-least-32-chars --from-literal=ADMIN_PASSWORD=chart-test-admin-password-long
+          helm upgrade --install dkrypt deploy/helm/dkrypt --namespace dkrypt-chart-test --set secrets.existingSecret=dkrypt-runtime --wait=false
+          deployment="$(kubectl get deployments --namespace dkrypt-chart-test --selector=app.kubernetes.io/instance=dkrypt --output=jsonpath='{.items[0].metadata.name}')"
+          service="$(kubectl get services --namespace dkrypt-chart-test --selector=app.kubernetes.io/instance=dkrypt --output=jsonpath='{.items[0].metadata.name}')"
+          test -n "$deployment"
+          test -n "$service"
+          test "$(kubectl get deployment "$deployment" --namespace dkrypt-chart-test --output=jsonpath='{.spec.replicas}')" = '1'
+          test "$(kubectl get deployment "$deployment" --namespace dkrypt-chart-test --output=jsonpath='{.spec.strategy.type}')" = 'Recreate'
+          test "$(kubectl get deployment "$deployment" --namespace dkrypt-chart-test --output=jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}')" = '/openapi.json'
+          test "$(kubectl get persistentvolumeclaims --namespace dkrypt-chart-test --selector=app.kubernetes.io/instance=dkrypt --output=json | jq '.items | length')" = '3'
+          helm upgrade dkrypt deploy/helm/dkrypt --namespace dkrypt-chart-test --set secrets.existingSecret=dkrypt-runtime --set resources.requests.cpu=750m --set resources.requests.memory=2Gi --wait=false
+          test "$(kubectl get deployment "$deployment" --namespace dkrypt-chart-test --output=jsonpath='{.spec.template.spec.containers[0].resources.requests.memory}')" = '2Gi'
       - name: Validate migration helper
-        run: bash -n scripts/host-migration.sh
+        run: |
+          bash -n scripts/host-migration.sh
+          sh -n scripts/dkrypt-update.sh
       - name: Run isolated service load scenarios
         run: |
           cd packages/dkrypt
@@ -139,6 +160,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         id: build-candidate
         with:
@@ -176,20 +199,52 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
-      - name: Publish scanned image
+      - name: Publish multi-architecture image
         id: publish
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packages/dkrypt/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_REF=${{ github.sha }}
+            DEPLOYMENT_ID=${{ github.run_id }}
+
+      - name: Verify published platform manifest
         env:
           IMAGE: ghcr.io/${{ github.repository }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          push_output="$(docker push "${IMAGE}:${IMAGE_TAG}" 2>&1)"
-          printf '%s\n' "$push_output"
-          digest="$(printf '%s\n' "$push_output" | sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' | tail -n 1)"
-          test -n "$digest"
-          docker tag "${IMAGE}:${IMAGE_TAG}" "${IMAGE}:main"
-          docker push "${IMAGE}:main"
-          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" | jq -e '[.manifests[].platform | select(.os == "linux" and (.architecture == "amd64" or .architecture == "arm64"))] | length == 2' >/dev/null
+
+      - name: Scan published AMD64 image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.publish.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          extra-args: --platform linux/amd64
+
+      - name: Scan published ARM64 image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.publish.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          extra-args: --platform linux/arm64
+
+      - name: Publish main tag
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: docker buildx imagetools create --tag "${IMAGE}:main" "${IMAGE}@${DIGEST}"
 
       - name: Upload image SBOM
         uses: actions/upload-artifact@v7

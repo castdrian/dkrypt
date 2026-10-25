@@ -41,7 +41,19 @@ export function createDashboardJobAnalyticsRoutes(overrides: Partial<DashboardJo
     server.get<DashboardJobEtaRoute>('/v1/dashboard/jobs/eta/:bundleId', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/eta/:bundleId'),
     }, (request) => {
-      return { avgMs: services.getAverageJobDurationMs(request.params.bundleId, DEFAULT_PROJECT_ID) ?? null };
+      const samples = services.getAllJobHistory()
+        .filter((job) => job.bundleId === request.params.bundleId && (job.projectId ?? DEFAULT_PROJECT_ID) === DEFAULT_PROJECT_ID && job.status === 'done' && typeof job.startedAt === 'number' && job.finishedAt > job.startedAt)
+        .map((job) => job.finishedAt - (job.startedAt as number))
+        .sort((left, right) => left - right);
+      const percentile = (value: number): number | null => samples.length ? samples[Math.max(0, Math.ceil(samples.length * value) - 1)] ?? null : null;
+      const sampleCount = samples.length;
+      return {
+        avgMs: services.getAverageJobDurationMs(request.params.bundleId, DEFAULT_PROJECT_ID) ?? null,
+        p50Ms: percentile(0.5),
+        p95Ms: percentile(0.95),
+        sampleCount,
+        confidence: sampleCount === 0 ? 'none' as const : sampleCount < 5 ? 'low' as const : sampleCount < 20 ? 'medium' as const : 'high' as const,
+      };
     });
 
     server.get<DashboardJobStatsRoute>('/v1/dashboard/jobs/stats/:bundleId', {

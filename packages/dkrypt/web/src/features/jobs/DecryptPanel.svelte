@@ -346,6 +346,9 @@
 	}
 
 	let etaByBundle = $state<Record<string, number | null>>({});
+	let etaRangeByBundle = $state<Record<string, { p50Ms: number | null; p95Ms: number | null }>>({});
+	let etaConfidenceByBundle = $state<Record<string, string>>({});
+	let etaSamplesByBundle = $state<Record<string, number>>({});
 	const fetchedEtaBundles = new Set<string>();
 
 	$effect(() => {
@@ -355,6 +358,9 @@
 			fetchJobEta(r.bundleId)
 				.then((res) => {
 					etaByBundle[r.bundleId] = res.avgMs;
+					etaRangeByBundle[r.bundleId] = { p50Ms: res.p50Ms, p95Ms: res.p95Ms };
+					etaConfidenceByBundle[r.bundleId] = res.confidence;
+					etaSamplesByBundle[r.bundleId] = res.sampleCount;
 				})
 				.catch(() => fetchedEtaBundles.delete(r.bundleId));
 		}
@@ -374,7 +380,11 @@
 
 	function decryptButtonTitle(bundleId: string): string | undefined {
 		const avg = etaByBundle[bundleId];
-		return avg ? `Usually takes ${fmtDurationApprox(avg)}` : undefined;
+		const range = etaRangeByBundle[bundleId];
+		const estimate = range?.p50Ms !== null && range?.p50Ms !== undefined && range.p95Ms !== null
+			? `Likely ${fmtDurationApprox(range.p50Ms)}–${fmtDurationApprox(range.p95Ms)}`
+			: avg ? `Usually ${fmtDurationApprox(avg)}` : undefined;
+		return estimate ? `${estimate} · ${etaConfidenceByBundle[bundleId]} confidence from ${etaSamplesByBundle[bundleId]} jobs` : undefined;
 	}
 
 	function curlFor(bundleId: string): string {

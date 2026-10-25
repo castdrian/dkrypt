@@ -154,6 +154,24 @@ test('job repository persists exact-build lookups and timelines across restart',
   }
 });
 
+test('quota receipt is available only to its owning account and reflects reservation settlement', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-quota-receipt-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const job = createJob({ id: 'quota-receipt-job', createdAt: 1_800_000_000_000 });
+    expect(repository.admit(job, 'Member@example.test', 2)).toBe(job.id);
+    expect(repository.quotaReceipt(job.id, 'member@example.test')).toEqual({ admittedAt: job.createdAt, state: 'reserved' });
+    expect(repository.quotaReceipt(job.id, 'another@example.test')).toBeUndefined();
+    repository.settleQuota(job.id, true);
+    expect(repository.quotaReceipt(job.id, 'member@example.test')).toEqual({ admittedAt: job.createdAt, state: 'consumed' });
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('worker drains preserve active leases and stop new job claims', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-worker-drain-'));
   let repository: ReturnType<typeof createJobRepository> | undefined;

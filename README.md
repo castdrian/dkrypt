@@ -98,7 +98,7 @@ For NOWPayments API-key rotation, set `NOWPAYMENTS_API_KEY` to the new key and `
 
 For Stripe API-key rotation, set `STRIPE_SECRET_KEY` to the new key and `STRIPE_SECRET_KEY_PREVIOUS` to the old key during the overlap window. Both keys must belong to the same test or live mode. dkrypt retries with the previous key only after Stripe explicitly rejects the current key with HTTP 401; permission, server, and network failures are not retried with another credential. The manager configuration doctor reports invalid or cross-mode key pairs. Successful fallback is logged without exposing either key. Remove the previous key after confirming requests use the current credential.
 
-The SQLite database uses WAL mode, foreign keys, migration checksums, integrity checks, and an atomic pre-migration backup. Startup fails closed when the database or migration checksums are invalid. The dashboard doctor is available to managers at `/v1/dashboard/doctor`.
+The SQLite database uses WAL mode, foreign keys, migration checksums, integrity checks, and an atomic pre-migration backup. Startup fails closed when the database or migration checksums are invalid. Before updating a self-hosted deployment, run `cd packages/dkrypt && bun run db:migrate:dry-run` to exercise the pending migrations against a temporary database copy and verify restore integrity; the live database is not changed. The dashboard doctor is available to managers at `/v1/dashboard/doctor` and reports recommended CPU, memory, and temporary-storage capacity for the configured offline workers.
 
 To update a source checkout:
 
@@ -106,6 +106,14 @@ To update a source checkout:
 git pull --ff-only origin main
 docker compose up -d --build
 ```
+
+For an immutable image update with an automatic database snapshot and health-checked rollback, run:
+
+```sh
+scripts/dkrypt-update.sh ghcr.io/<owner>/<repository>@sha256:<image-digest>
+```
+
+The helper asks before restarting the service. Pass `--yes` as the second argument for unattended use after reviewing the target digest. It keeps a verified SQLite copy in the state volume and restores both the prior image and database if the new container does not become healthy.
 
 </details>
 
@@ -181,6 +189,18 @@ Dashboard-generated API keys use `Authorization: Bearer <generated-key>` and cov
 | `GET /v1/artifacts/:id/file` | Download an IPA artifact |
 
 Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility policy](packages/dkrypt/docs/api/compatibility.md) describes response stability and deprecation windows. Find [curl, Python, TypeScript, CLI, and local mock examples](packages/dkrypt/docs/api/examples.md). The local simulator listens only on `127.0.0.1`, accepts the fixed `mock-dkrypt-key`, and never contacts Apple or a payment provider.
+
+GitHub workflows can use the [dkrypt decrypt action](.github/actions/dkrypt-decrypt/action.yml) to submit a decrypt, wait for its result, and download the IPA:
+
+```yaml
+- uses: castdrian/dkrypt/.github/actions/dkrypt-decrypt@main
+  id: decrypt
+  with:
+    api-key: ${{ secrets.DKRYPT_API_KEY }}
+    bundle-id: com.example.app
+```
+
+The action writes the IPA to the workspace and exposes `job-id` and `artifact-id` outputs. Use an API key with decrypt and artifact access.
 
 Dashboard, billing, account, session, health, and administration routes are internal to dkrypt and are not available to generated API keys. The public OpenAPI document is available at `/openapi.json` and the Scalar reference UI at `/reference`.
 

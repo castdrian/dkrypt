@@ -122,8 +122,15 @@ test('queue SLO data remains manager-gated and includes the active queue objecti
 
 test('job ETA uses the shared account history', async () => {
   const calls: Array<[string, string]> = [];
+  const now = Date.now();
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardJobAnalyticsRoutes({
+    getAllJobHistory: () => [
+      { bundleId: 'com.example.app', projectId: 'default', status: 'done', startedAt: now - 100, finishedAt: now },
+      { bundleId: 'com.example.app', projectId: 'default', status: 'done', startedAt: now - 200, finishedAt: now },
+      { bundleId: 'com.example.app', projectId: 'default', status: 'failed', startedAt: now - 5_000, finishedAt: now },
+      { bundleId: 'com.example.app', projectId: 'another-project', status: 'done', startedAt: now - 9_000, finishedAt: now },
+    ] as JobHistoryEntry[],
     getAverageJobDurationMs: (bundleId, projectId) => {
       calls.push([bundleId, projectId ?? '']);
       return 1_250;
@@ -139,7 +146,7 @@ test('job ETA uses the shared account history', async () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ avgMs: 1_250 });
+    expect(JSON.parse(response.body)).toEqual({ avgMs: 1_250, p50Ms: 100, p95Ms: 200, sampleCount: 2, confidence: 'low' });
     expect(calls).toEqual([['com.example.app', 'default']]);
   } finally {
     await server.close();

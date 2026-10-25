@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { config } from '#config.js';
-import { runConfigurationDoctor } from '#doctor.js';
+import { assessRuntimeCapacity, runConfigurationDoctor } from '#doctor.js';
 
 test('configuration doctor reports runtime security and persistence checks', async () => {
   const result = await runConfigurationDoctor();
@@ -13,6 +13,7 @@ test('configuration doctor reports runtime security and persistence checks', asy
   expect(ids.has('runtime-limits')).toBe(true);
   expect(ids.has('device-bridge')).toBe(true);
   expect(ids.has('otel')).toBe(true);
+  expect(ids.has('worker-capacity')).toBe(true);
 });
 
 test('configuration doctor rejects an outbound rotation with no active signing key', async () => {
@@ -103,4 +104,35 @@ test('configuration doctor requires Stripe API key rotation credentials to use t
     config.stripeSecretKey = currentKey;
     config.stripeSecretKeyPrevious = previousKey;
   }
+});
+
+test('runtime capacity advice includes concrete memory, CPU, and temporary storage sizing', () => {
+  const check = assessRuntimeCapacity({
+    cpuCount: 2,
+    memoryLimitBytes: 4 * 1024 ** 3,
+    availableMemoryBytes: 2 * 1024 ** 3,
+    temporaryFreeBytes: 1024 ** 3,
+    offlineWorkers: 1,
+    offlineWorkerMemoryMb: 8192,
+  });
+
+  expect(check.status).toBe('warn');
+  expect(check.detail).toContain('10 GiB RAM');
+  expect(check.detail).toContain('2 CPU core(s)');
+  expect(check.detail).toContain('2 GiB free temporary storage');
+  expect(check.detail).toContain('lower APPSTORE_OFFLINE_WORKER_MEMORY_MB');
+});
+
+test('runtime capacity advice clears when the deployment meets the configured worker needs', () => {
+  const check = assessRuntimeCapacity({
+    cpuCount: 2,
+    memoryLimitBytes: 10 * 1024 ** 3,
+    availableMemoryBytes: 2 * 1024 ** 3,
+    temporaryFreeBytes: 2 * 1024 ** 3,
+    offlineWorkers: 1,
+    offlineWorkerMemoryMb: 8192,
+  });
+
+  expect(check.status).toBe('ok');
+  expect(check.detail).toContain('Recommended for 1 offline worker(s)');
 });

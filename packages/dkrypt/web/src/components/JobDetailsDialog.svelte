@@ -18,6 +18,7 @@
   let resolutionPreview = $state<JobResolutionNoticePreview | null>(null);
   let resolutionDialogOpen = $state(false);
   let sendingResolution = $state(false);
+  let copyingApiRequest = $state(false);
 
   async function load(): Promise<void> {
     if (!jobId) return;
@@ -63,6 +64,38 @@
     showToast('Job link copied', 'success');
   }
 
+  async function copyApiRequest(): Promise<void> {
+    if (!timeline) return;
+    copyingApiRequest = true;
+    const testflight = timeline.testflight;
+    const endpoint = testflight ? '/v1/testflight/decrypt' : '/v1/decrypts';
+    const body = testflight
+      ? { bundleId: timeline.bundleId, appId: testflight.appId, build: testflight.build }
+      : { bundleId: timeline.bundleId, ...(timeline.versionLabel ? { version: timeline.versionLabel } : {}) };
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const request = [
+      `curl --fail-with-body --request POST ${quote(`${location.origin}${endpoint}`)} \\`,
+      '  --header "Authorization: Bearer $DKRYPT_API_KEY" \\',
+      '  --header "Content-Type: application/json" \\',
+      `  --header ${quote(`Idempotency-Key: ${crypto.randomUUID()}`)} \\`,
+      `  --data ${quote(JSON.stringify(body))}`,
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(request);
+      showToast('API request copied. Set DKRYPT_API_KEY before running it.', 'success');
+    } catch {
+      showToast('Could not copy the API request', 'error');
+    } finally {
+      copyingApiRequest = false;
+    }
+  }
+
+  function eventDurationWidth(durationMs: number | undefined): string {
+    const durations = timeline?.events.flatMap((event) => event.durationMs === undefined ? [] : [event.durationMs]) ?? [];
+    const largest = Math.max(1, ...durations);
+    return `${durationMs === undefined ? 2 : Math.max(4, durationMs / largest * 100)}%`;
+  }
+
   function pretty(value: unknown): string {
     return JSON.stringify(value, null, 2);
   }
@@ -79,6 +112,7 @@
     </div>
     <div class="flex shrink-0 gap-1.5">
       <Button size="sm" variant="secondary" onclick={() => void copyDeepLink()}><Copy class="h-3.5 w-3.5" />Link</Button>
+      <Button size="sm" variant="secondary" loading={copyingApiRequest} onclick={() => void copyApiRequest()}><Copy class="h-3.5 w-3.5" />API request</Button>
       <a href={jobDiagnosticUrl(jobId)} download class={buttonVariants('secondary', 'sm')}><Download class="h-3.5 w-3.5" />Diagnostic</a>
     </div>
   </div>
@@ -115,6 +149,12 @@
           {#if timeline.deviceFallbackDurationMs !== undefined}<span class="rounded-full border border-border px-2 py-1">Device attempt · {fmtDurationApprox(timeline.deviceFallbackDurationMs)}</span>{/if}
         </div>
       </section>
+    {/if}
+    {#if timeline.quotaReceipt}
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 px-3 py-2 text-xs">
+        <span class="font-medium">Decrypt allowance</span>
+        <span class="text-muted">{timeline.quotaReceipt.state === 'consumed' ? 'This job used one daily decrypt' : 'One daily decrypt is reserved for this job'} · admitted {fmtTime(timeline.quotaReceipt.admittedAt)}</span>
+      </div>
     {/if}
     {#if timeline.warnings?.length}
       <Alert variant="warning" class="mb-4">
@@ -189,6 +229,9 @@
           <div class="min-w-0 pb-2">
             <div class="text-sm text-text">{event.label}</div>
             <div class="mt-0.5 text-xs text-muted">{fmtTime(event.at)}{#if event.durationMs !== undefined} · {fmtDurationApprox(event.durationMs)}{/if}</div>
+            <div class="mt-1.5 h-1.5 w-full max-w-48 overflow-hidden rounded-full bg-muted/30" aria-label="Stage duration">
+              <div class="h-full rounded-full bg-accent" style={`width: ${eventDurationWidth(event.durationMs)}`}></div>
+            </div>
           </div>
         </li>
       {/each}

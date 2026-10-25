@@ -47,6 +47,23 @@ function checkFilePermissions(id: string, targetPath: string, description: strin
   }
 }
 
+export function assessRuntimeCapacity(input: { cpuCount: number; memoryLimitBytes: number; availableMemoryBytes: number; temporaryFreeBytes: number; offlineWorkers: number; offlineWorkerMemoryMb: number }): DoctorCheck {
+  const requiredCpu = Math.max(2, input.offlineWorkers + 1);
+  const requiredMemoryMb = input.offlineWorkerMemoryMb * input.offlineWorkers + 2048;
+  const requiredTemporaryBytes = Math.max(2, input.offlineWorkers * 2) * 1024 ** 3;
+  const issues = [
+    input.cpuCount < requiredCpu ? `${requiredCpu} CPU cores recommended` : undefined,
+    input.memoryLimitBytes < requiredMemoryMb * 1024 ** 2 ? `${Math.ceil(requiredMemoryMb / 1024)} GiB memory recommended; increase the container limit or lower APPSTORE_OFFLINE_WORKER_MEMORY_MB` : undefined,
+    input.temporaryFreeBytes < requiredTemporaryBytes ? `${Math.ceil(requiredTemporaryBytes / 1024 ** 3)} GiB free temporary storage recommended under OUTPUT_DIR` : undefined,
+    input.availableMemoryBytes < 512 * 1024 ** 2 ? 'less than 512 MiB of host memory is currently free' : undefined,
+  ].filter((issue): issue is string => issue !== undefined);
+  return {
+    id: 'worker-capacity',
+    status: issues.length ? 'warn' : 'ok',
+    detail: `${input.cpuCount} effective CPU core(s), ${Math.round(input.memoryLimitBytes / 1024 ** 3)} GiB memory limit, ${Math.round(input.availableMemoryBytes / 1024 ** 2)} MiB host memory free, ${Math.round(input.temporaryFreeBytes / 1024 ** 3)} GiB temporary storage free. Recommended for ${input.offlineWorkers} offline worker(s): ${requiredCpu} CPU core(s), ${Math.ceil(requiredMemoryMb / 1024)} GiB RAM, and ${Math.ceil(requiredTemporaryBytes / 1024 ** 3)} GiB free temporary storage${issues.length ? `; ${issues.join('; ')}` : ''}`,
+  };
+}
+
 function runtimeCapacityCheck(): DoctorCheck {
   const hostCpuCount = cpus().length;
   const hostMemory = totalmem();
@@ -61,12 +78,15 @@ function runtimeCapacityCheck(): DoctorCheck {
   }
   const effectiveCpu = cpuLimit ?? hostCpuCount;
   const effectiveMemory = Math.min(hostMemory, memoryLimit ?? hostMemory);
-  const status = effectiveCpu < 2 || effectiveMemory < 2 * 1024 ** 3 || availableMemory < 512 * 1024 ** 2 ? 'warn' : 'ok';
-  return {
-    id: 'worker-capacity',
-    status,
-    detail: `${effectiveCpu} effective CPU core(s), ${Math.round(effectiveMemory / 1024 ** 3)} GiB memory limit, ${Math.round(availableMemory / 1024 ** 2)} MiB currently free`,
-  };
+  const temporaryStorage = getDiskUsage(config.outputDir);
+  return assessRuntimeCapacity({
+    cpuCount: effectiveCpu,
+    memoryLimitBytes: effectiveMemory,
+    availableMemoryBytes: availableMemory,
+    temporaryFreeBytes: temporaryStorage?.freeBytes ?? 0,
+    offlineWorkers: config.appStoreOfflineMaxWorkers,
+    offlineWorkerMemoryMb: config.appStoreOfflineWorkerMemoryMb,
+  });
 }
 
 export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt: string; checks: DoctorCheck[] }> {

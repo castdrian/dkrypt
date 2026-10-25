@@ -6,7 +6,7 @@
   import Card from '#lib/components/ui/Card.svelte';
   import EmptyState from '#components/EmptyState.svelte';
   import Input from '#lib/components/ui/Input.svelte';
-  import { createBillingAccessCode, fetchBillingAccessCodes, fetchBillingProviderStatus, fetchBillingRevenue, fetchBillingSubscriptions, fetchBillingWebhookInbox, quarantineBillingWebhook, replayBillingWebhook, revokeBillingAccessCode, setBillingCheckoutPaused, syncStripeBillingWebhookEvents, type BillingAccessCode, type BillingManagerSubscription, type BillingProviderStatus, type BillingRevenueSummary, type BillingWebhookInboxRecord } from '#lib/api';
+  import { createBillingAccessCode, fetchBillingAccessCodes, fetchBillingProviderStatus, fetchBillingReconciliation, fetchBillingRevenue, fetchBillingSubscriptions, fetchBillingWebhookInbox, quarantineBillingWebhook, replayBillingWebhook, revokeBillingAccessCode, setBillingCheckoutPaused, syncBillingReconciliation, syncStripeBillingWebhookEvents, type BillingAccessCode, type BillingManagerSubscription, type BillingProviderStatus, type BillingReconciliationDiscrepancy, type BillingReconciliationEntry, type BillingRevenueSummary, type BillingWebhookInboxRecord } from '#lib/api';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasPermission } from '#lib/session.svelte';
   import { liveState } from '#lib/live.svelte';
@@ -21,6 +21,19 @@
   let revenueLoading = $state(true);
   let revenueRefreshing = $state(false);
   let revenueError = $state<string | undefined>(undefined);
+  let revenueCurrency = $state('EUR');
+  const revenueTrendCurrencies = $derived([...new Set((revenue?.trend ?? []).map((entry) => entry.currency))].sort());
+  const revenueTrendSeries = $derived.by(() => {
+    const current = new Date();
+    const entries = new Map((revenue?.trend ?? []).filter((entry) => entry.currency === revenueCurrency).map((entry) => [entry.month, entry]));
+    return Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 11 + index, 1));
+      const month = date.toISOString().slice(0, 7);
+      const entry = entries.get(month);
+      return { month, label: new Intl.DateTimeFormat(undefined, { month: 'short' }).format(date), gross: entry?.gross ?? 0, refunded: entry?.refunded ?? 0, net: entry?.net ?? 0, stripe: entry?.providers.stripe ?? 0, nowpayments: entry?.providers.nowpayments ?? 0, paymentCount: entry?.paymentCount ?? 0 };
+    });
+  });
+  const revenueTrendMax = $derived(Math.max(1, ...revenueTrendSeries.map((entry) => entry.net)));
   let accessCodes = $state<BillingAccessCode[]>([]);
   let accessCodesLoading = $state(false);
   let accessCodeCreating = $state(false);
@@ -44,6 +57,13 @@
   let nextCursor = $state<string | undefined>(undefined);
   let loadingMore = $state(false);
   let webhooks = $state<BillingWebhookInboxRecord[]>([]);
+  let reconciliation = $state<BillingReconciliationEntry[]>([]);
+  let reconciliationCheckedAt = $state<string | undefined>(undefined);
+  let reconciliationNextCursor = $state<string | undefined>(undefined);
+  let reconciliationTotal = $state(0);
+  let reconciliationLoading = $state(false);
+  let reconciliationAction = $state<string | undefined>(undefined);
+  const reconciliationDrift = $derived(reconciliation.filter((entry) => entry.discrepancies.length > 0));
   let webhookLoading = $state(false);
   let webhookNextCursor = $state<string | undefined>(undefined);
   let webhookTotal = $state(0);
@@ -133,6 +153,7 @@
     revenueLoading = true;
     try {
       revenue = await fetchBillingRevenue(refresh);
+      if (!revenueTrendCurrencies.includes(revenueCurrency)) revenueCurrency = revenueTrendCurrencies.includes('EUR') ? 'EUR' : revenueTrendCurrencies[0] ?? 'EUR';
       revenueError = undefined;
     } catch (error) {
       revenueError = error instanceof Error ? error.message : "Couldn't load revenue summary";
@@ -205,6 +226,50 @@
       showToast(error instanceof Error ? error.message : "Couldn't load billing reconciliation queue", 'error');
     } finally {
       webhookLoading = false;
+    }
+  }
+
+  async function checkBillingReconciliation(cursor?: string): Promise<void> {
+    reconciliationLoading = true;
+    try {
+      const page = await fetchBillingReconciliation(cursor);
+      reconciliation = cursor ? [...reconciliation, ...page.entries] : page.entries;
+      reconciliationTotal = page.total;
+      reconciliationNextCursor = page.nextCursor;
+      reconciliationCheckedAt = page.checkedAt;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't compare Stripe subscriptions", 'error');
+    } finally {
+      reconciliationLoading = false;
+    }
+  }
+
+  function reconciliationReason(discrepancy: BillingReconciliationDiscrepancy): string {
+    const labels: Record<BillingReconciliationDiscrepancy, string> = {
+      provider_unavailable: 'Stripe could not be checked',
+      unrecognized_price: 'Stripe price is not mapped to a dkrypt plan',
+      plan_mismatch: 'Plan differs from Stripe',
+      status_mismatch: 'Status differs from Stripe',
+      entitlement_mismatch: 'Account access differs from Stripe',
+      refund_protected: 'Refund revocation is protected',
+    };
+    return labels[discrepancy];
+  }
+
+  async function syncReconciliationEntry(entry: BillingReconciliationEntry): Promise<void> {
+    const member = entry.displayName ?? entry.userId ?? 'this account';
+    const reviewedState = `Stripe reports ${entry.stripe.planId ?? 'an unmapped plan'} · ${entry.stripe.status ?? 'unknown status'}. dkrypt currently records ${entry.local.planId} · ${entry.local.status}.`;
+    if (!(await confirmDialog(`Apply the current Stripe state for ${member}? ${reviewedState} Any refund-based access revocation remains protected.`, { confirmLabel: 'Sync from Stripe' }))) return;
+    reconciliationAction = entry.subscriptionId;
+    try {
+      await syncBillingReconciliation(entry);
+      showToast('Stripe subscription and access were reconciled', 'success');
+      await Promise.all([checkBillingReconciliation(), load()]);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't reconcile this subscription", 'error');
+      await checkBillingReconciliation();
+    } finally {
+      reconciliationAction = undefined;
     }
   }
 
@@ -332,6 +397,25 @@
         {:else}
           <p class="rounded-lg border border-border/70 px-3 py-4 text-sm text-muted">No paid subscription payments were found.</p>
         {/if}
+        <section class="mt-4 rounded-xl border border-border/70 bg-panel/30 p-3" aria-label="Monthly revenue trend">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div><h3 class="text-sm font-semibold">Collected over time</h3><p class="mt-0.5 text-xs text-muted">Monthly net after refunds, attributed to the original payment month.</p></div>
+            {#if revenueTrendCurrencies.length > 1}<label class="flex items-center gap-2 text-xs text-muted">Currency<select class="rounded-lg border border-border bg-bg px-2 py-1.5 text-text" bind:value={revenueCurrency}>{#each revenueTrendCurrencies as currency}<option value={currency}>{currency}</option>{/each}</select></label>{/if}
+          </div>
+          <div class="grid h-36 grid-cols-6 items-end gap-2 sm:grid-cols-12" role="img" aria-label="Monthly net revenue for {revenueCurrency}">
+            {#each revenueTrendSeries as entry (entry.month)}
+              {@const stripeHeight = entry.net ? entry.stripe / revenueTrendMax * 100 : 0}
+              {@const cryptoHeight = entry.net ? entry.nowpayments / revenueTrendMax * 100 : 0}
+              <div class="flex h-full min-w-0 flex-col justify-end" title="{entry.label}: {money(entry.net, revenueCurrency)} net, {money(entry.refunded, revenueCurrency)} refunded across {entry.paymentCount} payments">
+                <div class="flex min-h-1 flex-1 flex-col justify-end overflow-hidden rounded-t bg-panel-muted/30">
+                  {#if entry.net > 0}<div class="bg-accent/80" style="height: {cryptoHeight}%"></div><div class="bg-accent" style="height: {stripeHeight}%"></div>{:else}<div class="h-1 w-full bg-border/70"></div>{/if}
+                </div>
+                <div class="mt-1 truncate text-center text-[10px] text-muted">{entry.label}</div>
+              </div>
+            {/each}
+          </div>
+          <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted"><span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-accent"></span>Stripe</span><span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-accent/80"></span>Crypto</span><span class="ml-auto">{revenueTrendSeries.reduce((sum, entry) => sum + entry.refunded, 0) > 0 ? `${money(revenueTrendSeries.reduce((sum, entry) => sum + entry.refunded, 0), revenueCurrency)} refunds in view` : 'No refunds in this period'}</span></div>
+        </section>
         <div data-testid="billing-revenue-provider-breakdown" class="mt-3 grid min-w-0 grid-cols-1 gap-2 text-xs text-muted">
           <div class="min-w-0 break-words"><span class="font-medium text-text">Stripe:</span> {revenue.providers.stripe.state === 'ready' ? `${revenue.providers.stripe.paymentCount} paid invoice payments` : revenue.providers.stripe.state === 'not_configured' ? 'Not configured' : 'History unavailable'}{#if revenue.providers.stripe.totals.length} · {revenue.providers.stripe.totals.map((total) => `${money(total.net, total.currency)} ${total.currency}`).join(', ')}{/if}</div>
           <div class="min-w-0 break-words"><span class="font-medium text-text">NOWPayments:</span> {revenue.providers.nowpayments.state === 'ready' ? `${revenue.providers.nowpayments.paymentCount} paid crypto payments` : 'History unavailable'}{#if revenue.providers.nowpayments.totals.length} · {revenue.providers.nowpayments.totals.map((total) => `${money(total.net, total.currency)} ${total.currency}`).join(', ')}{/if}</div>
@@ -429,6 +513,40 @@
           {#if providerStatus.checkoutsPaused}<Play class="h-4 w-4" /> Resume new checkouts{:else}<Pause class="h-4 w-4" /> Pause new checkouts{/if}
         </Button>
       </div>
+    </Card>
+    <Card title="Stripe subscription reconciliation">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <p class="max-w-3xl text-sm text-muted">Compare saved subscriptions and account access with Stripe. Nothing changes until you review a mismatch and sync it.</p>
+        <Button size="sm" variant="secondary" loading={reconciliationLoading} onclick={() => void checkBillingReconciliation()}><RefreshCw class="h-4 w-4" /> Check Stripe</Button>
+      </div>
+      {#if reconciliationCheckedAt}
+        <p class="mb-3 text-xs text-muted">Checked {date(reconciliationCheckedAt)} · {reconciliationTotal} Stripe subscription{reconciliationTotal === 1 ? '' : 's'}</p>
+        {#if reconciliationLoading && reconciliation.length === 0}
+          <div class="flex min-h-20 items-center justify-center"><LoaderCircle class="h-5 w-5 animate-spin text-muted" /></div>
+        {:else if reconciliationDrift.length === 0}
+          <EmptyState icon={CreditCard} message="No Stripe and dkrypt access mismatches were found." />
+        {:else}
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[760px] text-left text-sm">
+              <thead class="border-b border-border text-xs text-muted"><tr><th class="px-2 py-2 font-medium">Member</th><th class="px-2 py-2 font-medium">Stripe</th><th class="px-2 py-2 font-medium">dkrypt</th><th class="px-2 py-2 font-medium">Review</th><th class="px-2 py-2 font-medium">Action</th></tr></thead>
+              <tbody class="divide-y divide-border/70">
+                {#each reconciliationDrift as entry (entry.subscriptionId)}
+                  <tr class="align-top">
+                    <td class="px-2 py-3"><div class="font-medium">{entry.displayName ?? entry.userId ?? 'Unknown account'}</div><div class="max-w-48 truncate font-mono text-[10px] text-muted" title={entry.subscriptionId}>{entry.subscriptionId}</div></td>
+                    <td class="px-2 py-3"><Badge variant={entry.stripe.state === 'ready' ? 'success' : 'warning'}>{entry.stripe.state === 'ready' ? `${entry.stripe.planId ?? 'Unmapped'} · ${entry.stripe.status ?? 'unknown'}` : 'Unavailable'}</Badge></td>
+                    <td class="px-2 py-3"><div>{entry.local.planId} · {entry.local.status}</div><div class="text-xs text-muted">Access: {entry.entitlement?.planId ?? 'viewer'} · {entry.entitlement?.provider ?? 'none'}</div></td>
+                    <td class="px-2 py-3"><div class="space-y-1">{#each entry.discrepancies as discrepancy}<div class="flex items-start gap-1 text-xs text-warning"><AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />{reconciliationReason(discrepancy)}</div>{/each}</div></td>
+                    <td class="px-2 py-3">{#if entry.syncAllowed}<Button size="sm" variant="secondary" loading={reconciliationAction === entry.subscriptionId} onclick={() => void syncReconciliationEntry(entry)}>Sync from Stripe</Button>{:else}<span class="text-xs text-muted">Manual review required</span>{/if}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+          {#if reconciliationNextCursor}<div class="mt-3 flex justify-center"><Button size="sm" variant="secondary" loading={reconciliationLoading} onclick={() => void checkBillingReconciliation(reconciliationNextCursor)}>Load more ({Math.max(0, reconciliationTotal - reconciliation.length)} remaining)</Button></div>{/if}
+        {/if}
+      {:else}
+        <p class="rounded-lg border border-border/70 bg-panel-muted/40 p-3 text-sm text-muted">Run a check to compare each saved Stripe subscription with the provider and its effective account access.</p>
+      {/if}
     </Card>
   {/if}
 

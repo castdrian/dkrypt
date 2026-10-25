@@ -596,6 +596,19 @@
 {/if}
 
 {#if canViewOperationalInsights}
+	<Card title="Server-side and device fallback" class="mt-4">
+		{#if insights?.executionPath}
+			<div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+				<div class="rounded-lg border border-border/70 p-3"><div class="text-xs text-muted">Server attempts</div><div class="mt-1 text-lg font-semibold tabular-nums">{fmtNumber(insights.executionPath.serverAttempts, 0)}</div></div>
+				<div class="rounded-lg border border-border/70 p-3"><div class="text-xs text-muted">Completed server-side</div><div class="mt-1 text-lg font-semibold tabular-nums">{fmtNumber(insights.executionPath.serverCompleted, 0)}</div>{#if insights.executionPath.averageServerAttemptMs !== undefined}<div class="text-xs text-muted">Average {fmtDurationApprox(insights.executionPath.averageServerAttemptMs)}</div>{/if}</div>
+				<div class="rounded-lg border border-border/70 p-3"><div class="text-xs text-muted">Handed to a device</div><div class="mt-1 text-lg font-semibold tabular-nums">{fmtNumber(insights.executionPath.deviceFallbacks, 0)}</div></div>
+				<div class="rounded-lg border border-border/70 p-3"><div class="text-xs text-muted">Device fallback completed</div><div class="mt-1 text-lg font-semibold tabular-nums">{fmtNumber(insights.executionPath.fallbackCompleted, 0)}</div>{#if insights.executionPath.averageDeviceFallbackMs !== undefined}<div class="text-xs text-muted">Average {fmtDurationApprox(insights.executionPath.averageDeviceFallbackMs)}</div>{/if}</div>
+				<div class="rounded-lg border border-border/70 p-3"><div class="text-xs text-muted">Fallback failed</div><div class="mt-1 text-lg font-semibold tabular-nums">{fmtNumber(insights.executionPath.fallbackFailed, 0)}</div></div>
+			</div>
+		{:else}
+			<EmptyState message="Execution path analytics will appear as new decrypts complete." />
+		{/if}
+	</Card>
 	<Card title="Storage forecast" class="mt-4">
 		{#if storageForecast?.sampleCount}
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">

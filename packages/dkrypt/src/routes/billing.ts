@@ -10,6 +10,8 @@ import type {
   BillingCheckoutControlRoute,
   BillingCheckoutRoute,
   BillingProviderStatusRoute,
+  BillingReconciliationRoute,
+  BillingReconciliationSyncRoute,
   BillingRevenueRoute,
   BillingSubscriptionRoute,
   BillingSubscriptionsRoute,
@@ -764,6 +766,141 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     preHandler: requireBillingManager,
   }, async (request, reply) => {
     return reply.send(await readRevenue(request.query.refresh === 'true'));
+  });
+
+  server.get<BillingReconciliationRoute>('/v1/billing/reconciliation', {
+    schema: getRouteContract('GET', '/v1/billing/reconciliation'),
+    preHandler: requireBillingManager,
+  }, async (request, reply) => {
+    const records = listBillingSubscriptions()
+      .filter((subscription) => subscription.provider === 'stripe')
+      .sort((left, right) => left.subscriptionId.localeCompare(right.subscriptionId));
+    const page = paginateCursor(records, {
+      cursor: request.query.cursor,
+      limit: request.query.limit ?? 25,
+      keyOf: (subscription) => [subscription.subscriptionId],
+      order: 'asc',
+    });
+    const stripeClient = options.stripeClient?.();
+    const entries: Array<{
+      subscriptionId: string;
+      userId?: string;
+      displayName?: string;
+      local: { planId: string; status: string; updatedAt: string };
+      stripe: { state: 'ready' | 'unavailable'; planId?: string; status?: string; priceId?: string };
+      entitlement?: { planId: string; provider: string; status: string };
+      discrepancies: Array<'provider_unavailable' | 'unrecognized_price' | 'plan_mismatch' | 'status_mismatch' | 'entitlement_mismatch' | 'refund_protected'>;
+      syncAllowed: boolean;
+    }> = [];
+    for (let offset = 0; offset < page.items.length; offset += 5) {
+      const batch = page.items.slice(offset, offset + 5);
+      entries.push(...await Promise.all(batch.map(async (subscription) => {
+        const profile = subscription.userId ? getAuthProfile(subscription.userId) : undefined;
+        const userId = subscription.userId ? resolveAuthUserId(subscription.userId) : undefined;
+        const entitlement = userId ? getBillingEntitlements(userId) : undefined;
+        const discrepancies: Array<'provider_unavailable' | 'unrecognized_price' | 'plan_mismatch' | 'status_mismatch' | 'entitlement_mismatch' | 'refund_protected'> = [];
+        const refundProtected = subscription.status === 'revoked' && subscription.failureReason === 'payment refunded';
+        let providerState: 'ready' | 'unavailable' = 'ready';
+        let providerPlanId: string | undefined;
+        let providerStatus: string | undefined;
+        let providerPriceId: string | undefined;
+        try {
+          const current = stripeClient
+            ? await stripeClient.subscriptions.retrieve(subscription.subscriptionId)
+            : await stripeRequest((client) => client.subscriptions.retrieve(subscription.subscriptionId));
+          providerStatus = current.status;
+          const item = current.items.data[0];
+          providerPriceId = typeof item?.price === 'string' ? item.price : item?.price.id;
+          providerPlanId = providerPriceId ? planForPrice(providerPriceId) : undefined;
+          if (!providerPlanId) discrepancies.push('unrecognized_price');
+          if (providerStatus !== subscription.status) discrepancies.push('status_mismatch');
+          if (providerPlanId && providerPlanId !== subscription.planId) discrepancies.push('plan_mismatch');
+          const providerActive = ['active', 'trialing', 'past_due'].includes(providerStatus);
+          if (entitlement && providerPlanId && (
+            providerActive
+              ? entitlement.provider !== 'stripe' || entitlement.planId !== providerPlanId
+              : entitlement.provider === 'stripe'
+          )) discrepancies.push('entitlement_mismatch');
+        } catch {
+          providerState = 'unavailable';
+          discrepancies.push('provider_unavailable');
+        }
+        if (refundProtected) discrepancies.push('refund_protected');
+        return {
+          subscriptionId: subscription.subscriptionId,
+          ...(userId ? { userId } : {}),
+          ...(profile?.displayName ? { displayName: profile.displayName } : {}),
+          local: { planId: subscription.planId, status: subscription.status, updatedAt: subscription.updatedAt },
+          stripe: {
+            state: providerState,
+            ...(providerPlanId ? { planId: providerPlanId } : {}),
+            ...(providerStatus ? { status: providerStatus } : {}),
+            ...(providerPriceId ? { priceId: providerPriceId } : {}),
+          },
+          ...(entitlement ? { entitlement: { planId: entitlement.planId, provider: entitlement.provider ?? 'none', status: entitlement.status ?? 'inactive' } } : {}),
+          discrepancies,
+          syncAllowed: providerState === 'ready' && !!providerPlanId && !refundProtected,
+        };
+      })));
+    }
+    return reply.send({ checkedAt: new Date().toISOString(), entries, total: records.length, nextCursor: page.nextCursor });
+  });
+
+  server.post<BillingReconciliationSyncRoute>('/v1/billing/reconciliation/:id/sync', {
+    schema: getRouteContract('POST', '/v1/billing/reconciliation/:id/sync'),
+    attachValidation: true,
+    preHandler: requireBillingManager,
+  }, async (request, reply) => {
+    if (request.validationError) return sendBillingError(request, reply, 400, 'reconciliation confirmation is malformed');
+    const actor = getFastifySession(request)!.sub;
+    const subscriptionId = request.params.id;
+    const initial = getBillingSubscriptionById(subscriptionId);
+    if (!initial || initial.provider !== 'stripe') return sendBillingError(request, reply, 404, 'Stripe subscription was not found');
+    if (initial.updatedAt !== request.body.expectedUpdatedAt) return sendBillingError(request, reply, 409, 'subscription changed after the review; check it again before syncing', 'billing_reconciliation_stale');
+    let blocked: 'local_changed' | 'refund_protected' | 'provider_changed' | undefined;
+    try {
+      await runKeyedSerial(`stripe:${subscriptionId}`, async () => {
+        const latest = getBillingSubscriptionById(subscriptionId);
+        if (!latest || latest.provider !== 'stripe' || latest.updatedAt !== request.body.expectedUpdatedAt) {
+          blocked = 'local_changed';
+          return;
+        }
+        if (latest.status === 'revoked' && latest.failureReason === 'payment refunded') {
+          blocked = 'refund_protected';
+          return;
+        }
+        const stripeClient = options.stripeClient?.();
+        const current = stripeClient
+          ? await stripeClient.subscriptions.retrieve(subscriptionId)
+          : await stripeRequest((client) => client.subscriptions.retrieve(subscriptionId));
+        const item = current.items.data[0];
+        const currentPriceId = typeof item?.price === 'string' ? item : item?.price.id;
+        if (current.status !== request.body.expectedStripeStatus || currentPriceId !== request.body.expectedStripePriceId || !planForPrice(currentPriceId ?? '')) {
+          blocked = 'provider_changed';
+          return;
+        }
+        const syncedAt = new Date().toISOString();
+        persistStripeSubscription(current, syncedAt, latest.userId, syncedAt);
+      });
+      if (blocked === 'local_changed') return sendBillingError(request, reply, 409, 'subscription changed after the review; check it again before syncing', 'billing_reconciliation_stale');
+      if (blocked === 'refund_protected') return sendBillingError(request, reply, 409, 'a refund-based access revocation cannot be reversed by billing reconciliation', 'billing_refund_protected');
+      if (blocked === 'provider_changed') return sendBillingError(request, reply, 409, 'Stripe changed after the review or the current price is not recognized; check it again before syncing', 'billing_reconciliation_provider_changed');
+      const updated = getBillingSubscriptionById(subscriptionId);
+      if (!updated || !updated.userId) return sendBillingError(request, reply, 502, 'Stripe state synced but the linked account could not be verified');
+      const userId = resolveAuthUserId(updated.userId);
+      const entitlement = getBillingEntitlements(userId);
+      recordAudit(actor, 'billing.reconciliation.sync', subscriptionId, 'synced provider state after manager review');
+      return reply.send({
+        subscriptionId,
+        status: updated.status,
+        planId: updated.planId,
+        updatedAt: updated.updatedAt,
+        entitlement: { planId: entitlement.planId, provider: entitlement.provider ?? 'none', status: entitlement.status ?? 'inactive' },
+      });
+    } catch (error) {
+      log.error('Stripe subscription reconciliation failed', { subscriptionId, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not reconcile the Stripe subscription');
+    }
   });
 
   server.put<BillingCheckoutControlRoute>('/v1/billing/checkouts', {

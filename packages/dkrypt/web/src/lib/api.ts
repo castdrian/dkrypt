@@ -514,6 +514,8 @@ export interface JobTimeline {
   offlineDeviceFallbackStartedAt?: number;
   deviceFallbackDurationMs?: number;
   offlineFailureReason?: string;
+  quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number };
+  testflight?: { appId: number; build: { id: number; cfBundleShortVersion: string; cfBundleVersion: string; bundleId: string } };
   dependencies?: Array<{ id: string; label: string; state: 'ready' | 'active' | 'waiting' | 'failed' | 'blocked' | 'not_applicable' | 'unknown'; detail: string }>;
   events: JobTimelineEvent[];
   warnings?: string[];
@@ -1321,7 +1323,7 @@ export function jobHistoryExportUrl(format: 'csv' | 'json'): string {
   return `/v1/dashboard/jobs/export?format=${format}`;
 }
 
-export function fetchJobEta(bundleId: string): Promise<{ avgMs: number | null }> {
+export function fetchJobEta(bundleId: string): Promise<{ avgMs: number | null; p50Ms: number | null; p95Ms: number | null; sampleCount: number; confidence: 'none' | 'low' | 'medium' | 'high' }> {
   return apiJson(`/v1/dashboard/jobs/eta/${encodeURIComponent(bundleId)}`);
 }
 
@@ -1392,6 +1394,7 @@ export interface InsightsSummary {
   failureBreakdown: { category: string; count: number }[];
   byDevice: DeviceThroughputStats[];
   anomalies: PerformanceAnomaly[];
+  executionPath: { serverAttempts: number; serverCompleted: number; deviceFallbacks: number; fallbackCompleted: number; fallbackFailed: number; averageServerAttemptMs?: number; averageDeviceFallbackMs?: number };
 }
 
 export interface DeviceThroughputStats {
@@ -2567,10 +2570,21 @@ export interface BillingRevenueProviderSummary {
   paymentCount: number;
 }
 
+export interface BillingRevenueTrendMonth {
+  month: string;
+  currency: string;
+  gross: number;
+  refunded: number;
+  net: number;
+  paymentCount: number;
+  providers: { stripe: number; nowpayments: number };
+}
+
 export interface BillingRevenueSummary {
   updatedAt: string;
   complete: boolean;
   totals: BillingRevenueCurrencyTotal[];
+  trend: BillingRevenueTrendMonth[];
   retention: {
     activeAccounts: number;
     paymentIssues: number;
@@ -2582,6 +2596,33 @@ export interface BillingRevenueSummary {
     nowpayments: BillingRevenueProviderSummary;
   };
   warnings: string[];
+}
+
+export type BillingReconciliationDiscrepancy = 'provider_unavailable' | 'unrecognized_price' | 'plan_mismatch' | 'status_mismatch' | 'entitlement_mismatch' | 'refund_protected';
+
+export interface BillingReconciliationEntry {
+  subscriptionId: string;
+  userId?: string;
+  displayName?: string;
+  local: { planId: string; status: string; updatedAt: string };
+  stripe: { state: 'ready' | 'unavailable'; planId?: string; status?: string; priceId?: string };
+  entitlement?: { planId: string; provider: string; status: string };
+  discrepancies: BillingReconciliationDiscrepancy[];
+  syncAllowed: boolean;
+}
+
+export function fetchBillingReconciliation(cursor?: string): Promise<{ checkedAt: string; entries: BillingReconciliationEntry[]; total: number; nextCursor?: string }> {
+  const params = new URLSearchParams({ limit: '25' });
+  if (cursor) params.set('cursor', cursor);
+  return apiJson(`/v1/billing/reconciliation?${params}`);
+}
+
+export function syncBillingReconciliation(entry: BillingReconciliationEntry): Promise<{ subscriptionId: string; status: string; planId: string; updatedAt: string; entitlement: { planId: string; provider: string; status: string } }> {
+  if (!entry.stripe.status || !entry.stripe.priceId) throw new Error('Check Stripe again before syncing this subscription');
+  return apiJson(`/v1/billing/reconciliation/${encodeURIComponent(entry.subscriptionId)}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ expectedUpdatedAt: entry.local.updatedAt, expectedStripeStatus: entry.stripe.status, expectedStripePriceId: entry.stripe.priceId }),
+  });
 }
 
 export function fetchBillingRevenue(refresh = false): Promise<BillingRevenueSummary> {

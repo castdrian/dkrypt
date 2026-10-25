@@ -218,7 +218,7 @@ export const dashboardJobListQuerySchema = Type.Object({
 export const dashboardJobParamsSchema = Type.Object({ id: identifierSchema }, { additionalProperties: true });
 export const dashboardJobBundleParamsSchema = Type.Object({ bundleId: BundleId }, { additionalProperties: true });
 export const dashboardJobProjectQuerySchema = Type.Object({}, { additionalProperties: true });
-export const dashboardJobEtaResponseSchema = Type.Object({ avgMs: Type.Union([Type.Number(), Type.Null()]) }, { additionalProperties: true });
+export const dashboardJobEtaResponseSchema = Type.Object({ avgMs: Type.Union([Type.Number(), Type.Null()]), p50Ms: Type.Union([Type.Number(), Type.Null()]), p95Ms: Type.Union([Type.Number(), Type.Null()]), sampleCount: Type.Integer({ minimum: 0 }), confidence: Type.Union([Type.Literal('none'), Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')]) }, { additionalProperties: true });
 export const dashboardJobBundleStatsResponseSchema = Type.Object({
   bundleId: BundleId,
   totalRuns: Type.Integer({ minimum: 0 }),

@@ -22,6 +22,9 @@ import {
   billingCheckoutControlBodySchema,
   billingIdempotencyKeyHeadersSchema,
   billingProviderStatusQuerySchema,
+  billingReconciliationParamsSchema,
+  billingReconciliationQuerySchema,
+  billingReconciliationSyncBodySchema,
   billingRevenueQuerySchema,
   billingSubscriptionBodySchema,
   billingSubscriptionsQuerySchema,
@@ -391,7 +394,20 @@ const ApiJobStatusBatchBody = object({ ids: Type.Array(Identifier, { minItems: 1
 const ApiJobStatusBatchResponse = object({ jobs: Type.Array(object({ id: Identifier, state: Type.Union([Type.Literal('found'), Type.Literal('not_found')]), job: Type.Optional(JobSummaryResponse) })) });
 const BillingRevenueCurrencyTotal = object({ currency: Type.String({ minLength: 3, maxLength: 3 }), gross: Type.Number({ minimum: 0 }), refunded: Type.Number({ minimum: 0 }), net: Type.Number({ minimum: 0 }) });
 const BillingRevenueProviderSummary = object({ state: Type.Union([Type.Literal('ready'), Type.Literal('unavailable'), Type.Literal('not_configured')]), totals: Type.Array(BillingRevenueCurrencyTotal), paymentCount: Type.Integer({ minimum: 0 }) });
-const BillingRevenueResponse = object({ updatedAt: Type.String({ format: 'date-time' }), complete: Type.Boolean(), totals: Type.Array(BillingRevenueCurrencyTotal), retention: object({ activeAccounts: Type.Integer({ minimum: 0 }), paymentIssues: Type.Integer({ minimum: 0 }), cancellationsUpdatedLast30Days: Type.Integer({ minimum: 0 }), recentCancellationRatePercent: Type.Number({ minimum: 0, maximum: 100 }) }), providers: object({ stripe: BillingRevenueProviderSummary, nowpayments: BillingRevenueProviderSummary }), warnings: Type.Array(Type.String()) });
+const BillingRevenueTrend = object({ month: Type.String({ pattern: '^\\d{4}-\\d{2}$' }), currency: Type.String({ minLength: 3, maxLength: 3 }), gross: Type.Number({ minimum: 0 }), refunded: Type.Number({ minimum: 0 }), net: Type.Number({ minimum: 0 }), paymentCount: Type.Integer({ minimum: 0 }), providers: object({ stripe: Type.Number({ minimum: 0 }), nowpayments: Type.Number({ minimum: 0 }) }) });
+const BillingRevenueResponse = object({ updatedAt: Type.String({ format: 'date-time' }), complete: Type.Boolean(), totals: Type.Array(BillingRevenueCurrencyTotal), trend: Type.Array(BillingRevenueTrend), retention: object({ activeAccounts: Type.Integer({ minimum: 0 }), paymentIssues: Type.Integer({ minimum: 0 }), cancellationsUpdatedLast30Days: Type.Integer({ minimum: 0 }), recentCancellationRatePercent: Type.Number({ minimum: 0, maximum: 100 }) }), providers: object({ stripe: BillingRevenueProviderSummary, nowpayments: BillingRevenueProviderSummary }), warnings: Type.Array(Type.String()) });
+const BillingReconciliationEntry = object({
+  subscriptionId: Type.String({ minLength: 1, maxLength: 200 }),
+  userId: Type.Optional(Type.String({ maxLength: 200 })),
+  displayName: Type.Optional(Type.String({ maxLength: 200 })),
+  local: object({ planId: Type.String({ maxLength: 100 }), status: Type.String({ maxLength: 64 }), updatedAt: Type.String({ format: 'date-time' }) }),
+  stripe: object({ state: Type.Union([Type.Literal('ready'), Type.Literal('unavailable')]), planId: Type.Optional(Type.String({ maxLength: 100 })), status: Type.Optional(Type.String({ maxLength: 64 })), priceId: Type.Optional(Type.String({ maxLength: 200 })) }),
+  entitlement: Type.Optional(object({ planId: Type.String({ maxLength: 100 }), provider: Type.String({ maxLength: 32 }), status: Type.String({ maxLength: 64 }) })),
+  discrepancies: Type.Array(Type.Union([Type.Literal('provider_unavailable'), Type.Literal('unrecognized_price'), Type.Literal('plan_mismatch'), Type.Literal('status_mismatch'), Type.Literal('entitlement_mismatch'), Type.Literal('refund_protected')])),
+  syncAllowed: Type.Boolean(),
+});
+const BillingReconciliationResponse = object({ checkedAt: Type.String({ format: 'date-time' }), entries: Type.Array(BillingReconciliationEntry), total: Type.Integer({ minimum: 0 }), nextCursor: PageCursor });
+const BillingReconciliationSyncResponse = object({ subscriptionId: Type.String({ minLength: 1, maxLength: 200 }), status: Type.String({ maxLength: 64 }), planId: Type.String({ maxLength: 100 }), updatedAt: Type.String({ format: 'date-time' }), entitlement: object({ planId: Type.String({ maxLength: 100 }), provider: Type.String({ maxLength: 32 }), status: Type.String({ maxLength: 64 }) }) });
 const BillingAccessCodeResponse = object({
   id: Identifier,
   prefix: Type.String(),
@@ -417,6 +433,10 @@ export const JobTimelineResponse = object({
   correlationId: Identifier,
   bundleId: BundleId,
   status: JobStatus,
+  testflight: Type.Optional(Type.Object({
+    appId: Type.Number(),
+    build: Type.Object({ id: Type.Number(), cfBundleShortVersion: Type.String(), cfBundleVersion: Type.String(), bundleId: BundleId }, { additionalProperties: true }),
+  }, { additionalProperties: true })),
   executionStage: Type.Optional(Type.Union([
     Type.Literal('preparing'),
     Type.Literal('installing'),
@@ -431,6 +451,7 @@ export const JobTimelineResponse = object({
   offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
   deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
+  quotaReceipt: Type.Optional(Type.Object({ state: Type.Union([Type.Literal('reserved'), Type.Literal('consumed')]), admittedAt: Type.Number() }, { additionalProperties: false })),
   offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   shutdownRecoveryAt: Type.Optional(Type.Number()),
   versionLabel: Type.Optional(Type.String()),
@@ -560,7 +581,7 @@ const DeviceActivityResponse = object({
 const DeviceBatteryHistoryResponse = object({ buckets: Type.Array(object({ hourStart: Type.Number(), batteryPercent: Type.Union([Type.Number(), Type.Null()]) })) });
 const DeviceTemperatureHistoryResponse = object({ buckets: Type.Array(object({ hourStart: Type.Number(), batteryTemperatureC: Type.Union([Type.Number(), Type.Null()]) })) });
 const DeviceStorageHistoryResponse = object({ buckets: Type.Array(object({ hourStart: Type.Number(), storageUsedPercent: Type.Union([Type.Number(), Type.Null()]) })) });
-const JobEtaResponse = object({ avgMs: Type.Union([Type.Number(), Type.Null()]) });
+const JobEtaResponse = dashboardJobEtaResponseSchema;
 const JobSloResponse = object({ targetMs: Type.Number(), historicalP95Ms: Type.Union([Type.Number(), Type.Null()]), jobs: Type.Array(JsonObject) });
 const DailyVolumeResponse = object({ days: Type.Array(object({ date: Type.String(), count: Type.Integer({ minimum: 0 }) })) });
 const ArtifactSummaryResponse = object({
@@ -682,6 +703,15 @@ const InsightsResponse = Type.Object({
   failureBreakdown: Type.Array(Type.Object({ category: Type.String(), count: Type.Integer({ minimum: 0 }) }, { additionalProperties: true })),
   byDevice: Type.Array(InsightsDeviceResponse),
   anomalies: Type.Array(InsightsAnomalyResponse),
+  executionPath: Type.Object({
+    serverAttempts: Type.Integer({ minimum: 0 }),
+    serverCompleted: Type.Integer({ minimum: 0 }),
+    deviceFallbacks: Type.Integer({ minimum: 0 }),
+    fallbackCompleted: Type.Integer({ minimum: 0 }),
+    fallbackFailed: Type.Integer({ minimum: 0 }),
+    averageServerAttemptMs: Type.Optional(Type.Number({ minimum: 0 })),
+    averageDeviceFallbackMs: Type.Optional(Type.Number({ minimum: 0 })),
+  }),
 }, { additionalProperties: true });
 export const dashboardInsightsQuerySchema = Type.Object({
   topApps: Type.Optional(Type.String()),
@@ -942,6 +972,8 @@ register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSc
 register('GET', '/v1/billing', {});
 register('POST', '/v1/billing/portal', {});
 register('GET', '/v1/billing/provider-status', { querystring: billingProviderStatusQuerySchema });
+register('GET', '/v1/billing/reconciliation', { querystring: billingReconciliationQuerySchema });
+register('POST', '/v1/billing/reconciliation/:id/sync', { params: billingReconciliationParamsSchema, body: billingReconciliationSyncBodySchema });
 register('POST', '/v1/billing/stripe-webhook/sync', {});
 register('PUT', '/v1/billing/checkouts', { body: billingCheckoutControlBodySchema });
 register('GET', '/v1/billing/subscriptions', {
@@ -1162,6 +1194,8 @@ register('POST', '/v1/billing/access-codes/redeem', { response: { 200: BillingAc
 register('POST', '/v1/billing/access-codes/:id/revoke', { response: { 200: BillingAccessCodeResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
 register('GET', '/v1/billing/subscriptions', { response: { 200: BillingSubscriptionPage } });
 register('GET', '/v1/billing/revenue', { querystring: billingRevenueQuerySchema, response: { 200: BillingRevenueResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
+register('GET', '/v1/billing/reconciliation', { querystring: billingReconciliationQuerySchema, response: { 200: BillingReconciliationResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 503: ErrorEnvelope } });
+register('POST', '/v1/billing/reconciliation/:id/sync', { params: billingReconciliationParamsSchema, body: billingReconciliationSyncBodySchema, response: { 200: BillingReconciliationSyncResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 502: ErrorEnvelope, 503: ErrorEnvelope } });
 register('GET', '/v1/dashboard/overview', { querystring: dashboardOverviewQuerySchema, response: { 200: dashboardOverviewResponseSchema } });
 register('GET', '/v1/dashboard/jobs', { response: { 200: dashboardJobHistoryPageSchema, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/artifacts', { response: { 200: ArtifactPage } });

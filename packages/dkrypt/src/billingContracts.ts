@@ -60,6 +60,19 @@ export const billingRevenueQuerySchema = Type.Object(
   { additionalProperties: true },
 );
 
+export const billingReconciliationQuerySchema = Type.Object({
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+}, { additionalProperties: true });
+
+export const billingReconciliationParamsSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }) }, { additionalProperties: true });
+
+export const billingReconciliationSyncBodySchema = Type.Object({
+  expectedUpdatedAt: Type.String({ format: 'date-time' }),
+  expectedStripeStatus: Type.String({ minLength: 1, maxLength: 64 }),
+  expectedStripePriceId: Type.String({ minLength: 1, maxLength: 200 }),
+}, { additionalProperties: false });
+
 export const billingWebhookInboxQuerySchema = Type.Object(
   {
     cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
@@ -110,6 +123,15 @@ export type BillingProviderStatusRoute = {
 
 export type BillingRevenueRoute = {
   Querystring: Static<typeof billingRevenueQuerySchema>;
+};
+
+export type BillingReconciliationRoute = {
+  Querystring: Static<typeof billingReconciliationQuerySchema>;
+};
+
+export type BillingReconciliationSyncRoute = {
+  Params: Static<typeof billingReconciliationParamsSchema>;
+  Body: Static<typeof billingReconciliationSyncBodySchema>;
 };
 
 export type BillingWebhookInboxRoute = {

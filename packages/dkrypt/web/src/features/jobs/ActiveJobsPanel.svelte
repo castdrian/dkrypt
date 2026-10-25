@@ -169,6 +169,9 @@
 		jobs.filter((j) => j.status === "queued" && j.pausedAt === undefined).map((j) => j.id),
 	);
 	let etaByBundle = $state<Record<string, number | null>>({});
+	let etaRangeByBundle = $state<Record<string, { p50Ms: number | null; p95Ms: number | null }>>({});
+	let etaConfidenceByBundle = $state<Record<string, string>>({});
+	let etaSamplesByBundle = $state<Record<string, number>>({});
 	const fetchedBundles = new Set<string>();
 
 	$effect(() => {
@@ -178,6 +181,9 @@
 			fetchJobEta(job.bundleId)
 				.then((result) => {
 					etaByBundle[job.bundleId] = result.avgMs;
+					etaRangeByBundle[job.bundleId] = { p50Ms: result.p50Ms, p95Ms: result.p95Ms };
+					etaConfidenceByBundle[job.bundleId] = result.confidence;
+					etaSamplesByBundle[job.bundleId] = result.sampleCount;
 				})
 				.catch(() => {
 					fetchedBundles.delete(job.bundleId);
@@ -396,7 +402,7 @@
 										<div class="min-w-0 flex-1">
 											<p class="break-words text-left text-xs leading-5 text-text" title={j.progress}>{j.progress}</p>
 											{#if etaByBundle[j.bundleId]}
-												<p class="mt-0.5 text-left text-[11px] text-muted">usually {fmtDurationApprox(etaByBundle[j.bundleId] as number)}</p>
+												<p class="mt-0.5 text-left text-[11px] text-muted">{#if etaRangeByBundle[j.bundleId]?.p50Ms !== null && etaRangeByBundle[j.bundleId]?.p95Ms !== null}likely {fmtDurationApprox(etaRangeByBundle[j.bundleId]?.p50Ms as number)}–{fmtDurationApprox(etaRangeByBundle[j.bundleId]?.p95Ms as number)}{:else}usually {fmtDurationApprox(etaByBundle[j.bundleId] as number)}{/if} · {etaConfidenceByBundle[j.bundleId]} confidence from {etaSamplesByBundle[j.bundleId]} jobs</p>
 											{/if}
 										</div>
 									</div>

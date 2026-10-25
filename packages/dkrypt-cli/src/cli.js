@@ -12,15 +12,15 @@ const [command, ...args] = process.argv.slice(2);
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login\ndkrypt logout\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login\ndkrypt logout\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt doctor [--json]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
 if (command === 'completion') {
   const completions = {
-    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout completion proxy-config decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
-    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout completion proxy-config decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
-    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout completion proxy-config decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
+    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout completion proxy-config doctor decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
+    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout completion proxy-config doctor decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
+    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout completion proxy-config doctor decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
   };
   if (!args[0] || !(args[0] in completions)) throw new Error('Choose bash, zsh, or fish');
   process.stdout.write(completions[args[0]]);
@@ -183,6 +183,20 @@ async function printJson(response) {
   process.stdout.write(`${JSON.stringify(await response.json(), null, 2)}\n`);
 }
 
+async function runDoctor() {
+  const checks = [];
+  try {
+    const artifacts = await send('/v1/artifacts?limit=1').then((response) => response.json());
+    const validPage = Array.isArray(artifacts.artifacts) && Number.isSafeInteger(artifacts.total);
+    checks.push({ name: 'API key and IPA library', status: validPage ? 'ok' : 'error', detail: validPage ? `API key accepted · ${artifacts.total} artifact(s) visible` : 'The public API returned an invalid artifact page' });
+  } catch (error) {
+    checks.push({ name: 'API key and IPA library', status: 'error', detail: error instanceof Error ? error.message : String(error) });
+  }
+  if (args.includes('--json')) process.stdout.write(`${JSON.stringify({ checkedAt: new Date().toISOString(), checks }, null, 2)}\n`);
+  else for (const check of checks) process.stdout.write(`[${check.status.toUpperCase()}] ${check.name}: ${check.detail}\n`);
+  if (checks.some((check) => check.status === 'error')) process.exitCode = 1;
+}
+
 async function followJob(jobId) {
   let lastEventId;
   let lastSignature;
@@ -260,7 +274,9 @@ function optionValue(name) {
   return index < 0 ? undefined : args[index + 1];
 }
 
-if (command === 'decrypt') {
+if (command === 'doctor') {
+  await runDoctor();
+} else if (command === 'decrypt') {
   const bundleId = args[0];
   if (!bundleId || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error('Provide a valid app bundle ID');
   const version = optionValue('--version');

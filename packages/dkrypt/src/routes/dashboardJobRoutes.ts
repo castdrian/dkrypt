@@ -8,10 +8,11 @@ import { getJob } from '#jobs/store.js';
 import type { Job, JobExecutionStage } from '#jobs/types.js';
 import type { DeviceTransport } from '#apiCommonContracts.js';
 import { getFailureGuidance } from '#util/failureGuidance.js';
-import { fastifyRequireSession } from '#session.js';
+import { fastifyRequireSession, getFastifySession } from '#session.js';
 import { getJobHistoryEntryById, getJobHistoryPage } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { getOfflineAppStoreReadiness } from '#offlineAppStore.js';
+import { getDecryptQuotaReceipt } from '#jobs/repository.js';
 
 type TimelineSource = {
   id: string;
@@ -46,7 +47,7 @@ type TimelineSource = {
   filePath?: string;
 };
 
-function dashboardJobTimeline(source: TimelineSource) {
+function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number }) {
   const events = source.timeline ?? [
     { at: source.createdAt, label: 'Queued', status: 'queued' as const },
     ...(source.startedAt !== undefined ? [{ at: source.startedAt, label: `Started on ${source.deviceId ?? 'unknown device'}`, status: 'running' as const }] : []),
@@ -86,6 +87,7 @@ function dashboardJobTimeline(source: TimelineSource) {
     offlineDeviceFallbackStartedAt: source.offlineDeviceFallbackStartedAt,
     deviceFallbackDurationMs: source.deviceFallbackDurationMs,
     offlineFailureReason: source.offlineFailureReason,
+    quotaReceipt,
     offlineCompatibility: source.offlineCompatibility,
     shutdownRecoveryAt: source.shutdownRecoveryAt,
     versionLabel: source.versionLabel,
@@ -139,13 +141,14 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
   });
 
   server.get<DashboardJobTimelineRoute>('/v1/dashboard/jobs/:id/timeline', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/timeline') }, async (request, reply) => {
+    const session = getFastifySession(request)!;
     const active = getJob(request.params.id);
-    if (active) return dashboardJobTimeline(active);
+    if (active) return dashboardJobTimeline(active, getDecryptQuotaReceipt(active.id, session.sub));
 
     const entry = getJobHistoryEntryById(request.params.id);
     if (!entry) {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
     }
-    return dashboardJobTimeline(entry);
+    return dashboardJobTimeline(entry, getDecryptQuotaReceipt(entry.id, session.sub));
   });
 };

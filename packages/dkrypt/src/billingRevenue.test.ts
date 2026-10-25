@@ -23,11 +23,12 @@ function stripePage<T>(data: T[]): Stripe.ApiList<T> {
 test('billing revenue combines paid Stripe invoices and crypto payments while subtracting refunds', async () => {
   const subscriptions = [{ provider: 'stripe', subscriptionId: 'sub_revenue' }] as BillingSubscription[];
   const charges = [
-    { provider: 'nowpayments', chargeId: 'crypto_paid', subscriptionId: 'sub_crypto', userId: 'root', status: 'succeeded', amount: 5, currency: 'EUR', occurredAt: '', updatedAt: '' },
-    { provider: 'nowpayments', chargeId: 'crypto_refunded', subscriptionId: 'sub_crypto', userId: 'root', status: 'refunded', amount: 3, currency: 'EUR', occurredAt: '', updatedAt: '' },
+    { provider: 'nowpayments', chargeId: 'crypto_paid', subscriptionId: 'sub_crypto', userId: 'root', status: 'succeeded', amount: 5, currency: 'EUR', occurredAt: '2026-10-03T10:00:00.000Z', updatedAt: '' },
+    { provider: 'nowpayments', chargeId: 'crypto_refunded', subscriptionId: 'sub_crypto', userId: 'root', status: 'refunded', amount: 3, currency: 'EUR', occurredAt: '2026-10-04T10:00:00.000Z', updatedAt: '' },
   ] as BillingCharge[];
   const invoicePayment = {
     id: 'inpay_revenue',
+    created: Math.floor(Date.parse('2026-09-15T10:00:00.000Z') / 1000),
     amount_paid: 1_000,
     currency: 'eur',
     payment: { type: 'payment_intent', payment_intent: { latest_charge: { id: 'ch_revenue', amount_refunded: 250 } } },
@@ -42,6 +43,7 @@ test('billing revenue combines paid Stripe invoices and crypto payments while su
     listCharges: () => charges,
     stripeConfigured: true,
     runStripe: (operation) => operation(client),
+    now: () => Date.parse('2026-10-25T00:00:00.000Z'),
   });
 
   const summary = await readRevenue();
@@ -49,6 +51,10 @@ test('billing revenue combines paid Stripe invoices and crypto payments while su
   expect(summary).toMatchObject({
     complete: true,
     totals: [{ currency: 'EUR', gross: 18, refunded: 5.5, net: 12.5 }],
+    trend: [
+      { month: '2026-09', currency: 'EUR', gross: 10, refunded: 2.5, net: 7.5, paymentCount: 1, providers: { stripe: 7.5, nowpayments: 0 } },
+      { month: '2026-10', currency: 'EUR', gross: 8, refunded: 3, net: 5, paymentCount: 2, providers: { stripe: 0, nowpayments: 5 } },
+    ],
     retention: { activeAccounts: 0, paymentIssues: 0, cancellationsUpdatedLast30Days: 0, recentCancellationRatePercent: 0 },
     providers: {
       stripe: { state: 'ready', paymentCount: 1, totals: [{ currency: 'EUR', gross: 10, refunded: 2.5, net: 7.5 }] },
@@ -122,6 +128,7 @@ test('billing revenue endpoint is manager-only and excluded from API-key routes'
     updatedAt: new Date(0).toISOString(),
     complete: true,
     totals: [],
+    trend: [],
     retention: { activeAccounts: 0, paymentIssues: 0, cancellationsUpdatedLast30Days: 0, recentCancellationRatePercent: 0 },
     providers: {
       stripe: { state: 'not_configured', totals: [], paymentCount: 0 },

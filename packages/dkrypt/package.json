@@ -14,6 +14,7 @@
     "dev": "bun --watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test --isolate --parallel=2 --max-concurrency=4 --timeout=15000",
+    "db:migrate:dry-run": "bun scripts/migration-dry-run.ts",
     "load-test": "bun scripts/load-test.ts",
     "stripe:seed": "bun scripts/seed-stripe-catalog.ts",
     "stripe:webhook": "bun scripts/configure-stripe-webhook.ts",

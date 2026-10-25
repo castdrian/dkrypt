@@ -17,10 +17,21 @@ export interface BillingRevenueProviderSummary {
   paymentCount: number;
 }
 
+export interface BillingRevenueTrendMonth {
+  month: string;
+  currency: string;
+  gross: number;
+  refunded: number;
+  net: number;
+  paymentCount: number;
+  providers: { stripe: number; nowpayments: number };
+}
+
 export interface BillingRevenueSummary {
   updatedAt: string;
   complete: boolean;
   totals: BillingRevenueCurrencyTotal[];
+  trend: BillingRevenueTrendMonth[];
   retention: {
     activeAccounts: number;
     paymentIssues: number;
@@ -53,6 +64,13 @@ interface StripeChargeTotals {
   currency: string;
   gross: number;
   refunded: number;
+  month: string;
+}
+
+interface MonthlyAmountTotals extends AmountTotals {
+  paymentCount: number;
+  stripeNet: number;
+  nowpaymentsNet: number;
 }
 
 interface StripeRevenueResult {
@@ -144,6 +162,55 @@ function combineTotals(...groups: BillingRevenueCurrencyTotal[][]): BillingReven
   return toTotals(amounts);
 }
 
+function monthFor(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 7);
+}
+
+function addMonthlyAmount(
+  months: Map<string, MonthlyAmountTotals>,
+  provider: 'stripe' | 'nowpayments',
+  timestamp: number,
+  currencyValue: string,
+  gross: number,
+  refunded = 0,
+  paymentCount = 0,
+): void {
+  const currency = normalizeCurrency(currencyValue);
+  if (!currency || !Number.isFinite(timestamp) || !Number.isFinite(gross) || !Number.isFinite(refunded)) return;
+  const month = monthFor(timestamp);
+  const key = `${month}:${currency}`;
+  const current = months.get(key) ?? { gross: 0, refunded: 0, paymentCount: 0, stripeNet: 0, nowpaymentsNet: 0 };
+  current.gross += gross;
+  current.refunded += refunded;
+  current.paymentCount += paymentCount;
+  current[provider === 'stripe' ? 'stripeNet' : 'nowpaymentsNet'] += gross - refunded;
+  months.set(key, current);
+}
+
+function toTrend(months: Map<string, MonthlyAmountTotals>, now: number): BillingRevenueTrendMonth[] {
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(1);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 11);
+  const firstMonth = monthFor(cutoff.getTime());
+  return [...months.entries()].filter(([key]) => key.slice(0, 7) >= firstMonth).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => {
+    const separator = key.lastIndexOf(':');
+    const month = key.slice(0, separator);
+    const currency = key.slice(separator + 1);
+    return {
+      month,
+      currency,
+      gross: roundMajorUnits(value.gross, currency),
+      refunded: roundMajorUnits(value.refunded, currency),
+      net: roundMajorUnits(Math.max(0, value.gross - value.refunded), currency),
+      paymentCount: value.paymentCount,
+      providers: {
+        stripe: roundMajorUnits(Math.max(0, value.stripeNet), currency),
+        nowpayments: roundMajorUnits(Math.max(0, value.nowpaymentsNet), currency),
+      },
+    };
+  });
+}
+
 function stripeObjectId(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
   if (typeof value !== 'object' || value === null) return undefined;
@@ -190,7 +257,7 @@ function stripeSubscriptionIds(subscriptions: BillingSubscription[]): string[] {
     .map((subscription) => subscription.subscriptionId))];
 }
 
-function cryptoRevenue(charges: BillingCharge[]): BillingRevenueProviderSummary {
+function cryptoRevenue(charges: BillingCharge[], months: Map<string, MonthlyAmountTotals>): BillingRevenueProviderSummary {
   const amounts = new Map<string, AmountTotals>();
   let paymentCount = 0;
   for (const charge of charges) {
@@ -198,6 +265,8 @@ function cryptoRevenue(charges: BillingCharge[]): BillingRevenueProviderSummary 
     const currency = normalizeCurrency(charge.currency);
     if (!currency || !Number.isFinite(charge.amount) || charge.amount < 0) continue;
     addAmount(amounts, currency, charge.amount, charge.status === 'refunded' ? charge.amount : 0);
+    const timestamp = Date.parse(charge.occurredAt);
+    if (Number.isFinite(timestamp)) addMonthlyAmount(months, 'nowpayments', timestamp, currency, charge.amount, charge.status === 'refunded' ? charge.amount : 0, 1);
     paymentCount += 1;
   }
   return { state: 'ready', totals: toTotals(amounts), paymentCount };
@@ -206,6 +275,7 @@ function cryptoRevenue(charges: BillingCharge[]): BillingRevenueProviderSummary 
 async function stripeRevenue(
   dependencies: BillingRevenueReaderDependencies,
   subscriptionIds: string[],
+  months: Map<string, MonthlyAmountTotals>,
 ): Promise<StripeRevenueResult> {
   if (!dependencies.stripeConfigured) {
     return {
@@ -259,7 +329,9 @@ async function stripeRevenue(
         if (invoice.amount_paid > 0) {
           const currency = normalizeCurrency(invoice.currency);
           if (currency) {
-            addAmount(amounts, currency, toMajorUnits(invoice.amount_paid, currency));
+            const gross = toMajorUnits(invoice.amount_paid, currency);
+            addAmount(amounts, currency, gross);
+            addMonthlyAmount(months, 'stripe', (invoice.created ?? Math.floor(dependencies.now() / 1000)) * 1000, currency, gross, 0, 1);
             paymentCount += 1;
             complete = false;
             warnings.push('A paid Stripe invoice has no itemized payment record; refund totals may be incomplete.');
@@ -274,6 +346,8 @@ async function stripeRevenue(
         const currency = normalizeCurrency(payment.currency);
         if (!currency || paid <= 0) continue;
         addAmount(amounts, currency, toMajorUnits(paid, currency));
+        const paymentTimestamp = typeof payment.created === 'number' ? payment.created * 1000 : (invoice.created ?? Math.floor(dependencies.now() / 1000)) * 1000;
+        addMonthlyAmount(months, 'stripe', paymentTimestamp, currency, toMajorUnits(paid, currency), 0, 1);
         if (currency === invoiceCurrency) itemizedInvoicePaid += paid;
         paymentCount += 1;
         const linkedPayment = payment.payment;
@@ -306,20 +380,29 @@ async function stripeRevenue(
           warnings.push('A Stripe refund uses a different currency from its invoice payment and could not be included safely.');
           continue;
         }
-        const previous = chargeAmounts.get(chargeId) ?? { currency, gross: 0, refunded: 0 };
+        const chargeTimestamp = 'created' in resolvedCharge && typeof resolvedCharge.created === 'number'
+          ? resolvedCharge.created * 1000
+          : paymentTimestamp;
+        const previous = chargeAmounts.get(chargeId) ?? { currency, gross: 0, refunded: 0, month: monthFor(chargeTimestamp) };
         previous.gross += paid;
         previous.refunded = Math.max(previous.refunded, 'amount_refunded' in resolvedCharge && typeof resolvedCharge.amount_refunded === 'number' ? resolvedCharge.amount_refunded : 0);
         chargeAmounts.set(chargeId, previous);
       }
       if (invoiceCurrency && invoice.amount_paid > itemizedInvoicePaid) {
-        addAmount(amounts, invoiceCurrency, toMajorUnits(invoice.amount_paid - itemizedInvoicePaid, invoiceCurrency));
+        const unitemizedAmount = toMajorUnits(invoice.amount_paid - itemizedInvoicePaid, invoiceCurrency);
+        addAmount(amounts, invoiceCurrency, unitemizedAmount);
+        addMonthlyAmount(months, 'stripe', (invoice.created ?? Math.floor(dependencies.now() / 1000)) * 1000, invoiceCurrency, unitemizedAmount, 0, 1);
         complete = false;
         warnings.push('A paid Stripe invoice amount exceeds its itemized payments; refund totals may be incomplete.');
       }
     }
   });
   for (const charge of chargeAmounts.values()) {
-    if (charge.refunded > 0) addAmount(amounts, charge.currency, 0, toMajorUnits(Math.min(charge.gross, charge.refunded), charge.currency));
+    if (charge.refunded > 0) {
+      const refunded = toMajorUnits(Math.min(charge.gross, charge.refunded), charge.currency);
+      addAmount(amounts, charge.currency, 0, refunded);
+      addMonthlyAmount(months, 'stripe', Date.parse(`${charge.month}-01T00:00:00.000Z`), charge.currency, 0, refunded);
+    }
   }
   return {
     summary: { state: 'ready', totals: toTotals(amounts), paymentCount },
@@ -347,10 +430,11 @@ export function createBillingRevenueReader(overrides: Partial<BillingRevenueRead
     const load = async (): Promise<BillingRevenueSummary> => {
       const subscriptions = dependencies.listSubscriptions();
       const subscriptionIds = stripeSubscriptionIds(subscriptions);
+      const months = new Map<string, MonthlyAmountTotals>();
       const warnings: string[] = [];
       let stripe: StripeRevenueResult;
       try {
-        stripe = await stripeRevenue(dependencies, subscriptionIds);
+        stripe = await stripeRevenue(dependencies, subscriptionIds, months);
       } catch {
         stripe = {
           summary: { state: 'unavailable', totals: [], paymentCount: 0 },
@@ -360,13 +444,14 @@ export function createBillingRevenueReader(overrides: Partial<BillingRevenueRead
       }
       warnings.push(...stripe.warnings);
       const charges = dependencies.listCharges();
-      const crypto = cryptoRevenue(charges);
+      const crypto = cryptoRevenue(charges, months);
       if (charges.length >= 5_000) warnings.push('Crypto payment history reached its storage cap; older payments may not be included.');
       const complete = stripe.complete && charges.length < 5_000;
       return {
         updatedAt: new Date(dependencies.now()).toISOString(),
         complete,
         totals: combineTotals(stripe.summary.totals, crypto.totals),
+        trend: toTrend(months, dependencies.now()),
         retention: summarizeRetention(subscriptions, dependencies.now()),
         providers: { stripe: stripe.summary, nowpayments: crypto },
         warnings,

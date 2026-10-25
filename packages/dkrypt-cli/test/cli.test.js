@@ -93,6 +93,38 @@ test('CLI status sends the API key to the scoped job endpoint', async () => {
   }
 });
 
+test('CLI doctor verifies API key and IPA library access only through public routes', async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, authorization: request.headers.authorization });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ artifacts: [], total: 0 }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  try {
+    const child = spawn(process.execPath, [cliPath, 'doctor', '--json'], {
+      env: { ...process.env, DKRYPT_API_URL: `http://127.0.0.1:${address.port}`, DKRYPT_API_KEY: 'test-key' },
+    });
+    const result = await new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /"name": "API key and IPA library",\n\s+"status": "ok"/);
+    assert.deepEqual(requests, [
+      { url: '/v1/artifacts?limit=1', authorization: 'Bearer test-key' },
+    ]);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('CLI follow reconnects to the resumable event stream', async () => {
   const requests = [];
   const server = createServer((request, response) => {

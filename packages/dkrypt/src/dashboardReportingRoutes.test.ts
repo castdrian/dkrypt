@@ -32,6 +32,7 @@ test('insights is served through the typed dashboard API and preserves bounded q
     failureBreakdown: [{ category: 'device_transport', count: 1 }],
     byDevice: [],
     anomalies: [],
+    executionPath: { serverAttempts: 0, serverCompleted: 0, deviceFallbacks: 0, fallbackCompleted: 0, fallbackFailed: 0 },
   };
   const calls: Array<[number, number, string | undefined]> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();

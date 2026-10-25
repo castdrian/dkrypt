@@ -6,6 +6,8 @@ Run dkrypt login to save a dkrypt URL and API key in a local configuration file 
 
 The CLI's `follow` command reconnects to the resumable job event stream. The TypeScript and Python SDKs include artifact pagination helpers. Generate reverse-proxy examples before signing in with `dkrypt proxy-config caddy ipa.example.com`, `dkrypt proxy-config nginx ipa.example.com`, or `dkrypt proxy-config traefik ipa.example.com`. Use `--upstream` when dkrypt listens on a different local origin. The Nginx example assumes TLS certificates at the generated Let's Encrypt paths.
 
+Run `dkrypt doctor` (or `dkrypt doctor --json`) to verify the API key and IPA Library using only the public API routes available to generated keys.
+
 ```sh
 cd packages/dkrypt-cli
 npm install --global .
