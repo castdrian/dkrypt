@@ -44,12 +44,14 @@ function rewindToSchemaVersion16(database: ReturnType<typeof openStateDatabase>)
     DROP TABLE watch_drafts;
     DROP TABLE appstore_offline_credential_operations;
     DROP TABLE appstore_offline_authentication_operations;
+    DROP TABLE job_worker_leases;
+    DROP TABLE job_worker_generations;
     DROP TABLE appstore_offline_account;
     ALTER TABLE billing_events DROP COLUMN provider;
     ALTER TABLE billing_events DROP COLUMN event_id;
     ALTER TABLE billing_events DROP COLUMN occurred_at;
     ALTER TABLE billing_events DROP COLUMN processed_at;
-    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);
+    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32);
   `);
 }
 

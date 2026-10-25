@@ -67,6 +67,9 @@ function sortById<T extends { id: string }>(records: T[]): T[] {
 }
 
 function restoreSchemaAtVersion(database: ReturnType<typeof openStateDatabase>, version: number): void {
+  if (version < 32) {
+    database.db.exec('DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DELETE FROM schema_migrations WHERE version = 32;');
+  }
   if (version < 19) {
     rewindApiKeySearchMigration(database.db);
   }

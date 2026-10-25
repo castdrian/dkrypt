@@ -1296,7 +1296,7 @@ function startJobWorker(job: Job, resourceId: string, device?: DeviceRecord): bo
     parentCorrelationId: job.parentCorrelationId,
     traceId: job.traceContext?.traceId,
     traceContext: job.traceContext,
-  }, () => Promise.resolve().then(() => runOneJob(device, job)));
+  }, () => runOneJob(device, job));
   runningJobs.set(job.id, run);
   void run.finally(() => {
     stopWorkerLeaseHeartbeat(job.id);
