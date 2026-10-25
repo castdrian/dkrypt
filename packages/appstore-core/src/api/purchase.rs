@@ -7,6 +7,8 @@ use url::Url;
 
 const PURCHASE_PATH: &str = "/WebObjects/MZFinance.woa/wa/buyProduct";
 const PURCHASE_TIMEOUT: Duration = Duration::from_secs(45);
+const STANDARD_FREE_LICENSE_PRICING_PARAMETER: &str = "STDQ";
+const ALTERNATE_FREE_LICENSE_PRICING_PARAMETER: &str = "GAME";
 
 pub async fn claim_free_license(
     client: &AppleClient,
@@ -18,7 +20,35 @@ pub async fn claim_free_license(
             "paid_app_purchase_not_supported".into(),
         ));
     }
-    let (url, body) = build_purchase_request(client.guid(), app, account)?;
+    match submit_free_license_purchase(
+        client,
+        app,
+        account,
+        STANDARD_FREE_LICENSE_PRICING_PARAMETER,
+    )
+    .await
+    {
+        Err(error) => match retry_pricing_parameter(&error) {
+            Some(pricing_parameter) => {
+                tracing::warn!(
+                    app_id = app.id,
+                    "retrying free-license claim with alternate pricing parameter"
+                );
+                submit_free_license_purchase(client, app, account, pricing_parameter).await
+            }
+            None => Err(error),
+        },
+        result => result,
+    }
+}
+
+async fn submit_free_license_purchase(
+    client: &AppleClient,
+    app: &App,
+    account: &Account,
+    pricing_parameter: &str,
+) -> Result<(), ClientError> {
+    let (url, body) = build_purchase_request(client.guid(), app, account, pricing_parameter)?;
     let response = client
         .app_store_dispatch_http()?
         .post(url)
@@ -40,6 +70,7 @@ fn build_purchase_request(
     guid: &str,
     app: &App,
     account: &Account,
+    pricing_parameter: &str,
 ) -> Result<(Url, Vec<u8>), ClientError> {
     if app.id <= 0 {
         return Err(ClientError::UnexpectedResponse(
@@ -79,7 +110,7 @@ fn build_purchase_request(
         ("origPage", format!("Software-{}", app.id)),
         ("origPageLocation", "Buy".to_string()),
         ("price", "0".to_string()),
-        ("pricingParameters", "STDQ".to_string()),
+        ("pricingParameters", pricing_parameter.to_string()),
         ("productType", "C".to_string()),
     ] {
         payload.insert(key.into(), plist::Value::String(value));
@@ -89,6 +120,14 @@ fn build_purchase_request(
     plist::to_writer_xml(&mut body, &plist::Value::Dictionary(payload))
         .map_err(|_| ClientError::UnexpectedResponse("purchase_request_invalid".into()))?;
     Ok((url, body))
+}
+
+fn retry_pricing_parameter(error: &ClientError) -> Option<&'static str> {
+    matches!(
+        error,
+        ClientError::Store(StoreError::TemporarilyUnavailable)
+    )
+    .then_some(ALTERNATE_FREE_LICENSE_PRICING_PARAMETER)
 }
 
 fn parse_purchase_response(status: reqwest::StatusCode, body: &[u8]) -> Result<(), ClientError> {
@@ -126,7 +165,11 @@ fn parse_purchase_response(status: reqwest::StatusCode, body: &[u8]) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_purchase_request, claim_free_license, parse_purchase_response};
+    use super::{
+        ALTERNATE_FREE_LICENSE_PRICING_PARAMETER, STANDARD_FREE_LICENSE_PRICING_PARAMETER,
+        build_purchase_request, claim_free_license, parse_purchase_response,
+        retry_pricing_parameter,
+    };
     use crate::client::AppleClient;
     use crate::error::{ClientError, StoreError};
     use crate::guid::MachineIdentity;
@@ -168,8 +211,13 @@ mod tests {
 
     #[test]
     fn builds_the_free_purchase_request_without_a_guid_query_parameter() {
-        let (url, body) =
-            build_purchase_request("AABBCCDDEEFF", &app(Some(0.0)), &account(Some("14"))).unwrap();
+        let (url, body) = build_purchase_request(
+            "AABBCCDDEEFF",
+            &app(Some(0.0)),
+            &account(Some("14")),
+            STANDARD_FREE_LICENSE_PRICING_PARAMETER,
+        )
+        .unwrap();
         let payload: plist::Dictionary = plist::from_bytes(&body).unwrap();
         assert_eq!(
             url.as_str(),
@@ -184,7 +232,7 @@ mod tests {
             payload
                 .get("pricingParameters")
                 .and_then(plist::Value::as_string),
-            Some("STDQ")
+            Some(STANDARD_FREE_LICENSE_PRICING_PARAMETER)
         );
         assert_eq!(
             payload.get("productType").and_then(plist::Value::as_string),
@@ -203,9 +251,49 @@ mod tests {
     }
 
     #[test]
+    fn retries_free_license_claims_with_the_alternate_parameter_only_when_temporarily_unavailable()
+    {
+        assert_eq!(
+            retry_pricing_parameter(&ClientError::Store(StoreError::TemporarilyUnavailable)),
+            Some(ALTERNATE_FREE_LICENSE_PRICING_PARAMETER)
+        );
+        assert_eq!(
+            retry_pricing_parameter(&ClientError::Store(StoreError::PurchaseFailed)),
+            None
+        );
+        assert_eq!(
+            retry_pricing_parameter(&ClientError::Store(StoreError::DeviceVerificationFailed)),
+            None
+        );
+    }
+
+    #[test]
+    fn builds_the_alternate_free_purchase_request() {
+        let (_, body) = build_purchase_request(
+            "AABBCCDDEEFF",
+            &app(Some(0.0)),
+            &account(None),
+            ALTERNATE_FREE_LICENSE_PRICING_PARAMETER,
+        )
+        .unwrap();
+        let payload: plist::Dictionary = plist::from_bytes(&body).unwrap();
+        assert_eq!(
+            payload
+                .get("pricingParameters")
+                .and_then(plist::Value::as_string),
+            Some(ALTERNATE_FREE_LICENSE_PRICING_PARAMETER)
+        );
+    }
+
+    #[test]
     fn uses_the_default_purchase_host_without_a_pod() {
-        let (url, _) =
-            build_purchase_request("AABBCCDDEEFF", &app(Some(0.0)), &account(None)).unwrap();
+        let (url, _) = build_purchase_request(
+            "AABBCCDDEEFF",
+            &app(Some(0.0)),
+            &account(None),
+            STANDARD_FREE_LICENSE_PRICING_PARAMETER,
+        )
+        .unwrap();
         assert_eq!(url.host_str(), Some("buy.itunes.apple.com"));
     }
 

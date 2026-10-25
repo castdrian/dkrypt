@@ -514,19 +514,65 @@ async fn claim_free_license_with_reauthentication(
 }
 
 fn map_license_claim_error(error: &ClientError) -> DownloaderFailure {
-    let code = match error {
-        ClientError::Store(StoreError::AuthCodeRequired) => "two_factor_required",
-        ClientError::Store(StoreError::DeviceVerificationFailed) => "device_verification_required",
-        ClientError::Store(StoreError::RateLimited) => "apple_rate_limited",
-        ClientError::Store(StoreError::TemporarilyUnavailable) => "apple_store_unavailable",
-        ClientError::Store(StoreError::PasswordTokenExpired | StoreError::SignInRequired) => {
-            "authentication_required"
+    let (code, diagnostic) = match error {
+        ClientError::Store(StoreError::AuthCodeRequired) => ("two_factor_required", None),
+        ClientError::Store(StoreError::DeviceVerificationFailed) => {
+            ("device_verification_required", None)
         }
-        ClientError::Http(error) if error.is_timeout() => "free_license_claim_timed_out",
-        ClientError::Http(error) if error.is_connect() => "free_license_claim_network_unavailable",
-        _ => "free_license_claim_failed",
+        ClientError::Store(StoreError::RateLimited) => ("apple_rate_limited", None),
+        ClientError::Store(StoreError::TemporarilyUnavailable) => ("apple_store_unavailable", None),
+        ClientError::Store(StoreError::PasswordTokenExpired | StoreError::SignInRequired) => {
+            ("authentication_required", None)
+        }
+        ClientError::Store(StoreError::InvalidCredentials) => ("authentication_required", None),
+        ClientError::Store(StoreError::AccountDisabled) => ("apple_account_disabled", None),
+        ClientError::Store(StoreError::PurchaseFailed) => ("free_license_purchase_rejected", None),
+        ClientError::Store(StoreError::Unknown { code, .. }) if safe_apple_error_code(code) => (
+            "free_license_claim_rejected",
+            Some(format!("apple_error_code={code}")),
+        ),
+        ClientError::Store(StoreError::Unknown { .. }) => ("free_license_claim_failed", None),
+        ClientError::Http(error) if error.is_timeout() => ("free_license_claim_timed_out", None),
+        ClientError::Http(error) if error.is_connect() => {
+            ("free_license_claim_network_unavailable", None)
+        }
+        ClientError::Http(error) if error.status().is_some_and(|status| status.as_u16() == 429) => {
+            ("apple_rate_limited", Some("http_status=429".into()))
+        }
+        ClientError::Http(error)
+            if error
+                .status()
+                .is_some_and(|status| status.is_server_error()) =>
+        {
+            let diagnostic = error
+                .status()
+                .map(|status| format!("http_status={}", status.as_u16()));
+            ("apple_store_unavailable", diagnostic)
+        }
+        ClientError::Http(error) => {
+            let diagnostic = error
+                .status()
+                .map(|status| format!("http_status={}", status.as_u16()));
+            ("free_license_claim_http_failed", diagnostic)
+        }
+        ClientError::UnexpectedResponse(reason) if reason == "purchase_http_failed" => {
+            ("free_license_claim_http_failed", None)
+        }
+        ClientError::PlistDe(_) | ClientError::UnexpectedResponse(_) => {
+            ("free_license_claim_response_invalid", None)
+        }
+        _ => ("free_license_claim_failed", None),
     };
-    DownloaderFailure::new("license_acquisition", code)
+    DownloaderFailure {
+        stage: "license_acquisition",
+        code,
+        diagnostic,
+    }
+}
+
+fn safe_apple_error_code(code: &str) -> bool {
+    let digits = code.strip_prefix('-').unwrap_or(code);
+    !digits.is_empty() && digits.len() <= 8 && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn map_lookup_error(error: &ClientError) -> &'static str {
@@ -1109,12 +1155,28 @@ mod tests {
             map_license_claim_error(&ClientError::Store(StoreError::DeviceVerificationFailed));
         assert_eq!(verification.code, "device_verification_required");
 
+        let purchase_error =
+            map_license_claim_error(&ClientError::Store(StoreError::PurchaseFailed));
+        assert_eq!(purchase_error.code, "free_license_purchase_rejected");
+        assert!(purchase_error.diagnostic.is_none());
+
         let provider_error = map_license_claim_error(&ClientError::Store(StoreError::Unknown {
-            code: "private-provider-code".into(),
+            code: "2059".into(),
             message: "private provider message".into(),
         }));
-        assert_eq!(provider_error.code, "free_license_claim_failed");
-        assert!(provider_error.diagnostic.is_none());
+        assert_eq!(provider_error.code, "free_license_claim_rejected");
+        assert_eq!(
+            provider_error.diagnostic.as_deref(),
+            Some("apple_error_code=2059")
+        );
+
+        let untrusted_provider_error =
+            map_license_claim_error(&ClientError::Store(StoreError::Unknown {
+                code: "private-provider-code".into(),
+                message: "private provider message".into(),
+            }));
+        assert_eq!(untrusted_provider_error.code, "free_license_claim_failed");
+        assert!(untrusted_provider_error.diagnostic.is_none());
     }
 
     #[test]
