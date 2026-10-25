@@ -80,7 +80,7 @@ export interface OfflineAppStoreDependencies {
   stagingDirectory: string;
   getSecrets(): AppleAccountSecrets | undefined;
   getVaultStatus(): AppleAccountVaultStatus;
-  runDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal): Promise<void>;
+  runDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal): Promise<void | { freeLicenseClaimed?: boolean }>;
   runDecrypt(job: Job, secrets: AppleAccountSecrets, inputPath: string, outputPath: string, signal?: AbortSignal, credential?: string): Promise<void>;
   getLicenseSelector(inputPath: string): string;
   retrieveCredentialForIpa?(job: Job, inputPath: string, signal?: AbortSignal): Promise<Buffer>;
@@ -193,7 +193,11 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
       await rm(encryptedPath, { force: true });
       await rm(outputPath, { force: true });
       try {
-        await dependencies.runDownload(job, secrets, encryptedPath, signal);
+        const downloadResult = await dependencies.runDownload(job, secrets, encryptedPath, signal);
+        if (downloadResult && 'freeLicenseClaimed' in downloadResult && downloadResult.freeLicenseClaimed) {
+          appendJobTimelineEvent(job, 'Free App Store license acquired', 'done');
+          emitJobsChanged();
+        }
         throwIfAborted(signal);
         const downloaded = await stat(encryptedPath);
         if (!downloaded.isFile() || downloaded.size <= 0 || downloaded.size > config.artifactMaxBytes) {
@@ -402,7 +406,7 @@ async function withSessionWorkspace<T>(operation: (homeDirectory: string) => Pro
   return result as T;
 }
 
-async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal): Promise<void> {
+async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal): Promise<{ freeLicenseClaimed: boolean }> {
   const result = await withSessionWorkspace((homeDirectory) => runAppStoreDownloaderRequest({
     commandPath: config.appStoreOfflineDownloaderBin,
     homeDirectory,
@@ -443,6 +447,7 @@ async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, output
     throw new Error('App Store download failed');
   }
   markAppleAccountAuthenticated();
+  return { freeLicenseClaimed: result.response.free_license_claimed === true };
 }
 
 async function runDefaultDecrypt(job: Job, secrets: AppleAccountSecrets, inputPath: string, outputPath: string, signal?: AbortSignal, credentialValue?: string): Promise<void> {

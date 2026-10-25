@@ -41,6 +41,8 @@ struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     authenticated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    free_license_claimed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stage: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<&'static str>,
@@ -78,16 +80,18 @@ impl Response {
         Self {
             ok: true,
             authenticated: Some(value),
+            free_license_claimed: None,
             stage: None,
             code: None,
             diagnostic: None,
         }
     }
 
-    fn success() -> Self {
+    fn success(free_license_claimed: bool) -> Self {
         Self {
             ok: true,
             authenticated: None,
+            free_license_claimed: Some(free_license_claimed),
             stage: None,
             code: None,
             diagnostic: None,
@@ -98,6 +102,7 @@ impl Response {
         Self {
             ok: false,
             authenticated: None,
+            free_license_claimed: None,
             stage: Some(failure.stage),
             code: Some(failure.code),
             diagnostic: failure.diagnostic,
@@ -375,6 +380,7 @@ async fn download(
         .await
         .map_err(|error| DownloaderFailure::new("app_lookup", map_lookup_error(&error)))?
         .ok_or_else(|| DownloaderFailure::new("app_lookup", "app_not_found"))?;
+    let mut free_license_claimed = false;
     let item = match get_download_info_with_reauthentication(
         &mut client,
         &app,
@@ -388,6 +394,7 @@ async fn download(
             claim_free_license_with_reauthentication(&mut client, &app, &mut account)
                 .await
                 .map_err(|error| map_license_claim_error(&error))?;
+            free_license_claimed = true;
             match get_download_info_with_reauthentication(
                 &mut client,
                 &app,
@@ -446,7 +453,7 @@ async fn download(
     client.save_cookies(&cookie_path).map_err(|_| {
         DownloaderFailure::new("session_persistence", "provider_session_storage_failed")
     })?;
-    Ok(Response::success())
+    Ok(Response::success(free_license_claimed))
 }
 
 fn verify_requested_version(
@@ -976,10 +983,10 @@ fn load_or_create_identity(session_directory: &Path) -> Result<MachineIdentity, 
 #[cfg(test)]
 mod tests {
     use super::{
-        DownloaderFailure, load_account, map_authentication_error, map_download_diagnostic,
-        map_download_error, map_license_claim_error, map_lookup_error, save_account,
-        should_claim_free_license, temporary_download_path, valid_bundle_id, valid_email,
-        valid_verification_code, verify_requested_version,
+        DownloaderFailure, Response, load_account, map_authentication_error,
+        map_download_diagnostic, map_download_error, map_license_claim_error, map_lookup_error,
+        save_account, should_claim_free_license, temporary_download_path, valid_bundle_id,
+        valid_email, valid_verification_code, verify_requested_version,
     };
     use dkrypt_appstore_core::error::{ClientError, StoreError};
     use dkrypt_appstore_core::model::Account;
@@ -1187,6 +1194,18 @@ mod tests {
             None,
             &ClientError::Store(StoreError::LicenseNotFound)
         ));
+    }
+
+    #[test]
+    fn successful_download_reports_a_free_license_claim_without_exposing_account_data() {
+        assert_eq!(
+            serde_json::to_value(Response::success(true)).unwrap(),
+            serde_json::json!({"ok": true, "free_license_claimed": true})
+        );
+        assert_eq!(
+            serde_json::to_value(Response::success(false)).unwrap(),
+            serde_json::json!({"ok": true, "free_license_claimed": false})
+        );
     }
 
     #[test]

@@ -48,6 +48,25 @@ test('App Store downloader reports malformed responses instead of treating them 
   }
 });
 
+test('App Store downloader preserves the free-license acquisition result', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dkrypt-appstore-process-'));
+  try {
+    const result = await runAppStoreDownloaderRequest({
+      commandPath: process.execPath,
+      commandArgs: ['-e', 'process.stdout.write(JSON.stringify({ ok: true, free_license_claimed: true }))'],
+      homeDirectory: root,
+      cacheDirectory: path.join(root, 'cache'),
+      memoryMb: 512,
+      cpuSeconds: 20,
+      request: { operation: 'download' },
+    });
+
+    expect(result.response.free_license_claimed).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('App Store downloader rejects a successful response paired with a failing process status', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'dkrypt-appstore-process-'));
   try {

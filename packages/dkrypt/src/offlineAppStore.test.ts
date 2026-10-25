@@ -94,6 +94,23 @@ test('offline App Store processor reports the decrypt stage after download valid
   expect(stages).toEqual(['offline_decrypting']);
 });
 
+test('offline App Store processor records when a free license was acquired before downloading', async () => {
+  const currentJob = job();
+  const dependencies = await createDependencies({
+    async runDownload(_job, _account, outputPath) {
+      await writeFile(outputPath, 'encrypted ipa');
+      return { freeLicenseClaimed: true };
+    },
+  });
+
+  await createOfflineAppStoreProcessor(dependencies).run(currentJob);
+
+  expect(currentJob.timeline).toContainEqual(expect.objectContaining({
+    label: 'Free App Store license acquired',
+    status: 'done',
+  }));
+});
+
 test('offline App Store processor preserves embedded executable warnings and removes encrypted staging data', async () => {
   const dependencies = await createDependencies({
     inspect: async () => ({

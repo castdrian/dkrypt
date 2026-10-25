@@ -9,6 +9,7 @@ const MAX_DOWNLOADER_OUTPUT_BYTES = 8192;
 export interface AppStoreDownloaderResponse {
   ok: boolean;
   authenticated?: boolean;
+  free_license_claimed?: boolean;
   stage?: string;
   code?: string;
   diagnostic?: string;
@@ -46,7 +47,11 @@ function parseResponse(output: string): AppStoreDownloaderResponse {
   if (!response || typeof response !== 'object' || typeof (response as AppStoreDownloaderResponse).ok !== 'boolean') {
     throw new Error('App Store downloader returned an invalid response');
   }
-  return response as AppStoreDownloaderResponse;
+  const parsed = response as AppStoreDownloaderResponse;
+  if (parsed.free_license_claimed !== undefined && typeof parsed.free_license_claimed !== 'boolean') {
+    throw new Error('App Store downloader returned an invalid response');
+  }
+  return parsed;
 }
 
 export async function runAppStoreDownloaderRequest(options: AppStoreDownloaderRequestOptions): Promise<{
