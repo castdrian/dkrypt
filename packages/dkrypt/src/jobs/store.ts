@@ -23,7 +23,7 @@ import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
 import { incrementMetric, observeMetric } from '#metrics.js';
-import { recordJobStarted } from '#jobs/metrics.js';
+import { recordJobStarted, shouldRecordOfflineDeviceHandoff } from '#jobs/metrics.js';
 import { currentCorrelation, withCorrelation } from '#correlation.js';
 import { EMBED_COLOR, notify } from '#notify.js';
 import { runWithJobDeadline } from '#jobs/deadline.js';
@@ -1046,7 +1046,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.executionPath = job.offlineFailureReason ? 'device_fallback' : 'device';
     job.deviceId = device.id;
     job.transport = device.transport;
-    if (job.offlineFailureReason && job.offlineAttemptedAt !== undefined) {
+    if (shouldRecordOfflineDeviceHandoff(job) && job.offlineAttemptedAt !== undefined) {
       observeMetric('appstore_offline_to_device_start_ms', Math.max(0, startedAt - job.offlineAttemptedAt), { source: job.source });
     }
   } else {

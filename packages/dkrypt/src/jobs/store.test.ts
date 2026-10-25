@@ -27,28 +27,24 @@ let offlineWorkerAttempts = 0;
 let offlineWorkerRunCount = 0;
 let offlineAppStoreDispatchNotifier = () => {};
 
-function metricCounterValue(name: string, labels: Record<string, string>): number {
+function metricSample(name: string, labels: Record<string, string>): { sum?: string; count?: string } {
   const metric = createOtlpMetricsPayload('dkrypt').resourceMetrics[0]?.scopeMetrics[0]?.metrics.find((item) => item.name === `dkrypt_${name}`);
-  const point = metric?.sum?.dataPoints.find((item) => {
-    const attributes = Object.fromEntries(item.attributes.map((attribute) => [attribute.key, attribute.value]));
-    return Object.entries(labels).every(([key, value]) => {
-      const attribute = attributes[key];
-      return attribute !== undefined && 'stringValue' in attribute && attribute.stringValue === value;
-    });
+  const matchesLabels = (attributes: Array<{ key: string; value: unknown }>) => Object.entries(labels).every(([key, expected]) => {
+    const value = attributes.find((attribute) => attribute.key === key)?.value;
+    return value !== undefined && typeof value === 'object' && value !== null && 'stringValue' in value && value.stringValue === expected;
   });
-  return Number(point?.asInt ?? 0);
+  return {
+    sum: metric?.sum?.dataPoints.find((point) => matchesLabels(point.attributes))?.asInt,
+    count: metric?.histogram?.dataPoints.find((point) => matchesLabels(point.attributes))?.count,
+  };
+}
+
+function metricCounterValue(name: string, labels: Record<string, string>): number {
+  return Number(metricSample(name, labels).sum ?? 0);
 }
 
 function metricHistogramCount(name: string, labels: Record<string, string>): number {
-  const metric = createOtlpMetricsPayload('dkrypt').resourceMetrics[0]?.scopeMetrics[0]?.metrics.find((item) => item.name === `dkrypt_${name}`);
-  const point = metric?.histogram?.dataPoints.find((item) => {
-    const attributes = Object.fromEntries(item.attributes.map((attribute) => [attribute.key, attribute.value]));
-    return Object.entries(labels).every(([key, value]) => {
-      const attribute = attributes[key];
-      return attribute !== undefined && 'stringValue' in attribute && attribute.stringValue === value;
-    });
-  });
-  return Number(point?.count ?? 0);
+  return Number(metricSample(name, labels).count ?? 0);
 }
 
 mock.module('#offlineAppStore.js', () => ({
