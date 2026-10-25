@@ -383,20 +383,18 @@ jobs:
           if (!metrics.includes('dkrypt_device_bridge_event_stream_connected{transport="usbmux"} 1')) throw new Error('Rust usbmuxd event stream is not connected');
           const openapi = await (await fetchWithTimeout(`${base}/openapi.json`)).json();
           const publicPaths = Object.keys(openapi.paths ?? {});
-          const expectedPublicPaths = [
-            '/v1/artifacts',
-            '/v1/artifacts/{id}',
-            '/v1/artifacts/{id}/file',
-            '/v1/decrypt',
-            '/v1/decrypts',
-            '/v1/jobs/{id}',
-            '/v1/testflight/decrypt',
-          ];
-          if (
-            JSON.stringify(publicPaths.slice().sort()) !== JSON.stringify(expectedPublicPaths)
-            || !openapi.paths['/v1/decrypts']?.post
-            || !openapi.paths['/v1/artifacts']?.get
-          ) throw new Error('public OpenAPI route inventory differs from the expected contract');
+          const { publicApiOperations } = await import('/app/src/publicApi.ts');
+          const expectedPublicPaths = Object.keys(publicApiOperations).sort();
+          if (JSON.stringify(publicPaths.slice().sort()) !== JSON.stringify(expectedPublicPaths)) {
+            throw new Error(`public OpenAPI route inventory differs from the API-key allowlist: received ${JSON.stringify(publicPaths.slice().sort())}, expected ${JSON.stringify(expectedPublicPaths)}`);
+          }
+          const httpMethods = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
+          for (const [routePath, methods] of Object.entries(publicApiOperations)) {
+            const exposedMethods = Object.keys(openapi.paths[routePath] ?? {}).filter(method => httpMethods.has(method.toLowerCase())).sort();
+            if (JSON.stringify(exposedMethods) !== JSON.stringify([...methods].sort())) {
+              throw new Error(`public OpenAPI methods differ from the API-key allowlist for ${routePath}: received ${JSON.stringify(exposedMethods)}, expected ${JSON.stringify([...methods].sort())}`);
+            }
+          }
           if (publicPaths.some(path => path.startsWith('/v1/dashboard/') || path.startsWith('/v1/auth/') || path.startsWith('/v1/billing'))) {
             throw new Error('private API routes are exposed in public OpenAPI');
           }
