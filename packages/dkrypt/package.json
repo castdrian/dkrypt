@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.3",
-    "@fastify/static": "^10.1.6",
+    "@fastify/static": "^10.1.7",
     "@fastify/swagger": "^9.9.2",
     "@fastify/type-provider-typebox": "^6.3.0",
     "@scalar/fastify-api-reference": "^1.75.1",
@@ -36,7 +36,7 @@
     "discord-api-types": "^0.38.57",
     "fastify": "^5.12.7",
     "node-cron": "^4.6.0",
-    "nodemailer": "^10.1.7",
+    "nodemailer": "^10.2.0",
     "plist": "^5.0.0",
     "safe-regex2": "^5.1.2",
     "ssh2": "^1.17.0",
