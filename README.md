@@ -206,6 +206,10 @@ cargo check --locked
 
 The deployment workflow runs the Bun and Rust checks, builds an immutable GHCR image, starts the bridge with direct USB access, waits for database integrity and health, and rolls back to the previous image if readiness fails. The Rust bridge is cut over immediately after those gates; runtime fallback to the old C toolchain is not part of the production configuration.
 
+The public API includes a [local deterministic sandbox](packages/dkrypt/docs/api/sandbox.md), [Apple Shortcuts setup](packages/dkrypt/docs/api/apple-shortcuts.md), and a [versioning and deprecation policy](packages/dkrypt/docs/api/lifecycle.md). An optional Helm chart is in `deploy/helm/dkrypt`. The CLI can generate Caddy, Nginx, and Traefik proxy examples with `dkrypt proxy-config`.
+
+For a verified move to another Docker host, use the [encrypted host migration guide](docs/self-hosting/host-migration.md).
+
 </details>
 
 ## License

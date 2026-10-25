@@ -8,7 +8,7 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
 
   try {
     const response = await server.inject({ method: 'GET', url: '/openapi.json' });
-    const document = response.json() as { info?: { description?: string }; paths?: Record<string, Record<string, { responses?: Record<string, { headers?: Record<string, { schema?: { const?: string } }> }> }>> };
+    const document = response.json() as { info?: { description?: string; 'x-dkrypt-lifecycle'?: { currentVersion?: string; policy?: { noticePeriodDays?: number } } }; paths?: Record<string, Record<string, { responses?: Record<string, { content?: Record<string, unknown>; headers?: Record<string, { schema?: { const?: string } }> }> }>> };
     expect(response.statusCode).toBe(200);
     expect(Object.keys(document.paths ?? {}).sort()).toEqual([
       '/v1/artifacts',
@@ -18,11 +18,14 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
       '/v1/decrypts',
       '/v1/jobs/status',
       '/v1/jobs/{id}',
+      '/v1/jobs/{id}/events',
       '/v1/jobs/{id}/wait',
       '/v1/testflight/decrypt',
     ]);
     expect(document.info?.description).toContain('decrypt');
+    expect(document.info?.['x-dkrypt-lifecycle']).toMatchObject({ currentVersion: '1', policy: { noticePeriodDays: 180 } });
     expect(document.paths?.['/v1/jobs/{id}']?.get?.responses?.['200']?.headers?.['X-Dkrypt-API-Version']?.schema?.const).toBe('1');
+    expect(document.paths?.['/v1/jobs/{id}/events']?.get?.responses?.['200']?.content?.['text/event-stream']).toBeDefined();
     expect(JSON.stringify(document).toLowerCase()).not.toContain('billing');
     expect(JSON.stringify(document).toLowerCase()).not.toContain('/v1/auth');
     expect(JSON.stringify(document).toLowerCase()).not.toContain('/v1/dashboard');
@@ -33,9 +36,31 @@ test('public OpenAPI contains only decrypt and IPA artifact routes', async () =>
   }
 });
 
+test('API lifecycle policy is public and rate-limit responses include both header formats', async () => {
+  const apiKey = createApiKey(`Rate metadata ${crypto.randomUUID()}`, 'root');
+  const server = await buildTestServer();
+
+  try {
+    const lifecycle = await server.inject({ method: 'GET', url: '/api-lifecycle.json' });
+    expect(lifecycle.statusCode).toBe(200);
+    expect(lifecycle.json()).toMatchObject({ currentVersion: '1', deprecations: [] });
+
+    const response = await server.inject({ method: 'GET', url: '/v1/artifacts', headers: { authorization: `Bearer ${apiKey.key}` } });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-dkrypt-api-version']).toBe('1');
+    expect(response.headers['x-ratelimit-limit']).toBeDefined();
+    expect(response.headers['ratelimit-policy']).toContain('"shared-api"');
+    expect(response.headers.ratelimit).toContain('"shared-api"');
+  } finally {
+    revokeApiKey(apiKey.id, 'root', true);
+    await server.close();
+  }
+});
+
 test('API-key route policy matches concrete job and TestFlight paths only', () => {
   expect(isPublicApiKeyRoute('GET', '/v1/jobs/job-123')).toBe(true);
   expect(isPublicApiKeyRoute('GET', '/v1/jobs/job-123/wait')).toBe(true);
+  expect(isPublicApiKeyRoute('GET', '/v1/jobs/job-123/events')).toBe(true);
   expect(isPublicApiKeyRoute('POST', '/v1/jobs/status')).toBe(true);
   expect(isPublicApiKeyRoute('POST', '/v1/testflight/decrypt')).toBe(true);
   expect(isPublicApiKeyRoute('POST', '/v1/decrypt')).toBe(false);

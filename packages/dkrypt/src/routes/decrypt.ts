@@ -179,6 +179,16 @@ function testFlightLookupFailure(error: unknown, requestId: string) {
   return { error: message, code: 'testflight_lookup_failed', message, requestId, retryable: true };
 }
 
+function jobEventSnapshot(job: NonNullable<ReturnType<typeof getJob>>) {
+  const snapshot = { job: jobSummary(job), events: job.timeline ?? [] };
+  const id = createHash('sha256').update(JSON.stringify(snapshot)).digest('base64url');
+  return { id, snapshot };
+}
+
+function writeJobEvent(response: NodeJS.WritableStream, id: string, snapshot: unknown): void {
+  response.write(`id: ${id}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+}
+
 export function createDecryptRoutes(
   services: DecryptSubmissionServices = { resolveDecryptTarget, enqueueDecryptJob, getJob, waitForJob, getArtifactById, recordApiKeyBundleUsage },
 ): FastifyPluginAsyncTypebox {
@@ -299,6 +309,50 @@ export function createDecryptRoutes(
           }
           throw error;
         }
+      },
+    );
+
+    server.get(
+      '/v1/jobs/:id/events',
+      { schema: getRouteContract('GET', '/v1/jobs/:id/events'), preHandler: fastifyRequireApiKey },
+      async (request, reply) => {
+        const apiKey = getFastifyApiKeyContext(request);
+        const { id } = request.params as { id: string };
+        const query = request.query as { timeoutSeconds?: number };
+        const job = services.getJob(id);
+        if (!job || !isBundleIdAllowed(apiKey?.allowedBundleIds, job.bundleId)) {
+          reply.code(404);
+          return apiErrorEnvelope('job not found (finished jobs are pruned after retention window)', 'request_error', request.id);
+        }
+
+        const timeoutMs = Math.max(1, Math.min(25, query.timeoutSeconds ?? 25)) * 1000;
+        const deadline = Date.now() + timeoutMs;
+        const lastEventId = request.headers['last-event-id'];
+        let latest = jobEventSnapshot(job);
+        let sentId = typeof lastEventId === 'string' && /^[A-Za-z0-9_-]{43}$/.test(lastEventId) ? lastEventId : undefined;
+
+        reply.header('Content-Type', 'text/event-stream; charset=utf-8');
+        reply.header('Cache-Control', 'no-cache, no-transform');
+        reply.header('Connection', 'keep-alive');
+        reply.header('X-Accel-Buffering', 'no');
+        reply.hijack();
+        reply.raw.writeHead(200, reply.getHeaders() as unknown as import('node:http').OutgoingHttpHeaders);
+        reply.raw.write('retry: 2000\n\n');
+
+        while (!reply.raw.destroyed && !reply.raw.writableEnded) {
+          if (latest.id !== sentId) {
+            writeJobEvent(reply.raw, latest.id, latest.snapshot);
+            sentId = latest.id;
+          }
+          if (latest.snapshot.job.status === 'done' || latest.snapshot.job.status === 'failed' || Date.now() >= deadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          const refreshed = services.getJob(id);
+          if (!refreshed) break;
+          latest = jobEventSnapshot(refreshed);
+        }
+
+        if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+        return reply;
       },
     );
 

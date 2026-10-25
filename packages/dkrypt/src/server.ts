@@ -70,11 +70,12 @@ import { incrementMetric, observeMetric } from '#metrics.js';
 import { stopNotificationDigestScheduler } from '#notify.js';
 import { closeDashboardConnections } from '#events.js';
 import { startSpan, startTelemetry, stopTelemetry, traceContextFromHeader, type SpanHandle } from '#telemetry.js';
-import { FixedWindowRateLimiter } from '#util/rateLimit.js';
+import { FixedWindowRateLimiter, setRateLimitHeaders } from '#util/rateLimit.js';
 import { DailyDecryptLimitError } from '#jobs/repository.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { startRustDeviceEventMonitoring } from '#deviceBridgeEvents.js';
 import { createPublicOpenApiDocument, isPublicApiKeyRoute } from '#publicApi.js';
+import { findPublicApiDeprecation, formatSunsetHeader, publicApiLifecycle } from '#publicApiLifecycle.js';
 import { closeIncidentRepository, reconcileOperationalIncidents } from '#store/incidentRepository.js';
 import { closeIntegrationRepository } from '#store/integrationRepository.js';
 import { closeOauthLinkReviewRepository } from '#store/oauthLinkReview.js';
@@ -188,7 +189,15 @@ export async function buildServer(options: {
     const requestId = typeof supplied === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied) ? supplied : randomUUID();
     (request as unknown as { id: string }).id = requestId;
     reply.header('X-Request-ID', requestId);
-    if (isPublicApiKeyRoute(request.method, request.url)) reply.header('X-Dkrypt-API-Version', '1');
+    if (isPublicApiKeyRoute(request.method, request.url)) {
+      reply.header('X-Dkrypt-API-Version', publicApiLifecycle.currentVersion);
+      const deprecation = findPublicApiDeprecation(request.method, request.routeOptions.url ?? request.url);
+      if (deprecation) {
+        reply.header('Deprecation', `@${Math.floor(deprecation.deprecatedAt / 1000)}`);
+        reply.header('Sunset', formatSunsetHeader(deprecation.sunsetAt));
+        reply.header('Link', `<${deprecation.migrationUrl}>; rel="deprecation"`);
+      }
+    }
     const traceparent = typeof request.headers.traceparent === 'string' ? request.headers.traceparent : undefined;
     const trace = startSpan('http.request', { 'http.method': request.method, 'http.request_id': requestId }, traceparent ? traceContextFromHeader(traceparent) : undefined);
     (request as unknown as { traceSpan: SpanHandle }).traceSpan = trace;
@@ -238,9 +247,7 @@ export async function buildServer(options: {
         const credential = request.headers.authorization ?? request.headers.cookie ?? request.ip ?? 'unknown';
         const subject = createHash('sha256').update(credential).digest('hex');
         const decision = sharedApiRateLimiter.consume(subject);
-        reply.header('X-RateLimit-Limit', String(decision.limit));
-        reply.header('X-RateLimit-Remaining', String(decision.remaining));
-        reply.header('X-RateLimit-Reset', String(Math.ceil(decision.resetAt / 1000)));
+        setRateLimitHeaders(reply, decision, 'shared-api', sharedApiRateLimiter.windowMs);
         if (!decision.allowed) {
           reply.header('Retry-After', String(decision.retryAfterSeconds));
           reply.code(429).send({ error: 'too many requests', code: 'rate_limited', message: 'too many requests', requestId, retryable: true });
@@ -310,6 +317,7 @@ export async function buildServer(options: {
   server.get('/openapi.json', (_request, reply) => reply.send(createPublicOpenApiDocument(server.swagger())));
 
   if (options.includePublicRoutes !== false) {
+    server.get('/api-lifecycle.json', (_request, reply) => reply.type('application/json').send(publicApiLifecycle));
     const ogImageVersion = createHash('sha256').update(readFileSync(path.join(publicDir, 'og-image.png'))).digest('hex').slice(0, 10);
     const indexHtml = readFileSync(path.join(publicDir, 'index.html'), 'utf8')
       .replaceAll('__PUBLIC_BASE_URL__', config.publicBaseUrl)

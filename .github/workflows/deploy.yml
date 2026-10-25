@@ -43,6 +43,25 @@ jobs:
           cd web && bun audit --audit-level high
       - name: Run Moon checks
         run: bunx @moonrepo/cli@2.4.6 run dkrypt:check
+      - name: Verify CLI and n8n integrations
+        run: |
+          cd packages/dkrypt-cli
+          npm test
+          cd ../n8n-nodes-dkrypt
+          node --check credentials/DkryptApi.credentials.js
+          node --check nodes/Dkrypt/Dkrypt.node.js
+          npm test
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Validate Helm chart
+        run: |
+          helm lint deploy/helm/dkrypt --set secrets.existingSecret=dkrypt-runtime
+          helm template dkrypt deploy/helm/dkrypt --set secrets.existingSecret=dkrypt-runtime > /tmp/dkrypt-helm-rendered.yaml
+          test -s /tmp/dkrypt-helm-rendered.yaml
+          grep -F 'image: "ghcr.io/castdrian/dkrypt:main"' /tmp/dkrypt-helm-rendered.yaml
+      - name: Validate migration helper
+        run: bash -n scripts/host-migration.sh
       - name: Run isolated service load scenarios
         run: |
           cd packages/dkrypt

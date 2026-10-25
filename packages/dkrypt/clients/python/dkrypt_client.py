@@ -14,6 +14,7 @@ ROUTES = (
     "GET /v1/artifacts/{id}/file",
     "GET /v1/decrypt",
     "GET /v1/jobs/{id}",
+    "GET /v1/jobs/{id}/events",
     "GET /v1/jobs/{id}/wait",
     "POST /v1/decrypts",
     "POST /v1/jobs/status",
@@ -55,12 +56,70 @@ class DkryptClient:
         timeout = max(1, min(25, int(timeout_seconds)))
         return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}/wait?{urlencode({'timeoutSeconds': timeout})}")
 
-    def follow_job(self, job_id: str):
+    def iter_job_events(self, job_id: str):
+        from urllib.parse import quote
+        last_event_id = None
+        reconnect_delay_seconds = 0.25
         while True:
-            job = self.wait_for_job(job_id)
-            yield job
-            if isinstance(job, dict) and job.get("status") in ("done", "failed"):
-                return
+            headers = {"Accept": "text/event-stream"}
+            if last_event_id:
+                headers["Last-Event-ID"] = last_event_id
+            url = self._build_url(f"/v1/jobs/{quote(job_id, safe='')}/events")
+            attempts = max(1, min(5, int(self.retry_attempts)))
+            for attempt in range(attempts):
+                request = Request(url, headers=headers, method="GET")
+                if self.api_key:
+                    request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
+                try:
+                    handler = DkryptRedirectHandler(self._origin(urlsplit(self.base_url)), self.api_key)
+                    with build_opener(handler).open(request, timeout=35) as response:
+                        current = {"event": "message", "id": None, "data": []}
+                        for raw_line in response:
+                            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                            line = line.rstrip("\r\n")
+                            if not line:
+                                if current["event"] == "snapshot" and current["data"]:
+                                    snapshot = json.loads("\n".join(current["data"]))
+                                    if current["id"]:
+                                        last_event_id = current["id"]
+                                    yield snapshot
+                                    job = snapshot.get("job", {}) if isinstance(snapshot, dict) else {}
+                                    if isinstance(job, dict) and job.get("status") in ("done", "failed"):
+                                        return
+                                current = {"event": "message", "id": None, "data": []}
+                                continue
+                            if line.startswith(":"):
+                                continue
+                            field, separator, value = line.partition(":")
+                            if separator and value.startswith(" "):
+                                value = value[1:]
+                            if field == "event":
+                                current["event"] = value
+                            elif field == "id" and "\0" not in value:
+                                current["id"] = value
+                            elif field == "data":
+                                current["data"].append(value)
+                            elif field == "retry" and value.isdecimal():
+                                reconnect_delay_seconds = min(30.0, int(value) / 1000)
+                    break
+                except HTTPError as error:
+                    if attempt + 1 < attempts and error.code in (429, 502, 503, 504):
+                        delay = self._retry_after(error.headers.get("Retry-After"))
+                        error.close()
+                        sleep(self._retry_delay(attempt) if delay is None else delay)
+                        continue
+                    detail = error.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(f"dkrypt request failed with HTTP {error.code}: {detail}") from error
+                except URLError:
+                    if attempt + 1 >= attempts:
+                        break
+                    sleep(self._retry_delay(attempt))
+            sleep(reconnect_delay_seconds)
+
+    def follow_job(self, job_id: str):
+        for snapshot in self.iter_job_events(job_id):
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("job"), dict):
+                yield snapshot["job"]
 
     def list_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> object:
         from urllib.parse import urlencode
@@ -70,6 +129,24 @@ class DkryptClient:
         if cursor:
             params["cursor"] = cursor
         return self.request("GET", f"/v1/artifacts?{urlencode(params)}")
+
+    def iter_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None):
+        seen_cursors = set()
+        while True:
+            page = self.list_artifacts(query, limit, cursor)
+            if not isinstance(page, dict):
+                raise RuntimeError("dkrypt artifact page has an invalid response")
+            yield from page.get("artifacts", [])
+            next_cursor = page.get("nextCursor")
+            if not next_cursor:
+                return
+            if next_cursor in seen_cursors:
+                raise RuntimeError("dkrypt artifact pagination returned a repeated cursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+    def list_all_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> list[object]:
+        return list(self.iter_artifacts(query, limit, cursor))
 
     def download_artifact(self, artifact_id: str) -> bytes:
         from urllib.parse import quote

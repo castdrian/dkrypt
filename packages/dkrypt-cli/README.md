@@ -4,6 +4,8 @@ The CLI uses only the public decrypt, job-status, and IPA-artifact API. It never
 
 Run dkrypt login to save a dkrypt URL and API key in a local configuration file restricted to your account. The key is entered without being echoed. Environment variables override saved settings. Run dkrypt logout to remove the saved sign-in. Use dkrypt completion bash, dkrypt completion zsh, or dkrypt completion fish to print shell completions.
 
+The CLI's `follow` command reconnects to the resumable job event stream. The TypeScript and Python SDKs include artifact pagination helpers. Generate reverse-proxy examples before signing in with `dkrypt proxy-config caddy ipa.example.com`, `dkrypt proxy-config nginx ipa.example.com`, or `dkrypt proxy-config traefik ipa.example.com`. Use `--upstream` when dkrypt listens on a different local origin. The Nginx example assumes TLS certificates at the generated Let's Encrypt paths.
+
 ```sh
 cd packages/dkrypt-cli
 npm install --global .

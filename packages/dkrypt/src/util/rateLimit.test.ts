@@ -39,9 +39,13 @@ test('Fastify rate limiting preserves the default dashboard error envelope', asy
 
   try {
     expect((await server.inject({ method: 'GET', url: '/limited' })).statusCode).toBe(200);
+    const first = await server.inject({ method: 'GET', url: '/limited' });
+    expect(first.headers['ratelimit-policy']).toBe('"request-api";q=1;w=60');
+    expect(first.headers.ratelimit).toBe('"request-api";r=0;t=60');
     const response = await server.inject({ method: 'GET', url: '/limited' });
     expect(response.statusCode).toBe(429);
     expect(response.json()).toMatchObject({ code: 'request_error', retryable: false });
+    expect(response.headers.ratelimit).toBe('"request-api";r=0;t=60');
   } finally {
     await server.close();
   }

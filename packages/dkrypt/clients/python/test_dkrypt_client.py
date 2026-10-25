@@ -19,6 +19,9 @@ class Response:
     def read(self):
         return self.body
 
+    def __iter__(self):
+        return iter(self.body.splitlines(keepends=True))
+
 
 class DkryptClientTests(unittest.TestCase):
     @patch('dkrypt_client.DkryptClient._send')
@@ -34,18 +37,45 @@ class DkryptClientTests(unittest.TestCase):
         self.assertEqual(request[4], {'Idempotency-Key': 'request-1'})
 
     @patch('dkrypt_client.DkryptClient.request')
-    def test_follow_job_uses_long_poll_and_stops_on_terminal_state(self, request):
+    def test_wait_for_job_uses_bounded_long_poll(self, request):
+        request.return_value = {'id': 'job/1', 'status': 'running'}
+        client = DkryptClient('https://ipa.dylib.dev')
+
+        job = client.wait_for_job('job/1')
+
+        self.assertEqual(job['status'], 'running')
+        self.assertEqual(request.call_args_list[0].args, ('GET', '/v1/jobs/job%2F1/wait?timeoutSeconds=25'))
+        self.assertEqual(request.call_count, 1)
+
+    @patch('dkrypt_client.build_opener')
+    def test_follow_job_resumes_the_event_stream_until_terminal_state(self, build_opener):
+        opener = MagicMock()
+        opener.open.side_effect = [
+            Response(b'retry: 0\n\nid: event-1\nevent: snapshot\ndata: {"job":{"id":"job-1","status":"running"},"events":[]}\n\n'),
+            Response(b'retry: 0\n\nid: event-2\nevent: snapshot\ndata: {"job":{"id":"job-1","status":"done"},"events":[]}\n\n'),
+        ]
+        build_opener.return_value = opener
+        client = DkryptClient('https://ipa.dylib.dev', api_key='dk_test_key')
+
+        updates = list(client.follow_job('job-1'))
+
+        self.assertEqual([update['status'] for update in updates], ['running', 'done'])
+        self.assertEqual(opener.open.call_args_list[0].args[0].full_url, 'https://ipa.dylib.dev/v1/jobs/job-1/events')
+        self.assertEqual(opener.open.call_args_list[1].args[0].get_header('Last-event-id'), 'event-1')
+
+    @patch('dkrypt_client.DkryptClient.request')
+    def test_list_all_artifacts_follows_cursors_and_rejects_repeated_cursors(self, request):
         request.side_effect = [
-            {'id': 'job/1', 'status': 'running'},
-            {'id': 'job/1', 'status': 'done'},
+            {'artifacts': [{'id': 'artifact-1'}], 'nextCursor': 'next'},
+            {'artifacts': [{'id': 'artifact-2'}]},
         ]
         client = DkryptClient('https://ipa.dylib.dev')
 
-        updates = list(client.follow_job('job/1'))
+        artifacts = client.list_all_artifacts(query='example', limit=20)
 
-        self.assertEqual([update['status'] for update in updates], ['running', 'done'])
-        self.assertEqual(request.call_args_list[0].args, ('GET', '/v1/jobs/job%2F1/wait?timeoutSeconds=25'))
-        self.assertEqual(request.call_count, 2)
+        self.assertEqual([artifact['id'] for artifact in artifacts], ['artifact-1', 'artifact-2'])
+        self.assertEqual(request.call_args_list[0].args, ('GET', '/v1/artifacts?limit=20&q=example'))
+        self.assertEqual(request.call_args_list[1].args, ('GET', '/v1/artifacts?limit=20&q=example&cursor=next'))
 
     @patch('dkrypt_client.build_opener')
     def test_download_returns_binary_bytes_with_api_key(self, build_opener):

@@ -12,18 +12,41 @@ const [command, ...args] = process.argv.slice(2);
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login\ndkrypt logout\ndkrypt completion <bash|zsh|fish>\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login\ndkrypt logout\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
 if (command === 'completion') {
   const completions = {
-    bash: 'complete -W "login logout completion decrypt status wait follow artifacts download" dkrypt\n',
-    zsh: '_dkrypt() { _arguments "1:command:(login logout completion decrypt status wait follow artifacts download)"; }\ncompdef _dkrypt dkrypt\n',
-    fish: 'complete -c dkrypt -f -a "login logout completion decrypt status wait follow artifacts download"\n',
+    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout completion proxy-config decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
+    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout completion proxy-config decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
+    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout completion proxy-config decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
   };
   if (!args[0] || !(args[0] in completions)) throw new Error('Choose bash, zsh, or fish');
   process.stdout.write(completions[args[0]]);
+  process.exit(0);
+}
+
+if (command === 'proxy-config') {
+  const format = args[0];
+  const domain = args[1]?.toLowerCase();
+  const upstreamInput = optionValue('--upstream') ?? 'http://127.0.0.1:8080';
+  if (!['caddy', 'nginx', 'traefik'].includes(format)) throw new Error('Choose caddy, nginx, or traefik');
+  if (!domain || domain.length > 253 || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(domain)) throw new Error('Provide a fully qualified domain name');
+  let upstream;
+  try {
+    upstream = new URL(upstreamInput);
+  } catch {
+    throw new Error('Provide a valid upstream URL');
+  }
+  if (!['http:', 'https:'].includes(upstream.protocol) || upstream.username || upstream.password || upstream.pathname !== '/' || upstream.search || upstream.hash) throw new Error('Upstream must be an HTTP(S) origin without credentials or a path');
+  const target = upstream.origin;
+  const configs = {
+    caddy: `${domain} {\n  reverse_proxy ${target}\n}\n`,
+    nginx: `server {\n    listen 443 ssl http2;\n    server_name ${domain};\n    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;\n\n    location / {\n        proxy_pass ${target};\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_buffering off;\n        proxy_read_timeout 3600s;\n    }\n}\n`,
+    traefik: `http:\n  routers:\n    dkrypt:\n      rule: Host(\`${domain}\`)\n      entryPoints:\n        - websecure\n      service: dkrypt\n      tls: {}\n  services:\n    dkrypt:\n      loadBalancer:\n        servers:\n          - url: ${JSON.stringify(target)}\n        responseForwarding:\n          flushInterval: -1\n`,
+  };
+  process.stdout.write(configs[format]);
   process.exit(0);
 }
 
@@ -160,6 +183,78 @@ async function printJson(response) {
   process.stdout.write(`${JSON.stringify(await response.json(), null, 2)}\n`);
 }
 
+async function followJob(jobId) {
+  let lastEventId;
+  let lastSignature;
+  let reconnectDelayMs = 250;
+  const startedAt = Date.now();
+  while (true) {
+    const headers = { Accept: 'text/event-stream', ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}) };
+    const response = await send(`/v1/jobs/${encodeURIComponent(jobId)}/events?timeoutSeconds=25`, { headers });
+    if (!response.body) throw new Error('dkrypt job event stream has no response body');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let disconnected = false;
+    try {
+      while (true) {
+        let chunk;
+        try {
+          chunk = await reader.read();
+        } catch {
+          disconnected = true;
+          break;
+        }
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done }).replace(/\r\n/g, '\n');
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const parsed = parseEventBlock(buffer.slice(0, boundary));
+          buffer = buffer.slice(boundary + 2);
+          if (parsed?.retryMs !== undefined) reconnectDelayMs = parsed.retryMs;
+          if (parsed?.event === 'snapshot' && parsed.data) {
+            const snapshot = JSON.parse(parsed.data);
+            const job = snapshot?.job;
+            if (parsed.id) lastEventId = parsed.id;
+            if (job && typeof job.status === 'string') {
+              const signature = `${job.status}:${job.progress ?? ''}`;
+              if (signature !== lastSignature) {
+                const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+                process.stderr.write(`[${elapsed}s] Job ${jobId}: ${job.status}${job.progress ? ` · ${job.progress}` : ''}\n`);
+                lastSignature = signature;
+              }
+              if (job.status === 'done' || job.status === 'failed') return job;
+            }
+          }
+          boundary = buffer.indexOf('\n\n');
+        }
+        if (chunk.done) break;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (disconnected) process.stderr.write(`Job ${jobId}: event stream disconnected; reconnecting\n`);
+    await wait(reconnectDelayMs);
+  }
+}
+
+function parseEventBlock(block) {
+  const data = [];
+  let id;
+  let event;
+  let retryMs;
+  for (const line of block.split('\n')) {
+    if (!line || line.startsWith(':')) continue;
+    const separator = line.indexOf(':');
+    const field = separator < 0 ? line : line.slice(0, separator);
+    const value = separator < 0 ? '' : line.slice(separator + 1).replace(/^ /, '');
+    if (field === 'id' && !value.includes('\0')) id = value;
+    if (field === 'event') event = value;
+    if (field === 'data') data.push(value);
+    if (field === 'retry' && /^\d+$/.test(value)) retryMs = Math.min(30_000, Number(value));
+  }
+  return data.length || retryMs !== undefined ? { id, event, data: data.length ? data.join('\n') : undefined, retryMs } : undefined;
+}
+
 function optionValue(name) {
   const index = args.indexOf(name);
   return index < 0 ? undefined : args[index + 1];
@@ -181,26 +276,12 @@ if (command === 'decrypt') {
 } else if (command === 'status') {
   if (!args[0]) throw new Error('Provide a job ID');
   await printJson(await send(`/v1/jobs/${encodeURIComponent(args[0])}`));
-} else if (command === 'wait' || command === 'follow') {
+} else if (command === 'wait') {
   if (!args[0]) throw new Error('Provide a job ID');
-  let response;
-  const followStartedAt = Date.now();
-  let lastFollowSignature;
-  do {
-    response = await send(`/v1/jobs/${encodeURIComponent(args[0])}/wait?timeoutSeconds=25`);
-    if (response.status === 202 && command === 'follow') {
-      const job = await response.json().catch(() => undefined);
-      const state = typeof job?.status === 'string' ? job.status : 'still running';
-      const progress = typeof job?.progress === 'string' ? job.progress : '';
-      const signature = state + ':' + progress;
-      if (signature !== lastFollowSignature) {
-        const elapsed = Math.floor((Date.now() - followStartedAt) / 1000);
-        process.stderr.write('[' + elapsed + 's] Job ' + args[0] + ': ' + state + (progress ? ' · ' + progress : '') + '\n');
-        lastFollowSignature = signature;
-      }
-    }
-  } while (response.status === 202);
-  await printJson(response);
+  await printJson(await send(`/v1/jobs/${encodeURIComponent(args[0])}/wait?timeoutSeconds=25`));
+} else if (command === 'follow') {
+  if (!args[0]) throw new Error('Provide a job ID');
+  process.stdout.write(`${JSON.stringify(await followJob(args[0]), null, 2)}\n`);
 } else if (command === 'artifacts') {
   const limitText = optionValue('--limit') ?? '100';
   if (!/^\d+$/.test(limitText) || Number(limitText) < 1 || Number(limitText) > 100) throw new Error('--limit must be between 1 and 100');

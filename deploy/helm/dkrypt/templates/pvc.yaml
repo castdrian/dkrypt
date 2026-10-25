@@ -1,0 +1,20 @@
+{{- range $name, $config := dict "state" .Values.persistence.state "artifacts" .Values.persistence.artifacts "device-ssh" .Values.persistence.deviceSsh }}
+{{- if and (not $config.existingClaim) (ne $name "") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "dkrypt.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "dkrypt.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if $config.storageClass }}
+  storageClassName: {{ $config.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $config.size }}
+---
+{{- end }}
+{{- end }}

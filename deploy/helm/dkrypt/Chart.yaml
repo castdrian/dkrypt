@@ -1,0 +1,9 @@
+apiVersion: v2
+name: dkrypt
+description: Self-hosted App Store and TestFlight decryption service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/castdrian/dkrypt
+sources:
+  - https://github.com/castdrian/dkrypt

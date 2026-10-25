@@ -47,17 +47,20 @@ test('TypeScript client downloads IPA files with API-key authentication', async 
   expect(receivedHeaders?.get('Accept')).toBe('application/octet-stream');
 });
 
-test('TypeScript convenience helpers submit idempotent decrypts and follow a job through completion', async () => {
+test('TypeScript convenience helpers submit idempotent decrypts and resume a job event stream', async () => {
   const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
-  let waitCount = 0;
+  let eventCount = 0;
   const fetchImpl = (async (input: unknown, init: RequestInit | undefined) => {
     const url = String(input);
     const headers = new Headers(init?.headers);
     const body = typeof init?.body === 'string' ? init.body : undefined;
     requests.push({ url, headers, body });
     if (url.endsWith('/v1/decrypts')) return new Response(JSON.stringify({ id: 'job/1', status: 'queued' }), { status: 202 });
-    waitCount += 1;
-    return new Response(JSON.stringify({ id: 'job/1', status: waitCount === 1 ? 'running' : 'done' }), { status: 200 });
+    eventCount += 1;
+    const status = eventCount === 1 ? 'running' : 'done';
+    const eventId = `snapshot-${eventCount}`;
+    const snapshot = { job: { id: 'job/1', status, progress: status }, events: [] };
+    return new Response(`retry: 0\n\nid: ${eventId}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
   }) as unknown as typeof fetch;
   const client = new DkryptClient('https://ipa.dylib.dev', { apiKey: 'dk_test_key', fetchImpl });
 
@@ -69,7 +72,33 @@ test('TypeScript convenience helpers submit idempotent decrypts and follow a job
   expect(updates).toEqual(['running', 'done']);
   expect(requests[0]).toMatchObject({ url: 'https://ipa.dylib.dev/v1/decrypts', body: JSON.stringify({ bundleId: 'com.example.app' }) });
   expect(requests[0]?.headers.get('Idempotency-Key')).toBe('request-1');
-  expect(requests[1]?.url).toBe('https://ipa.dylib.dev/v1/jobs/job%2F1/wait?timeoutSeconds=25');
+  expect(requests[1]?.url).toBe('https://ipa.dylib.dev/v1/jobs/job%2F1/events');
+  expect(requests[2]?.headers.get('Last-Event-ID')).toBe('snapshot-1');
+});
+
+test('TypeScript client follows every artifact page and rejects cursor loops', async () => {
+  const requests: string[] = [];
+  const fetchImpl = (async (input: unknown) => {
+    const url = String(input);
+    requests.push(url);
+    const page = url.includes('cursor=next')
+      ? { artifacts: [{ id: 'artifact-2', bundleId: 'com.example.two' }] }
+      : { artifacts: [{ id: 'artifact-1', bundleId: 'com.example.one' }], nextCursor: 'next' };
+    return new Response(JSON.stringify(page), { status: 200 });
+  }) as unknown as typeof fetch;
+  const client = new DkryptClient('https://ipa.dylib.dev', { fetchImpl });
+
+  await expect(client.listAllArtifacts({ q: 'example', limit: 20 })).resolves.toMatchObject([
+    { id: 'artifact-1' },
+    { id: 'artifact-2' },
+  ]);
+  expect(requests).toEqual([
+    'https://ipa.dylib.dev/v1/artifacts?q=example&limit=20',
+    'https://ipa.dylib.dev/v1/artifacts?q=example&limit=20&cursor=next',
+  ]);
+
+  const loopingClient = new DkryptClient('https://ipa.dylib.dev', { fetchImpl: (async () => new Response(JSON.stringify({ artifacts: [], nextCursor: 'repeat' }), { status: 200 })) as unknown as typeof fetch });
+  await expect(loopingClient.listAllArtifacts()).rejects.toThrow('repeated cursor');
 });
 
 test('TypeScript client never sends an API key to a different origin', async () => {

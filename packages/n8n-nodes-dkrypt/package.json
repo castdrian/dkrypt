@@ -1,0 +1,15 @@
+{
+  "name": "n8n-nodes-dkrypt",
+  "version": "0.1.0",
+  "description": "n8n node for the dkrypt decrypt and IPA library API",
+  "license": "GPL-3.0-only",
+  "keywords": ["n8n-community-node-package"],
+  "engines": { "node": ">=20.15" },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": ["credentials/DkryptApi.credentials.js"],
+    "nodes": ["nodes/Dkrypt/Dkrypt.node.js"]
+  },
+  "scripts": { "test": "node --test" },
+  "files": ["credentials", "nodes", "README.md", "LICENSE"]
+}

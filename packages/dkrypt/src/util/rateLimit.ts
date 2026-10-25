@@ -14,6 +14,27 @@ export interface RateLimitDecision {
   retryAfterSeconds: number;
 }
 
+export function setRateLimitHeaders(
+  reply: FastifyReply,
+  decision: RateLimitDecision,
+  policyId: 'shared-api' | 'account-api' | 'request-api',
+  windowMs: number,
+  now = Date.now(),
+): void {
+  reply.header('X-RateLimit-Limit', String(decision.limit));
+  reply.header('X-RateLimit-Remaining', String(decision.remaining));
+  reply.header('X-RateLimit-Reset', String(Math.ceil(decision.resetAt / 1000)));
+  const policy = `${JSON.stringify(policyId)};q=${decision.limit};w=${Math.max(1, Math.ceil(windowMs / 1000))}`;
+  const rate = `${JSON.stringify(policyId)};r=${decision.remaining};t=${Math.max(0, Math.ceil((decision.resetAt - now) / 1000))}`;
+  reply.header('RateLimit-Policy', appendHeaderValue(reply.getHeader('RateLimit-Policy'), policy));
+  reply.header('RateLimit', appendHeaderValue(reply.getHeader('RateLimit'), rate));
+}
+
+function appendHeaderValue(existing: number | string | string[] | undefined, value: string): string {
+  if (existing === undefined) return value;
+  return `${Array.isArray(existing) ? existing.join(', ') : String(existing)}, ${value}`;
+}
+
 export class FixedWindowRateLimiter {
   private readonly buckets = new Map<string, Bucket>();
 
@@ -108,9 +129,7 @@ export function fastifyRateLimitPerUser(
 ) {
   return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
     const decision = limiter.consume(getKey(request));
-    reply.header('X-RateLimit-Limit', String(decision.limit));
-    reply.header('X-RateLimit-Remaining', String(decision.remaining));
-    reply.header('X-RateLimit-Reset', String(Math.ceil(decision.resetAt / 1000)));
+    setRateLimitHeaders(reply, decision, 'request-api', limiter.windowMs);
     if (!decision.allowed) {
       reply.header('Retry-After', String(decision.retryAfterSeconds));
       const message = `too many requests - try again in ${decision.retryAfterSeconds}s`;
@@ -130,6 +149,9 @@ export function rateLimitPerUser(
     res.setHeader('X-RateLimit-Limit', String(maxRequests));
     res.setHeader('X-RateLimit-Remaining', String(Math.max(0, remaining)));
     res.setHeader('X-RateLimit-Reset', String(Math.ceil((windowStartedAt + windowMs) / 1000)));
+    const rate = `"request-api";r=${Math.max(0, remaining)};t=${Math.max(0, Math.ceil((windowStartedAt + windowMs - Date.now()) / 1000))}`;
+    res.setHeader('RateLimit-Policy', `"request-api";q=${maxRequests};w=${Math.max(1, Math.ceil(windowMs / 1000))}`);
+    res.setHeader('RateLimit', rate);
   }
 
   return (req: Request, res: Response, next: NextFunction): void => {

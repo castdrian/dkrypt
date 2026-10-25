@@ -1,3 +1,5 @@
+import { publicApiLifecycle } from '#publicApiLifecycle.js';
+
 type PublicApiDocument = {
   openapi?: unknown;
   info?: Record<string, unknown>;
@@ -12,6 +14,7 @@ export const publicApiOperations = {
   '/v1/decrypt': ['get'],
   '/v1/decrypts': ['post'],
   '/v1/jobs/{id}': ['get'],
+  '/v1/jobs/{id}/events': ['get'],
   '/v1/jobs/{id}/wait': ['get'],
   '/v1/jobs/status': ['post'],
   '/v1/testflight/decrypt': ['post'],
@@ -44,10 +47,13 @@ export function createPublicOpenApiDocument(value: unknown): PublicApiDocument {
       !isHttpMethod(key) || allowedMethods.has(key.toLowerCase()),
     ));
     if (Object.keys(selected).length > 0) {
-      paths[path] = Object.fromEntries(Object.entries(selected).map(([key, value]) => [
-        key,
-        isHttpMethod(key) ? withApiCompatibilityHeader(value) : value,
-      ]));
+      paths[path] = Object.fromEntries(Object.entries(selected).map(([key, value]) => {
+        if (!isHttpMethod(key)) return [key, value];
+        const compatible = withApiCompatibilityHeader(value);
+        return [key, path === '/v1/jobs/{id}/events' && key.toLowerCase() === 'get'
+          ? withJobEventStreamResponse(compatible)
+          : compatible];
+      }));
     }
   }
 
@@ -68,7 +74,8 @@ export function createPublicOpenApiDocument(value: unknown): PublicApiDocument {
     info: {
       ...document.info,
       title: 'dkrypt Public API',
-      description: 'Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. All responses include X-Dkrypt-API-Version: 1. Additive response fields are compatible within v1; breaking changes use documented deprecation and sunset dates.',
+      description: 'Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. Responses include X-Dkrypt-API-Version and rate-limit metadata. Breaking changes receive a new compatibility version and advance notice.',
+      'x-dkrypt-lifecycle': publicApiLifecycle,
     },
     servers: document.servers,
     paths,
@@ -101,13 +108,56 @@ function withApiCompatibilityHeader(value: unknown): unknown {
         ...record,
         headers: {
           ...headers,
+          RateLimit: {
+            description: 'Available quota and effective window using the current IETF RateLimit header field format.',
+            schema: { type: 'string' },
+          },
+          'RateLimit-Policy': {
+            description: 'Configured request quota policy using the current IETF RateLimit header field format.',
+            schema: { type: 'string' },
+          },
           'X-Dkrypt-API-Version': {
             description: 'Public API compatibility version for this response.',
             schema: { type: 'string', const: '1' },
           },
+          Deprecation: {
+            description: 'Present only when the operation has been deprecated.',
+            schema: { type: 'string' },
+          },
+          Sunset: {
+            description: 'Present only when the operation has a scheduled retirement date.',
+            schema: { type: 'string', format: 'http-date' },
+          },
+          Link: {
+            description: 'When an operation is deprecated, links to its migration guidance.',
+            schema: { type: 'string' },
+          },
         },
       }];
     })),
+  };
+}
+
+function withJobEventStreamResponse(value: unknown): unknown {
+  const operation = asRecord(value);
+  const responses = asRecord(operation.responses);
+  const response = asRecord(responses['200']);
+  return {
+    ...operation,
+    responses: {
+      ...responses,
+      '200': {
+        ...response,
+        description: 'A reconnectable stream of job snapshots and persisted timeline events.',
+        content: { 'text/event-stream': { schema: { type: 'string' } } },
+        headers: {
+          ...asRecord(response.headers),
+          'X-Dkrypt-API-Version': { description: 'Public API compatibility version for this response.', schema: { type: 'string', const: '1' } },
+          RateLimit: { description: 'Available quota and effective window.', schema: { type: 'string' } },
+          'RateLimit-Policy': { description: 'Configured request quota policy.', schema: { type: 'string' } },
+        },
+      },
+    },
   };
 }
 

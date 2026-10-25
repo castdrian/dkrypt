@@ -1303,6 +1303,7 @@ register('GET', '/v1/jobs/:id/wait', {
   querystring: ApiJobWaitQuery,
   response: { 200: JobSummaryResponse, 202: JobSummaryResponse, 404: ErrorEnvelope },
 });
+register('GET', '/v1/jobs/:id/events', { params: object({ id: Identifier }), querystring: ApiJobWaitQuery, response: { 404: ErrorEnvelope } });
 register('POST', '/v1/jobs/status', {
   body: ApiJobStatusBatchBody,
   response: { 200: ApiJobStatusBatchResponse, 400: ErrorEnvelope, 401: ErrorEnvelope },

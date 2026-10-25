@@ -5,7 +5,7 @@ import { hasPermission, PermissionFlag } from '#permissions.js';
 import { isPublicApiKeyRoute } from '#publicApi.js';
 import { authenticateGithubOidc } from '#githubOidc.js';
 import { getBillingEntitlements } from '#billing.js';
-import { SlidingWindowRateLimiter } from '#util/rateLimit.js';
+import { setRateLimitHeaders, SlidingWindowRateLimiter } from '#util/rateLimit.js';
 
 const fastifyApiKeyContext = new WeakMap<FastifyRequest, ApiKeyAuthResult>();
 const fastifyApiKeyRequestStartedAt = new WeakMap<FastifyRequest, number>();
@@ -15,9 +15,7 @@ function permitAccountApiRequest(ownerId: string, request: FastifyRequest, reply
   const limit = getBillingEntitlements(ownerId).apiRatePerMinute;
   if (limit === undefined) return true;
   const decision = accountApiRateLimiter.consume(ownerId.toLowerCase(), limit);
-  reply.header('X-RateLimit-Limit', String(decision.limit));
-  reply.header('X-RateLimit-Remaining', String(decision.remaining));
-  reply.header('X-RateLimit-Reset', String(Math.ceil(decision.resetAt / 1000)));
+  setRateLimitHeaders(reply, decision, 'account-api', accountApiRateLimiter.windowMs);
   if (decision.allowed) return true;
   reply.header('Retry-After', String(decision.retryAfterSeconds));
   reply.code(429).send({ error: 'account API rate limit exceeded', code: 'api_rate_limited', message: 'account API rate limit exceeded', requestId: request.id, retryable: true });

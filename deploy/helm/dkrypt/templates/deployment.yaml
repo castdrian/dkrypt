@@ -1,0 +1,143 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "dkrypt requires exactly one replica because its SQLite database and worker are single-instance" }}
+{{- end }}
+{{- if not .Values.secrets.existingSecret }}
+{{- fail "secrets.existingSecret must reference a Kubernetes Secret containing the dkrypt environment settings" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dkrypt.fullname" . }}
+  labels:
+    {{- include "dkrypt.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dkrypt.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "dkrypt.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dkrypt
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: {{ .Values.usbAccess.enabled }}
+            allowPrivilegeEscalation: {{ .Values.usbAccess.enabled }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+          env:
+            - name: PORT
+              value: "8080"
+            - name: BIND_HOST
+              value: 0.0.0.0
+            - name: STATE_DIR
+              value: /data/state
+            - name: ARTIFACT_DIR
+              value: /data/artifacts
+            - name: OUTPUT_DIR
+              value: /data/tmp
+            - name: DEVICE_BRIDGE_SOCKET
+              value: /run/dkrypt/device-bridge.sock
+            - name: DEVICE_MUX_SOCKET
+              value: /run/dkrypt/usbmuxd.sock
+            - name: DEVICE_PAIRING_STORE
+              value: /data/state/device-pairing
+            - name: DEVICE_SSH_KEY_DIR
+              value: /data/device-ssh
+            - name: DEVICE_SSH_KEY_PATH
+              value: /data/device-ssh/id_ed25519
+            - name: DEVICE_SSH_PUBLIC_KEY_PATH
+              value: /data/device-ssh/id_ed25519.pub
+          startupProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /data/state
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: device-ssh
+              mountPath: /data/device-ssh
+            - name: runtime
+              mountPath: /run/dkrypt
+            - name: temporary
+              mountPath: /data/tmp
+            {{- if .Values.usbAccess.enabled }}
+            - name: usb
+              mountPath: /dev/bus/usb
+            {{- end }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.state.existingClaim | default (printf "%s-state" (include "dkrypt.fullname" .)) }}
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.artifacts.existingClaim | default (printf "%s-artifacts" (include "dkrypt.fullname" .)) }}
+        - name: device-ssh
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.deviceSsh.existingClaim | default (printf "%s-device-ssh" (include "dkrypt.fullname" .)) }}
+        - name: runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: temporary
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.usbAccess.enabled }}
+        - name: usb
+          hostPath:
+            path: {{ .Values.usbAccess.hostPath | quote }}
+            type: Directory
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -63,8 +63,21 @@ export interface DkryptDecryptOptions {
 }
 
 export interface DkryptArtifactPage {
-  artifacts: Array<{ id: string; bundleId: string; versionLabel?: string; fileSizeBytes?: number }>;
+  artifacts: DkryptArtifact[];
   nextCursor?: string;
+}
+
+export interface DkryptArtifact {
+  id: string;
+  bundleId: string;
+  versionLabel?: string;
+  fileSizeBytes?: number;
+  [key: string]: unknown;
+}
+
+export interface DkryptJobEventSnapshot {
+  job: DkryptJob;
+  events: Array<{ at: number; label: string; status: DkryptJob['status']; durationMs?: number }>;
 }
 
 export class DkryptClient {
@@ -128,12 +141,66 @@ export class DkryptClient {
     return this.request<DkryptJob>({ path: \`/v1/jobs/\${encodeURIComponent(id)}/wait?timeoutSeconds=\${timeout}\`, signal });
   }
 
-  async *followJob(id: string, signal?: AbortSignal): AsyncGenerator<DkryptJob> {
+  async *streamJobEvents(id: string, signal?: AbortSignal): AsyncGenerator<DkryptJobEventSnapshot> {
+    let lastEventId: string | undefined;
+    let reconnectDelayMs = 250;
     while (!signal?.aborted) {
-      const job = await this.waitForJob(id, 25, signal);
-      yield job;
-      if (job.status === 'done' || job.status === 'failed') return;
+      const headers = this.createHeaders(undefined, 'text/event-stream');
+      if (lastEventId) headers.set('Last-Event-ID', lastEventId);
+      let response: Response;
+      try {
+        response = await this.fetchWithRetry(this.buildUrl(\`/v1/jobs/\${encodeURIComponent(id)}/events\`), {
+          method: 'GET',
+          headers,
+          signal,
+        }, true);
+      } catch (error) {
+        if (signal?.aborted || isAbortError(error)) return;
+        await abortableDelay(reconnectDelayMs, signal ?? undefined);
+        continue;
+      }
+      if (!response.ok) throw new Error(await this.responseError(response));
+      if (!response.body) throw new Error('dkrypt job event stream has no response body');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!signal?.aborted) {
+          let chunk: Awaited<ReturnType<typeof reader.read>>;
+          try {
+            chunk = await reader.read();
+          } catch {
+            if (signal?.aborted) return;
+            break;
+          }
+          buffer += decoder.decode(chunk.value, { stream: !chunk.done }).replace(/\\r\\n/g, '\\n');
+          let separator = buffer.indexOf('\\n\\n');
+          while (separator >= 0) {
+            const block = buffer.slice(0, separator);
+            buffer = buffer.slice(separator + 2);
+            const parsed = parseSseBlock(block);
+            if (parsed?.retryMs !== undefined) reconnectDelayMs = parsed.retryMs;
+            if (parsed?.event === 'snapshot' && parsed.data) {
+              const snapshot = JSON.parse(parsed.data) as DkryptJobEventSnapshot;
+              if (parsed.id) lastEventId = parsed.id;
+              yield snapshot;
+              if (snapshot.job.status === 'done' || snapshot.job.status === 'failed') return;
+            }
+            separator = buffer.indexOf('\\n\\n');
+          }
+          if (chunk.done) break;
+        }
+      } finally {
+        if (signal?.aborted) await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      if (signal?.aborted) return;
+      await abortableDelay(reconnectDelayMs, signal ?? undefined);
     }
+  }
+
+  async *followJob(id: string, signal?: AbortSignal): AsyncGenerator<DkryptJob> {
+    for await (const update of this.streamJobEvents(id, signal)) yield update.job;
   }
 
   listArtifacts(options: { q?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<DkryptArtifactPage> {
@@ -142,6 +209,25 @@ export class DkryptClient {
     params.set('limit', String(Math.max(1, Math.min(100, Math.floor(options.limit ?? 100)))));
     if (options.cursor) params.set('cursor', options.cursor);
     return this.request<DkryptArtifactPage>({ path: \`/v1/artifacts?\${params}\`, signal: options.signal });
+  }
+
+  async *iterateArtifacts(options: { q?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): AsyncGenerator<DkryptArtifact> {
+    let cursor = options.cursor;
+    const seenCursors = new Set<string>();
+    while (true) {
+      const page = await this.listArtifacts({ ...options, cursor });
+      yield* page.artifacts;
+      if (!page.nextCursor) return;
+      if (seenCursors.has(page.nextCursor)) throw new Error('dkrypt artifact pagination returned a repeated cursor');
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+  }
+
+  async listAllArtifacts(options: { q?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<DkryptArtifact[]> {
+    const artifacts: DkryptArtifact[] = [];
+    for await (const artifact of this.iterateArtifacts(options)) artifacts.push(artifact);
+    return artifacts;
   }
 
   downloadArtifact(id: string, signal?: AbortSignal): Promise<ArrayBuffer> {
@@ -205,6 +291,24 @@ export class DkryptClient {
 
 function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'name' in error && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function parseSseBlock(block: string): { id?: string; event?: string; data?: string; retryMs?: number } | undefined {
+  let id: string | undefined;
+  let event: string | undefined;
+  let retryMs: number | undefined;
+  const data: string[] = [];
+  for (const line of block.split('\\n')) {
+    if (!line || line.startsWith(':')) continue;
+    const separator = line.indexOf(':');
+    const field = separator < 0 ? line : line.slice(0, separator);
+    const value = separator < 0 ? '' : line.slice(separator + 1).replace(/^ /, '');
+    if (field === 'id' && !value.includes('\\0')) id = value;
+    if (field === 'event') event = value;
+    if (field === 'data') data.push(value);
+    if (field === 'retry' && /^\\d+$/.test(value)) retryMs = Math.min(30_000, Number(value));
+  }
+  return data.length > 0 || retryMs !== undefined ? { id, event, data: data.length ? data.join('\\n') : undefined, retryMs } : undefined;
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -284,12 +388,70 @@ class DkryptClient:
         timeout = max(1, min(25, int(timeout_seconds)))
         return self.request("GET", f"/v1/jobs/{quote(job_id, safe='')}/wait?{urlencode({'timeoutSeconds': timeout})}")
 
-    def follow_job(self, job_id: str):
+    def iter_job_events(self, job_id: str):
+        from urllib.parse import quote
+        last_event_id = None
+        reconnect_delay_seconds = 0.25
         while True:
-            job = self.wait_for_job(job_id)
-            yield job
-            if isinstance(job, dict) and job.get("status") in ("done", "failed"):
-                return
+            headers = {"Accept": "text/event-stream"}
+            if last_event_id:
+                headers["Last-Event-ID"] = last_event_id
+            url = self._build_url(f"/v1/jobs/{quote(job_id, safe='')}/events")
+            attempts = max(1, min(5, int(self.retry_attempts)))
+            for attempt in range(attempts):
+                request = Request(url, headers=headers, method="GET")
+                if self.api_key:
+                    request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
+                try:
+                    handler = DkryptRedirectHandler(self._origin(urlsplit(self.base_url)), self.api_key)
+                    with build_opener(handler).open(request, timeout=35) as response:
+                        current = {"event": "message", "id": None, "data": []}
+                        for raw_line in response:
+                            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                            line = line.rstrip("\\r\\n")
+                            if not line:
+                                if current["event"] == "snapshot" and current["data"]:
+                                    snapshot = json.loads("\\n".join(current["data"]))
+                                    if current["id"]:
+                                        last_event_id = current["id"]
+                                    yield snapshot
+                                    job = snapshot.get("job", {}) if isinstance(snapshot, dict) else {}
+                                    if isinstance(job, dict) and job.get("status") in ("done", "failed"):
+                                        return
+                                current = {"event": "message", "id": None, "data": []}
+                                continue
+                            if line.startswith(":"):
+                                continue
+                            field, separator, value = line.partition(":")
+                            if separator and value.startswith(" "):
+                                value = value[1:]
+                            if field == "event":
+                                current["event"] = value
+                            elif field == "id" and "\\0" not in value:
+                                current["id"] = value
+                            elif field == "data":
+                                current["data"].append(value)
+                            elif field == "retry" and value.isdecimal():
+                                reconnect_delay_seconds = min(30.0, int(value) / 1000)
+                    break
+                except HTTPError as error:
+                    if attempt + 1 < attempts and error.code in (429, 502, 503, 504):
+                        delay = self._retry_after(error.headers.get("Retry-After"))
+                        error.close()
+                        sleep(self._retry_delay(attempt) if delay is None else delay)
+                        continue
+                    detail = error.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(f"dkrypt request failed with HTTP {error.code}: {detail}") from error
+                except URLError:
+                    if attempt + 1 >= attempts:
+                        break
+                    sleep(self._retry_delay(attempt))
+            sleep(reconnect_delay_seconds)
+
+    def follow_job(self, job_id: str):
+        for snapshot in self.iter_job_events(job_id):
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("job"), dict):
+                yield snapshot["job"]
 
     def list_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> object:
         from urllib.parse import urlencode
@@ -299,6 +461,24 @@ class DkryptClient:
         if cursor:
             params["cursor"] = cursor
         return self.request("GET", f"/v1/artifacts?{urlencode(params)}")
+
+    def iter_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None):
+        seen_cursors = set()
+        while True:
+            page = self.list_artifacts(query, limit, cursor)
+            if not isinstance(page, dict):
+                raise RuntimeError("dkrypt artifact page has an invalid response")
+            yield from page.get("artifacts", [])
+            next_cursor = page.get("nextCursor")
+            if not next_cursor:
+                return
+            if next_cursor in seen_cursors:
+                raise RuntimeError("dkrypt artifact pagination returned a repeated cursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+    def list_all_artifacts(self, query: str | None = None, limit: int = 100, cursor: str | None = None) -> list[object]:
+        return list(self.iter_artifacts(query, limit, cursor))
 
     def download_artifact(self, artifact_id: str) -> bytes:
         from urllib.parse import quote

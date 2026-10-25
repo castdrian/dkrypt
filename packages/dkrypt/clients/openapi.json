@@ -3,7 +3,27 @@
   "info": {
     "title": "dkrypt Public API",
     "version": "1.0.0",
-    "description": "Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. All responses include X-Dkrypt-API-Version: 1. Additive response fields are compatible within v1; breaking changes use documented deprecation and sunset dates."
+    "description": "Use API keys to submit decrypt jobs, inspect job status, and access IPA artifacts. Responses include X-Dkrypt-API-Version and rate-limit metadata. Breaking changes receive a new compatibility version and advance notice.",
+    "x-dkrypt-lifecycle": {
+      "currentVersion": "1",
+      "policy": {
+        "compatibility": "Additive changes remain within the current version; breaking changes receive a new compatibility version.",
+        "noticePeriodDays": 180,
+        "noticeHeaders": [
+          "Deprecation",
+          "Sunset",
+          "Link"
+        ]
+      },
+      "versions": [
+        {
+          "id": "1",
+          "status": "current",
+          "documentation": "/reference"
+        }
+      ],
+      "deprecations": []
+    }
   },
   "servers": [
     {
@@ -74,11 +94,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -471,11 +522,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -520,11 +602,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -569,11 +682,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -618,11 +762,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -667,11 +842,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1101,11 +1307,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1150,11 +1387,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1199,11 +1467,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1633,11 +1932,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1682,11 +2012,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2101,11 +2462,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2150,11 +2542,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2199,11 +2622,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2248,11 +2702,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2297,11 +2782,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2346,11 +2862,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2395,11 +2942,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2444,11 +3022,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2493,11 +3102,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3028,11 +3668,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3512,11 +4183,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3561,11 +4263,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3610,11 +4343,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3659,11 +4423,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3708,11 +4503,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3757,11 +4583,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3806,11 +4663,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3855,11 +4743,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3904,11 +4823,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3953,11 +4903,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4002,11 +4983,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4508,11 +5520,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4557,11 +5600,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4606,11 +5680,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4655,11 +5760,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4704,11 +5840,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4753,11 +5920,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4802,11 +6000,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4851,11 +6080,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4900,11 +6160,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4949,11 +6240,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5147,11 +6469,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5196,11 +6549,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5245,11 +6629,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5294,11 +6709,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5343,11 +6789,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5392,11 +6869,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5441,11 +6949,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5490,11 +7029,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5539,11 +7109,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5658,11 +7259,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5707,11 +7339,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5756,11 +7419,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5805,11 +7499,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5854,11 +7579,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5903,11 +7659,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5952,11 +7739,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6001,11 +7819,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6050,11 +7899,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6092,11 +7972,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6141,11 +8052,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6190,11 +8132,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6239,11 +8212,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6288,11 +8292,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6337,11 +8372,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6386,11 +8452,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6435,11 +8532,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6484,11 +8612,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6961,11 +9120,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7010,11 +9200,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7059,11 +9280,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7108,11 +9360,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7157,11 +9440,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7206,11 +9520,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7255,11 +9600,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7304,11 +9680,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7353,11 +9760,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -7782,11 +10220,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8179,11 +10648,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8228,11 +10728,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8277,11 +10808,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8326,11 +10888,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8375,11 +10968,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8424,11 +11048,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8473,11 +11128,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8522,11 +11208,42 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -8571,11 +11288,745 @@
               }
             },
             "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Dkrypt-API-Version": {
                 "description": "Public API compatibility version for this response.",
                 "schema": {
                   "type": "string",
                   "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/events": {
+      "get": {
+        "summary": "GET /v1/jobs/:id/events",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "minimum": 1,
+              "maximum": 25,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "timeoutSeconds",
+            "required": false
+          },
+          {
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A reconnectable stream of job snapshots and persisted timeline events.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "headers": {
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "RateLimit": {
+                "description": "Available quota and effective window.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code",
+                    "message",
+                    "requestId",
+                    "retryable"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "type": "boolean"
+                    },
+                    "remediation": {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "RateLimit": {
+                "description": "Available quota and effective window using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "RateLimit-Policy": {
+                "description": "Configured request quota policy using the current IETF RateLimit header field format.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Dkrypt-API-Version": {
+                "description": "Public API compatibility version for this response.",
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Deprecation": {
+                "description": "Present only when the operation has been deprecated.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "Present only when the operation has a scheduled retirement date.",
+                "schema": {
+                  "type": "string",
+                  "format": "http-date"
+                }
+              },
+              "Link": {
+                "description": "When an operation is deprecated, links to its migration guidance.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
