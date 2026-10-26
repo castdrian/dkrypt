@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import { Archive, ArchiveRestore, Download, Grid2X2, List, Pin, PinOff, RefreshCw, ScanSearch, X } from 'lucide-svelte';
+  import { Archive, ArchiveRestore, Download, Grid2X2, List, ListChecks, Pin, PinOff, RefreshCw, ScanSearch, X } from 'lucide-svelte';
   import AppIcon from '#components/AppIcon.svelte';
   import EmptyState from '#components/EmptyState.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
@@ -523,9 +523,9 @@
           </div>
           <div class="flex shrink-0 items-center gap-1">
             <input bind:this={analysisFileInput} class="sr-only" type="file" accept=".ipa,application/octet-stream" aria-label="Choose IPA to analyze" onchange={analyzeSelectedFile} />
-            <Button variant="secondary" size="sm" disabled={analysisUploadLoading} onclick={() => analysisFileInput?.click()}><ScanSearch class="h-3.5 w-3.5" />Analyze IPA</Button>
+            <Button variant="secondary" size="icon" class="h-8 w-8 sm:h-8 sm:w-auto sm:px-3" aria-label="Analyze IPA" title="Analyze IPA" disabled={analysisUploadLoading} onclick={() => analysisFileInput?.click()}><ScanSearch class="h-3.5 w-3.5" /><span class="sr-only sm:not-sr-only">Analyze IPA</span></Button>
             {#if artifacts.length > 0}
-              <Button variant={selectingArtifacts ? 'secondary' : 'ghost'} size="sm" aria-pressed={selectingArtifacts} onclick={toggleArtifactSelectionMode}>{selectingArtifacts ? 'Done selecting' : 'Select items'}</Button>
+              <Button variant={selectingArtifacts ? 'secondary' : 'ghost'} size="icon" class="h-8 w-8 sm:h-8 sm:w-auto sm:px-3" aria-label={selectingArtifacts ? 'Done selecting' : 'Select items'} title={selectingArtifacts ? 'Done selecting' : 'Select items'} aria-pressed={selectingArtifacts} onclick={toggleArtifactSelectionMode}><ListChecks class="h-3.5 w-3.5" /><span class="sr-only sm:not-sr-only">{selectingArtifacts ? 'Done selecting' : 'Select items'}</span></Button>
             {/if}
             <div class="inline-flex rounded-md border border-border/70 p-0.5" role="group" aria-label={viewMessage('viewMode.label')}>
               <Button variant={homeViewModesState.value.artifacts === 'list' ? 'secondary' : 'ghost'} size="icon" class="h-7 w-7" aria-label={viewMessage('viewMode.list')} aria-pressed={homeViewModesState.value.artifacts === 'list'} onclick={() => void pushHomeViewMode('artifacts', 'list')}><List class="h-3.5 w-3.5" /></Button>
