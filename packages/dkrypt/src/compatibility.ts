@@ -1,4 +1,5 @@
 import { getDeploymentMetadata } from '#deployment.js';
+import { getCachedDeviceHealth } from '#deviceHealthCache.js';
 import { getRustDeviceBridgeStatus } from '#idevice.js';
 import { getDeviceHealth } from '#deviceHealth.js';
 import { getEffectiveDevices, getStateDatabaseStatus } from '#store/state.js';
@@ -35,7 +36,14 @@ export async function getAutoinstallCompatibilityRows(
   devices: Array<{ id: string; name: string }>,
   healthProvider: typeof getDeviceHealth = getDeviceHealth,
 ): Promise<CompatibilityRow[]> {
-  const health = await Promise.all(devices.map((device) => healthProvider(device.id, true, AbortSignal.timeout(10000)).catch(() => undefined)));
+  const health = await Promise.all(devices.map(async (device) => {
+    let latest: Awaited<ReturnType<typeof healthProvider>> | undefined;
+    try {
+      latest = await healthProvider(device.id, false, AbortSignal.timeout(10000));
+    } catch {}
+    if (latest?.bridgeHeartbeats?.springboard?.bridgeVersion) return latest;
+    return getCachedDeviceHealth(device.id)?.value ?? latest;
+  }));
   return devices.map((device, index) => {
     const version = health[index]?.bridgeHeartbeats?.springboard?.bridgeVersion;
     return {
