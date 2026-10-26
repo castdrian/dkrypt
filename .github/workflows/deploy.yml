@@ -106,7 +106,7 @@ jobs:
       - name: Install Chromium for browser checks
         run: |
           cd packages/dkrypt/web
-          bunx playwright install --with-deps chromium
+          timeout 240s bunx playwright install chromium
       - name: Run browser checks
         run: |
           cd packages/dkrypt/web
