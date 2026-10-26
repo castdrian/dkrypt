@@ -806,9 +806,10 @@ export class DkryptClient {
     const baseUrl = new URL(this.baseUrl);
     const url = new URL(path, baseUrl);
     const allowsHttp = ['localhost', '127.0.0.1', '[::1]'].includes(baseUrl.hostname.toLowerCase());
-    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== baseUrl.origin || (url.protocol === 'http:' && !allowsHttp)) {
+    if (!['http:', 'https:'].includes(baseUrl.protocol) || !['http:', 'https:'].includes(url.protocol) || ((baseUrl.protocol === 'http:' || url.protocol === 'http:') && !allowsHttp)) {
       throw new Error('Use an HTTPS dkrypt URL; HTTP is allowed only for localhost');
     }
+    if (url.origin !== baseUrl.origin) throw new Error('dkrypt requests must use the configured origin');
     return url;
   }
 

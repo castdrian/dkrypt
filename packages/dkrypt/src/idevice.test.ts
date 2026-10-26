@@ -409,6 +409,12 @@ test('uses SSH exec channels for device file reads and quoted writes', async () 
   expect(commands[3]).toContain('printf');
   expect(commands[3]).toMatch(/expiresAtMs=\d+/);
   expect(commands[3]).toContain('Inspect');
+  expect(commands[3]).toContain('/tmp/autoinstall-autoconfirm.flag');
+  expect(commands[3]).toContain('mkdir -p');
+  expect(commands[3]).toContain('com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag');
+  expect(commands[3]).toContain('com.apple.CoreAuthUI/autoinstall-autoconfirm.flag');
+  expect(commands[3]).toContain('com.apple.AccountAuthenticationDialog/autoinstall-autoconfirm.flag');
+  expect(commands[3]).toContain('|| true');
   expect(writes).toEqual([]);
 });
 

@@ -132,6 +132,8 @@ static void autoinstallLog(NSString *line) {
         ];
         for (NSString *path in paths) {
             @try {
+                NSString *directory = [path stringByDeletingLastPathComponent];
+                [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
                 if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
                     [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
                 }
@@ -153,6 +155,8 @@ static NSString * const kPaymentAuthorizationGuardLockPath = @"/tmp/autoinstall-
 static NSString * const kBridgeSecretPath = @"/var/mobile/Library/Preferences/dev.adrian.autoinstall-bridge.secret";
 
 static void writeJSONFile(NSString *path, id obj) {
+    NSString *directory = [path stringByDeletingLastPathComponent];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
     NSError *err = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:obj options:NSJSONWritingPrettyPrinted error:&err];
     if (!data) {
@@ -621,48 +625,10 @@ static void unlockDeviceIfLocked(void) {
             Class lsmCls = objc_getClass("SBLockScreenManager");
             if (lsmCls && [lsmCls respondsToSelector:sel_registerName("sharedInstance")]) {
                 id lsm = ((id (*)(id, SEL))objc_msgSend)(lsmCls, sel_registerName("sharedInstance"));
-                BOOL isLocked = YES;
-                if ([lsm respondsToSelector:sel_registerName("isUILocked")]) {
-                    isLocked = ((BOOL (*)(id, SEL))objc_msgSend)(lsm, sel_registerName("isUILocked"));
-                }
-                autoinstallLog([NSString stringWithFormat:@"unlockDeviceIfLocked: lsm=%@ isLocked=%d", lsm, isLocked]);
-
-                // 1. unlockUIFromSource:withOptions: with source=1 (Home), 12 (Biometric), 0
                 SEL unlockSel = sel_registerName("unlockUIFromSource:withOptions:");
-                if ([lsm respondsToSelector:unlockSel]) {
-                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 1, nil);
-                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 12, nil);
+                if (lsm && [lsm respondsToSelector:unlockSel]) {
                     ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 0, nil);
-                    autoinstallLog(@"called unlockUIFromSource:withOptions:");
-                }
-
-                // 2. _finishUIUnlockFromSource:withOptions:
-                SEL finishSel = sel_registerName("_finishUIUnlockFromSource:withOptions:");
-                if ([lsm respondsToSelector:finishSel]) {
-                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, finishSel, 12, nil);
-                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, finishSel, 1, nil);
-                    autoinstallLog(@"called _finishUIUnlockFromSource:withOptions:");
-                }
-
-                // 3. coverSheetViewController dismissal
-                SEL csSel = sel_registerName("coverSheetViewController");
-                if ([lsm respondsToSelector:csSel]) {
-                    id cs = ((id (*)(id, SEL))objc_msgSend)(lsm, csSel);
-                    if (cs) {
-                        if ([cs respondsToSelector:sel_registerName("dismissModalContentIfPossible")]) {
-                            ((void (*)(id, SEL))objc_msgSend)(cs, sel_registerName("dismissModalContentIfPossible"));
-                        }
-                    }
-                }
-
-                // 4. SBMainWorkspace home button handling
-                Class wsCls = objc_getClass("SBMainWorkspace");
-                if (wsCls && [wsCls respondsToSelector:sel_registerName("sharedInstance")]) {
-                    id ws = ((id (*)(id, SEL))objc_msgSend)(wsCls, sel_registerName("sharedInstance"));
-                    if ([ws respondsToSelector:sel_registerName("handleHomeButtonSinglePress")]) {
-                        ((void (*)(id, SEL))objc_msgSend)(ws, sel_registerName("handleHomeButtonSinglePress"));
-                        autoinstallLog(@"called handleHomeButtonSinglePress on SBMainWorkspace");
-                    }
+                    autoinstallLog(@"unlocked UI via SBLockScreenManager");
                 }
             }
         } @catch (NSException *e) {
@@ -1949,7 +1915,7 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
     for (id root in roots) {
         autoinstallWalkAX(root, ^(id el) {
             if (paymentAuthorizationPromptPending || actionAttempted) return;
-            if (!gIsPassbookProcess && autoinstallPaymentAuthorizationPromptPendingLocked()) {
+            if (autoinstallPaymentAuthorizationPromptPendingLocked()) {
                 paymentAuthorizationPromptPending = YES;
                 return;
             }
@@ -2052,7 +2018,7 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
             }
             if (invoked) {
                 actionAttempted = YES;
-                if (!gIsPassbookProcess && autoinstallPaymentAuthorizationPromptPendingLocked()) {
+                if (autoinstallPaymentAuthorizationPromptPendingLocked()) {
                     rec[@"stoppedForPaymentAuthorization"] = @YES;
                     paymentAuthorizationPromptPending = YES;
                 }
@@ -2065,15 +2031,12 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
 }
 
 static NSArray *autoinstallConfirmMatching(NSString *match) {
-    if (!gIsPassbookProcess) {
-        if (autoinstallPaymentAuthorizationPromptVisible()) return @[];
-        __block NSArray *acted = @[];
-        if (!autoinstallRunWithPaymentAuthorizationGuard(^{
-            acted = autoinstallConfirmMatchingUnlocked(match);
-        })) return @[];
-        return acted;
-    }
-    return autoinstallConfirmMatchingUnlocked(match);
+    if (autoinstallPaymentAuthorizationPromptVisible()) return @[];
+    __block NSArray *acted = @[];
+    if (!autoinstallRunWithPaymentAuthorizationGuard(^{
+        acted = autoinstallConfirmMatchingUnlocked(match);
+    })) return @[];
+    return acted;
 }
 
 static NSArray *autoinstallInviteRoots(void) {

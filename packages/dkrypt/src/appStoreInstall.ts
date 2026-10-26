@@ -19,7 +19,7 @@ import { scopedLogger } from '#logger.js';
 import { lookupAppMetadataByTrackId, lookupCurrentVersion, type ItunesLookupResult } from '#appStoreMetadata.js';
 import { getPrimaryDevice, type DeviceRecord } from '#store/state.js';
 import { BRIDGE_CAPABILITIES, hasBridgeCapabilities } from '#bridgeProtocol.js';
-import { normalizeVersion } from '#util/version.js';
+import { compareVersions, normalizeVersion } from '#util/version.js';
 import { delayWithSignal, throwIfAborted } from '#util/abort.js';
 
 const log = scopedLogger('appstore');

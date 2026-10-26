@@ -1529,9 +1529,14 @@ export async function isAppStoreRunning(conn: DeviceClient): Promise<boolean> {
 
 export async function armAppStoreAutoConfirm(conn: DeviceClient, label = 'Install'): Promise<void> {
   const content = `expiresAtMs=${Date.now() + AUTOCONFIRM_TTL_MS}\n${label}`;
-  for (const path of AUTOCONFIRM_FLAG_PATHS) {
-    await writeRemoteFile(conn, path, content);
-  }
+  const [primaryPath, ...optionalPaths] = AUTOCONFIRM_FLAG_PATHS;
+  const optionalWrites = optionalPaths.map((path) => {
+    const directory = path.slice(0, path.lastIndexOf('/'));
+    return '(mkdir -p ' + shellQuote(directory) + ' && printf %s ' + shellQuote(content) + ' > ' + shellQuote(path) + ') >/dev/null 2>&1 || true';
+  });
+  const command = ['printf %s ' + shellQuote(content) + ' > ' + shellQuote(primaryPath) + ' || exit 1', ...optionalWrites].join('; ');
+  const { code, stderr } = await execCommand(conn, command);
+  if (code !== 0) throw new Error('could not arm App Store auto-confirm: ' + (stderr.trim() || 'exit code ' + (code ?? 'unknown')));
 }
 
 export async function clearAppStoreAutoConfirm(conn: DeviceClient): Promise<void> {
