@@ -1,5 +1,5 @@
 name: dkrypt decrypt
-description: Submit a dkrypt App Store decrypt, wait for completion, and download the IPA
+description: Decrypt an App Store or TestFlight release, or download a cached IPA, then verify its integrity
 inputs:
   api-url:
     description: HTTPS base URL for dkrypt
@@ -9,25 +9,78 @@ inputs:
     description: dkrypt API key with decrypt and artifact access
     required: true
   bundle-id:
-    description: App bundle identifier
-    required: true
+    description: App bundle identifier for a new decrypt
+    required: false
+  channel:
+    description: Decrypt source channel
+    required: false
+    default: appstore
   version:
-    description: Optional exact App Store version
+    description: Optional exact App Store version or TestFlight version_build selector; leave empty for the latest release on the selected channel
+    required: false
+  artifact-id:
+    description: Download and verify an existing artifact by its ID instead of submitting a decrypt
+    required: false
+  latest-cached-channel:
+    description: Download the newest cached artifact from appstore or testflight instead of submitting a decrypt
     required: false
   output:
     description: Destination IPA path
     required: false
   timeout-seconds:
-    description: Maximum time to wait for the job
+    description: Maximum total time to submit and wait for a decrypt job
     required: false
     default: '1800'
+  download-timeout-seconds:
+    description: Maximum total time for all IPA download attempts
+    required: false
+    default: '600'
 outputs:
   job-id:
-    description: Created or reused dkrypt job ID
+    description: Created or reused dkrypt job ID; empty when downloading an existing artifact
     value: ${{ steps.dkrypt.outputs.job-id }}
   artifact-id:
-    description: Decrypted IPA artifact ID
+    description: Downloaded IPA artifact ID
     value: ${{ steps.dkrypt.outputs.artifact-id }}
+  version:
+    description: Resolved release version, including the TestFlight build number when applicable
+    value: ${{ steps.dkrypt.outputs.version }}
+  resolved-version:
+    description: Resolved release version, including the TestFlight build number when applicable
+    value: ${{ steps.dkrypt.outputs.resolved-version }}
+  build:
+    description: TestFlight build number when applicable
+    value: ${{ steps.dkrypt.outputs.build }}
+  channel:
+    description: Resolved artifact channel
+    value: ${{ steps.dkrypt.outputs.channel }}
+  is_testflight:
+    description: Whether the resolved artifact is a TestFlight build
+    value: ${{ steps.dkrypt.outputs.is_testflight }}
+  is-testflight:
+    description: Whether the resolved artifact is a TestFlight build
+    value: ${{ steps.dkrypt.outputs.is-testflight }}
+  cache_hit:
+    description: Whether dkrypt reused a cached artifact or the action downloaded an existing artifact
+    value: ${{ steps.dkrypt.outputs.cache_hit }}
+  cache-hit:
+    description: Whether dkrypt reused a cached artifact or the action downloaded an existing artifact
+    value: ${{ steps.dkrypt.outputs.cache-hit }}
+  sha256:
+    description: SHA-256 verified against dkrypt metadata
+    value: ${{ steps.dkrypt.outputs.sha256 }}
+  size_bytes:
+    description: Downloaded byte count verified against dkrypt metadata
+    value: ${{ steps.dkrypt.outputs.size_bytes }}
+  size-bytes:
+    description: Downloaded byte count verified against dkrypt metadata
+    value: ${{ steps.dkrypt.outputs.size-bytes }}
+  path:
+    description: Absolute path to the verified IPA
+    value: ${{ steps.dkrypt.outputs.path }}
+  output:
+    description: Absolute path to the verified IPA
+    value: ${{ steps.dkrypt.outputs.output }}
 runs:
   using: composite
   steps:
@@ -37,7 +90,11 @@ runs:
         DKRYPT_API_URL: ${{ inputs.api-url }}
         DKRYPT_API_KEY: ${{ inputs.api-key }}
         DKRYPT_BUNDLE_ID: ${{ inputs.bundle-id }}
+        DKRYPT_CHANNEL: ${{ inputs.channel }}
         DKRYPT_VERSION: ${{ inputs.version }}
+        DKRYPT_ARTIFACT_ID: ${{ inputs.artifact-id }}
+        DKRYPT_LATEST_CACHED_CHANNEL: ${{ inputs.latest-cached-channel }}
         DKRYPT_OUTPUT: ${{ inputs.output }}
         DKRYPT_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        DKRYPT_DOWNLOAD_TIMEOUT_SECONDS: ${{ inputs.download-timeout-seconds }}
       run: node "$GITHUB_ACTION_PATH/action.mjs"
