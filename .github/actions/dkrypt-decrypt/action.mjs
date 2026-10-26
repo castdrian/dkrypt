@@ -52,8 +52,9 @@ function summaryCell(value) {
 function workflowSummaryRow(result) {
   const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
   const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
+  const cache = result.cacheHit === true ? 'Hit' : result.cacheHit === false ? 'Miss' : 'Unknown';
   const outcome = result.error ?? (result.resolveOnly ? 'Resolved only' : result.status === 'failure' ? 'Failed' : 'Downloaded');
-  return `| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(outcome)} |`;
+  return `| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${cache} | ${ipaPath} | ${size} | ${summaryCell(outcome)} |`;
 }
 
 async function appendWorkflowSummary(summaryFile, result) {
@@ -278,8 +279,7 @@ export async function runAction(config, dependencies = {}) {
     await appendWorkflowSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, {
       bundleId: config.bundleId?.trim() || (config.artifactId ? `artifact ${config.artifactId}` : config.latestCachedChannel ? `latest cached ${config.latestCachedChannel}` : 'dkrypt operation'),
       version: config.version?.trim() ?? '',
-      channel: config.channel ?? config.latestCachedChannel ?? 'appstore',
-      cacheHit: false,
+      channel: config.latestCachedChannel ?? (config.artifactId ? 'existing artifact' : config.channel ?? 'appstore'),
       status: 'failure',
       error: message,
     });

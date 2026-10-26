@@ -130,6 +130,38 @@ test('adds failed single-app submissions to the workflow summary', async () => {
   }
 });
 
+test('keeps cached artifact channel and unknown cache status in failed download summaries', async () => {
+  const directory = await temporaryDirectory();
+  const summaryPath = path.join(directory, 'summary');
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/v1/artifacts') return apiResponse({ artifacts: [{
+      id: 'cached-testflight',
+      bundleId: 'com.example.testflight',
+      channel: 'testflight',
+      versionLabel: '352.0_118977',
+      buildNumber: '118977',
+      sizeBytes: bytes.length,
+      sha256,
+      fileUrl: '/v1/artifacts/cached-testflight/file',
+    }] });
+    if (url.pathname === '/v1/artifacts/cached-testflight/file') return apiResponse({ message: 'download unavailable' }, 503);
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  try {
+    await assert.rejects(runAction(actionConfig(directory, {
+      latestCachedChannel: 'testflight',
+      githubSummary: summaryPath,
+    }), { fetchImpl, maxAttempts: 1, sleep: async () => {}, log: () => {} }), /HTTP 503/);
+    const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /\| testflight \| Unknown \|/);
+    assert.doesNotMatch(summary, /\| appstore \| Miss \|/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('resolves a release without creating a job or downloading an IPA', async () => {
   const directory = await temporaryDirectory();
   const calls = [];
