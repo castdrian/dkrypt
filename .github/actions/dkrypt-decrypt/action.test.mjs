@@ -252,6 +252,7 @@ test('rejects and removes an artifact whose SHA-256 does not match', async () =>
 test('applies one overall deadline across stalled download retries', async () => {
   const directory = await temporaryDirectory();
   const output = path.join(directory, 'timed-out.ipa');
+  const keepEventLoopAlive = setTimeout(() => {}, 1_000);
 
   try {
     await assert.rejects(downloadVerifiedArtifact({
@@ -270,6 +271,7 @@ test('applies one overall deadline across stalled download retries', async () =>
     assert.equal((await readdir(directory)).some((entry) => entry.includes('.partial')), false);
     await assert.rejects(readFile(output));
   } finally {
+    clearTimeout(keepEventLoopAlive);
     await rm(directory, { recursive: true, force: true });
   }
 });
