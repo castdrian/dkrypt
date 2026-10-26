@@ -3,7 +3,7 @@
   import Dialog from '#lib/components/ui/Dialog.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import Select from '#lib/components/ui/Select.svelte';
-  import { fetchDiagnosticReports, previewDiagnosticReport, submitDiagnosticReport, type DiagnosticReport, type DiagnosticReportCategory, type DiagnosticReportPreview } from '#lib/api';
+  import { fetchDiagnosticReports, previewDiagnosticReport, replyToDiagnosticReport, submitDiagnosticReport, type DiagnosticReport, type DiagnosticReportCategory, type DiagnosticReportPreview } from '#lib/api';
   import { sessionState } from '#lib/session.svelte';
   import { clearFormDraft, readFormDraft, setFormUnsaved, writeFormDraft } from '#lib/formDrafts.svelte';
   import { fmtDateTime } from '#lib/format.svelte';
@@ -23,6 +23,9 @@
   let loading = $state(false);
   let submitting = $state(false);
   let consent = $state(false);
+  let selectedReportId = $state<string | null>(null);
+  let replyText = $state('');
+  let sendingReply = $state(false);
   let lastLoadedDraftKey = '';
   const formId = 'diagnostic-report';
   const draftKey = $derived(sessionState.sub ? `${formId}:${sessionState.sub}` : '');
@@ -33,6 +36,7 @@
     { value: 'other', label: 'Other' },
   ];
   const hasDraft = $derived(Boolean(summary.trim() || details.trim()));
+  const selectedReport = $derived(reports?.find((report) => report.id === selectedReportId));
 
   $effect(() => {
     if (!open || !draftKey || draftKey === lastLoadedDraftKey) return;
@@ -58,6 +62,7 @@
   async function loadReports(): Promise<void> {
     try {
       reports = (await fetchDiagnosticReports()).reports;
+      if (!selectedReportId && reports.length > 0) selectedReportId = reports[0]!.id;
     } catch {
       reports = [];
     }
@@ -91,6 +96,7 @@
     try {
       const report = await submitDiagnosticReport(preview);
       reports = [report, ...(reports ?? [])].slice(0, 50);
+      selectedReportId = report.id;
       summary = '';
       details = '';
       preview = null;
@@ -102,6 +108,20 @@
       showToast(error instanceof Error ? error.message : 'Could not submit the report.', 'error');
     } finally {
       submitting = false;
+    }
+  }
+
+  async function sendReply(): Promise<void> {
+    if (!selectedReport || !replyText.trim()) return;
+    sendingReply = true;
+    try {
+      const updated = await replyToDiagnosticReport(selectedReport.id, replyText);
+      reports = (reports ?? []).map((report) => report.id === updated.id ? updated : report);
+      replyText = '';
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not send your reply.', 'error');
+    } finally {
+      sendingReply = false;
     }
   }
 
@@ -151,12 +171,16 @@
 
     {#if reports?.length}
       <section class="border-t border-border pt-3">
-        <h3 class="text-xs font-semibold">Your recent reports</h3>
-        <ul class="mt-2 grid gap-2">
-          {#each reports.slice(0, 5) as report (report.id)}
-            <li class="flex items-center justify-between gap-3 text-xs"><span class="min-w-0 truncate">{report.summary}</span><span class="flex shrink-0 items-center gap-1.5 text-muted"><Check class="size-3 text-ok" />Received · {fmtDateTime(report.createdAt)}</span></li>
-          {/each}
-        </ul>
+        <h3 class="text-xs font-semibold">Your support conversations</h3>
+        <div class="mt-2 grid gap-3">
+          <div class="flex gap-2 overflow-x-auto pb-1">{#each reports.slice(0, 20) as report (report.id)}<button type="button" class="max-w-56 shrink-0 rounded-lg border px-3 py-2 text-left text-xs {selectedReportId === report.id ? 'border-accent bg-accent/5' : 'border-border/70'}" aria-pressed={selectedReportId === report.id} onclick={() => (selectedReportId = report.id)}><span class="block truncate font-medium">{report.summary}</span><span class="mt-1 block text-muted"><Check class="mr-1 inline size-3 text-ok" />{report.messages?.length ? `${report.messages.length} replies` : 'Received'} · {fmtDateTime(report.createdAt)}</span></button>{/each}</div>
+          {#if selectedReport}
+            <article class="rounded-xl border border-border/70 bg-panel/30 p-3">
+              <div class="grid gap-2"><div class="max-w-[90%] rounded-xl border border-border/70 bg-bg/50 p-3"><div class="mb-1 text-[10px] font-medium text-muted">Your report · {fmtDateTime(selectedReport.createdAt)}</div><p class="text-xs font-medium">{selectedReport.summary}</p><pre class="mt-1 whitespace-pre-wrap break-words text-xs text-muted">{selectedReport.details}</pre></div>{#each selectedReport.messages ?? [] as message (message.id)}<div class="max-w-[90%] rounded-xl border border-accent/20 bg-accent/5 p-3 {message.authorRole === 'reporter' ? 'ml-auto' : ''}"><div class="mb-1 text-[10px] font-medium text-muted">{message.authorDisplayName} · {fmtDateTime(message.createdAt)}</div><p class="whitespace-pre-wrap break-words text-xs">{message.body}</p></div>{/each}</div>
+              <form class="mt-3 border-t border-border/70 pt-3" onsubmit={(event) => { event.preventDefault(); void sendReply(); }}><label class="grid gap-1.5 text-xs font-medium">Reply to support<textarea class="min-h-20 rounded-lg border border-border bg-bg px-3 py-2 text-sm" bind:value={replyText} maxlength="5000" placeholder="Add details or reply to support"></textarea></label><div class="mt-2 flex items-center justify-between gap-2"><span class="text-[10px] text-muted">Contact details and credential-like values are redacted.</span><Button size="sm" loading={sendingReply} disabled={!replyText.trim()}>Send reply</Button></div></form>
+            </article>
+          {/if}
+        </div>
       </section>
     {/if}
   </div>

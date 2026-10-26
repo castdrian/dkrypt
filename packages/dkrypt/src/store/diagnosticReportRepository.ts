@@ -2,6 +2,13 @@ import type { Database } from 'bun:sqlite';
 
 export type DiagnosticReportStatus = 'received';
 
+export interface DiagnosticReportMessage {
+  id: string;
+  authorId: string;
+  body: string;
+  createdAt: number;
+}
+
 export interface DiagnosticReportRecord {
   id: string;
   userId: string;
@@ -12,12 +19,15 @@ export interface DiagnosticReportRecord {
   createdAt: number;
   expiresAt: number;
   status: DiagnosticReportStatus;
+  messages?: DiagnosticReportMessage[];
 }
 
 export interface DiagnosticReportRepository {
   create(report: DiagnosticReportRecord): void;
   listByUser(userId: string, limit: number): DiagnosticReportRecord[];
   listRecent(limit: number): DiagnosticReportRecord[];
+  findById(id: string): DiagnosticReportRecord | undefined;
+  appendMessage(id: string, message: DiagnosticReportMessage, updatedAt: number): DiagnosticReportRecord | undefined;
   pruneExpired(now: number): number;
   close(): void;
 }
@@ -29,7 +39,17 @@ export function createDiagnosticReportRepository(database: Database): Diagnostic
   `);
   const byUser = database.query('SELECT payload FROM diagnostic_reports WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?');
   const recent = database.query('SELECT payload FROM diagnostic_reports ORDER BY created_at DESC, id DESC LIMIT ?');
+  const byId = database.query('SELECT payload FROM diagnostic_reports WHERE id = ?');
+  const update = database.query('UPDATE diagnostic_reports SET payload = ?, updated_at = ? WHERE id = ?');
   const removeExpired = database.query('DELETE FROM diagnostic_reports WHERE expires_at <= ?');
+  const append = database.transaction((id: string, message: DiagnosticReportMessage, updatedAt: number) => {
+    const row = byId.get(id) as { payload: string } | null;
+    if (!row) return undefined;
+    const report = JSON.parse(row.payload) as DiagnosticReportRecord;
+    report.messages = [...(report.messages ?? []), message].slice(-200);
+    update.run(JSON.stringify(report), updatedAt, id);
+    return report;
+  });
 
   return {
     create(report) {
@@ -40,6 +60,13 @@ export function createDiagnosticReportRepository(database: Database): Diagnostic
     },
     listRecent(limit) {
       return (recent.all(Math.max(0, Math.floor(limit))) as Array<{ payload: string }>).map((row) => JSON.parse(row.payload) as DiagnosticReportRecord);
+    },
+    findById(id) {
+      const row = byId.get(id) as { payload: string } | null;
+      return row ? JSON.parse(row.payload) as DiagnosticReportRecord : undefined;
+    },
+    appendMessage(id, message, updatedAt) {
+      return append(id, message, updatedAt) as DiagnosticReportRecord | undefined;
     },
     pruneExpired(now) {
       return removeExpired.run(now).changes;

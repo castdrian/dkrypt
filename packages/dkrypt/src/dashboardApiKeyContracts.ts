@@ -54,6 +54,20 @@ export const dashboardApiKeyOutcomeResponseSchema = Type.Object({
   })),
 }, { additionalProperties: true });
 
+export const dashboardApiKeyRequestsQuerySchema = Type.Object({
+  limit: Type.Optional(Type.String()),
+}, { additionalProperties: true });
+
+export const dashboardApiKeyRequestsResponseSchema = Type.Object({
+  requests: Type.Array(Type.Object({
+    at: Type.Number(),
+    method: Type.String(),
+    route: Type.String(),
+    status: Type.Integer({ minimum: 100, maximum: 599 }),
+    durationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  }, { additionalProperties: false })),
+}, { additionalProperties: false });
+
 export const dashboardApiKeySecretResponseSchema = Type.Object({
   id: identifierSchema,
   name: Type.String(),
@@ -166,6 +180,10 @@ export type DashboardApiKeyOutcomeRoute = {
   Params: Static<typeof dashboardApiKeyParamsSchema>;
   Querystring: Static<typeof dashboardApiKeyUsageLimitQuerySchema>;
 } & ApiKeyReply<200, Static<typeof dashboardApiKeyOutcomeResponseSchema>>;
+export type DashboardApiKeyRequestsRoute = {
+  Params: Static<typeof dashboardApiKeyParamsSchema>;
+  Querystring: Static<typeof dashboardApiKeyRequestsQuerySchema>;
+} & ApiKeyReply<200, Static<typeof dashboardApiKeyRequestsResponseSchema>>;
 export type DashboardApiKeyPageRoute = {
   Querystring: Static<typeof dashboardApiKeyListQuerySchema>;
 } & ApiKeyReply<200, Static<typeof dashboardApiKeyPageResponseSchema>>;

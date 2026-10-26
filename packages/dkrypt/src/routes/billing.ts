@@ -479,6 +479,22 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     return reply.type('text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="dkrypt-usage.csv"').send(`${csv}\r\n`);
   });
 
+  server.get('/v1/billing/quota-history', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request) => {
+    const userId = getFastifySession(request)!.sub;
+    const query = request.query as { limit?: string };
+    const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit ?? '50', 10) || 50));
+    const entries = getDecryptQuotaJournal(userId, limit).map((entry) => ({
+      jobId: entry.jobId,
+      at: entry.admittedAt,
+      state: entry.state,
+      bundleId: entry.bundleId,
+      versionLabel: entry.versionLabel,
+      source: entry.source,
+      status: entry.status ?? 'pruned',
+    }));
+    return { entries };
+  });
+
   server.get('/v1/billing/invoices', { schema: { hide: true }, preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const invoices: Array<{ id: string; provider: 'stripe' | 'nowpayments'; planId: string; status: string; createdAt: string; amountMinor: number; currency: string; invoiceUrl?: string; paymentId?: string }> = [];

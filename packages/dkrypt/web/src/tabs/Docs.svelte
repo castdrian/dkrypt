@@ -2,8 +2,11 @@
   import { ExternalLink } from 'lucide-svelte';
   import CopyButton from '#components/CopyButton.svelte';
   import { buttonVariants } from '#lib/components/ui/variants';
+  import Button from '#lib/components/ui/Button.svelte';
+  import ApiChanges from '#components/ApiChanges.svelte';
   import { sessionState } from '#lib/session.svelte';
 
+  let docsView = $state<'reference' | 'changes'>('reference');
   let quickstartKind = $state<'appstore' | 'testflight' | 'library'>('appstore');
   const quickstartCommand = $derived.by(() => {
     const base = '$DKRYPT_BASE_URL';
@@ -71,17 +74,15 @@
       <h1 class="text-base font-semibold">API documentation</h1>
       <p class="mt-1 text-muted text-sm">Browse and try the public API on this dkrypt instance. Add an API key in Scalar’s authorization panel. Decrypt requests create real jobs and use your account’s allowance.</p>
     </div>
-    <a href="/reference/" target="_blank" rel="noopener noreferrer" class={buttonVariants('secondary', 'sm')}>
-      <ExternalLink class="h-4 w-4" />Open API reference in new tab
-    </a>
+    {#if docsView === 'reference'}<a href="/reference/" target="_blank" rel="noopener noreferrer" class={buttonVariants('secondary', 'sm')}><ExternalLink class="h-4 w-4" />Open API reference in new tab</a>{/if}
   </div>
-  <div class="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-background">
-    <iframe
-      src="/reference/"
-      title="dkrypt API reference"
-      loading="lazy"
-      referrerpolicy="same-origin"
-      class="block h-[min(78vh,58rem)] min-h-[36rem] w-full border-0"
-    ></iframe>
+  <div class="flex gap-1 border-b border-border/70" role="tablist" aria-label="API documentation views">
+    <Button role="tab" aria-selected={docsView === 'reference'} variant={docsView === 'reference' ? 'secondary' : 'ghost'} size="sm" onclick={() => (docsView = 'reference')}>API reference</Button>
+    <Button role="tab" aria-selected={docsView === 'changes'} variant={docsView === 'changes' ? 'secondary' : 'ghost'} size="sm" onclick={() => (docsView = 'changes')}>API changes</Button>
   </div>
+  {#if docsView === 'reference'}
+    <div class="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-background"><iframe src="/reference/" title="dkrypt API reference" loading="lazy" referrerpolicy="same-origin" class="block h-[min(78vh,58rem)] min-h-[36rem] w-full border-0"></iframe></div>
+  {:else}
+    <ApiChanges />
+  {/if}
 </section>

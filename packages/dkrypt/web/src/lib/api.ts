@@ -425,6 +425,20 @@ export function fetchDashboardQuickSearch(query: string): Promise<{ results: Das
   return apiJson(`/v1/dashboard/quick-search?${params}`);
 }
 
+export interface DashboardApiChanges {
+  lifecycle: {
+    currentVersion: string;
+    policy: { compatibility: string; noticePeriodDays: number; noticeHeaders: string[] };
+    versions: Array<{ id: string; status: string; documentation: string }>;
+    deprecations: Array<{ method: string; path: string; deprecatedAt: number; sunsetAt: string; migrationUrl: string }>;
+  };
+  operations: Record<string, string[]>;
+}
+
+export function fetchDashboardApiChanges(): Promise<DashboardApiChanges> {
+  return apiJson('/v1/dashboard/api-changes');
+}
+
 export interface DashboardIncidentEvent {
   id: string;
   at: number;
@@ -1295,6 +1309,18 @@ export interface ApiKeyOutcomeUsage {
 
 export function fetchKeyOutcomeUsage(id: string, limit = 10): Promise<{ outcomes: ApiKeyOutcomeUsage[] }> {
   return apiJson(`/v1/dashboard/keys/${id}/outcomes?limit=${limit}`);
+}
+
+export interface ApiKeyRequestHistoryEntry {
+  at: number;
+  method: string;
+  route: string;
+  status: number;
+  durationMs?: number;
+}
+
+export function fetchKeyRequestHistory(id: string, limit = 100): Promise<{ requests: ApiKeyRequestHistoryEntry[] }> {
+  return apiJson(`/v1/dashboard/keys/${encodeURIComponent(id)}/requests?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`);
 }
 
 export interface LogQuery {
@@ -2645,6 +2671,20 @@ export function fetchBillingInvoices(): Promise<{ invoices: BillingInvoice[]; wa
   return apiJson('/v1/billing/invoices');
 }
 
+export interface BillingQuotaHistoryEntry {
+  jobId: string;
+  at: number;
+  state: 'reserved' | 'consumed';
+  bundleId?: string;
+  versionLabel?: string;
+  source?: string;
+  status: string;
+}
+
+export function fetchBillingQuotaHistory(limit = 50): Promise<{ entries: BillingQuotaHistoryEntry[] }> {
+  return apiJson(`/v1/billing/quota-history?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`);
+}
+
 export function fetchBillingProviderStatus(refresh = false): Promise<BillingProviderStatus> {
   return apiJson(`/v1/billing/provider-status${refresh ? '?refresh=true' : ''}`);
 }
@@ -2675,6 +2715,7 @@ export interface DiagnosticReport {
   createdAt: number;
   expiresAt: number;
   status: 'received';
+  messages?: Array<{ id: string; authorDisplayName: string; authorRole: 'reporter' | 'support'; body: string; createdAt: number }>;
 }
 
 export interface DiagnosticReportPreview extends DiagnosticReportDraft {
@@ -2702,4 +2743,8 @@ export function fetchDiagnosticReports(): Promise<{ reports: DiagnosticReport[] 
 
 export function fetchDiagnosticReportInbox(): Promise<{ reports: DiagnosticReport[] }> {
   return apiJson('/v1/dashboard/diagnostic-reports/inbox');
+}
+
+export function replyToDiagnosticReport(id: string, message: string): Promise<DiagnosticReport> {
+  return apiJson(`/v1/dashboard/diagnostic-reports/${encodeURIComponent(id)}/replies`, { method: 'POST', body: JSON.stringify({ message }) });
 }

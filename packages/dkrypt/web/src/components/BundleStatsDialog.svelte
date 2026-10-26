@@ -3,7 +3,9 @@
 		fetchBundleStats,
 		fetchJobDiff,
 		fetchJobHistory,
+		fetchArtifacts,
 		type BundleStats,
+		type ArtifactRecord,
 		type JobDiffResult,
 		type JobHistoryEntry,
 	} from "#lib/api";
@@ -21,6 +23,7 @@
 	import RelativeTime from "#components/RelativeTime.svelte";
 	import RateLimitHint from "#components/RateLimitHint.svelte";
 	import { isServerQueryCancelled } from "#lib/serverStateCache.svelte";
+	import { artifactDetailJumpState, setActiveTab } from "#lib/ui.svelte";
 
 	let {
 		open = $bindable(),
@@ -44,7 +47,32 @@
 	let selected = $state<Set<string>>(new Set());
 	let diff = $state<JobDiffResult | null>(null);
 	let diffing = $state(false);
+	let relatedArtifacts = $state<ArtifactRecord[]>([]);
+	let artifactsLoading = $state(false);
+	let artifactsFailed = $state(false);
+	let detailRequestId = 0;
 	let currentAppMetadata = $derived(appCatalogEntry(bundleId));
+
+	async function loadRelatedArtifacts(currentRequest: number): Promise<void> {
+		artifactsLoading = true;
+		artifactsFailed = false;
+		try {
+			const result = await fetchArtifacts({ q: bundleId, limit: 50 });
+			if (currentRequest === detailRequestId) {
+				relatedArtifacts = result.artifacts.filter((artifact) => artifact.bundleId === bundleId).slice(0, 8);
+			}
+		} catch {
+			if (currentRequest === detailRequestId) artifactsFailed = true;
+		} finally {
+			if (currentRequest === detailRequestId) artifactsLoading = false;
+		}
+	}
+
+	function inspectArtifact(id: string): void {
+		artifactDetailJumpState.id = id;
+		setActiveTab("home");
+		onOpenChange(false);
+	}
 
 	async function loadVersionsPage(offset: number): Promise<void> {
 		try {
@@ -74,12 +102,16 @@
 
 	$effect(() => {
 		if (open && bundleId) {
+			detailRequestId += 1;
+			const requestId = detailRequestId;
 			stats = null;
+			relatedArtifacts = [];
 			versions = null;
 			versionsOffset = 0;
 			versionsHasMore = false;
 			diff = null;
 			void fetchBundleStats(bundleId).then((s) => (stats = s));
+			void loadRelatedArtifacts(requestId);
 			void loadVersionsPage(0);
 
 			if (preselectIds && preselectIds.length === 2) {
@@ -135,6 +167,40 @@
 			</div>
 		</div>
 	</div>
+	{#if currentAppMetadata}
+		<section class="border-border mb-3 rounded-lg border p-3" aria-label="App information">
+			<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+				{#if currentAppMetadata.sellerName}<span class="font-medium">{currentAppMetadata.sellerName}</span>{/if}
+				{#if currentAppMetadata.category}<Badge variant="secondary">{currentAppMetadata.category}</Badge>{/if}
+				{#if currentAppMetadata.price !== undefined}<span class="text-muted">Price {fmtNumber(currentAppMetadata.price, 2)}</span>{/if}
+			</div>
+			{#if currentAppMetadata.description}<p class="text-muted mt-2 line-clamp-3 whitespace-pre-wrap text-xs">{currentAppMetadata.description}</p>{/if}
+			{#if currentAppMetadata.releaseNotes}<details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">Latest release notes</summary><p class="text-muted mt-1 whitespace-pre-wrap">{currentAppMetadata.releaseNotes}</p></details>{/if}
+		</section>
+	{/if}
+	<section class="border-border mb-3 rounded-lg border p-3" aria-label="App IPA library items">
+		<div class="mb-2 flex items-center justify-between gap-2">
+			<h3 class="text-xs font-semibold">IPA Library</h3>
+			{#if currentAppMetadata}<span class="text-[11px] text-muted">App metadata updated <RelativeTime ms={currentAppMetadata.metadataFetchedAt ?? currentAppMetadata.updatedAt} /></span>{/if}
+		</div>
+		{#if artifactsLoading}
+			<div class="text-xs text-muted" role="status">Loading saved IPAs…</div>
+		{:else if artifactsFailed}
+			<div class="text-xs text-muted">Saved IPA details are temporarily unavailable.</div>
+		{:else if relatedArtifacts.length > 0}
+			<div class="flex flex-col gap-1">
+				{#each relatedArtifacts as artifact (artifact.id)}
+					<Button variant="ghost" size="sm" class="h-auto w-full justify-start gap-2 px-2 py-1.5 text-left" onclick={() => inspectArtifact(artifact.id)}>
+						<span class="min-w-0 flex-1 truncate">{artifact.versionLabel ?? "Saved IPA"}{#if artifact.buildNumber}<span class="text-muted"> · build {artifact.buildNumber}</span>{/if}</span>
+						<Badge variant={artifact.channel === "testflight" ? "secondary" : "outline"}>{artifact.channel === "testflight" ? "TestFlight" : "App Store"}</Badge>
+						<span class="shrink-0 text-[11px] text-muted">{fmtBytesGB(artifact.fileSizeBytes)}</span>
+					</Button>
+				{/each}
+			</div>
+		{:else}
+			<div class="text-xs text-muted">No saved IPA for this app yet.</div>
+		{/if}
+	</section>
 	{#if !stats}
 		<div class="text-sm text-muted">Loading…</div>
 	{:else if stats.totalRuns === 0}

@@ -217,6 +217,8 @@ import {
   dashboardApiKeyListQuerySchema,
   dashboardApiKeyOkResponseSchema,
   dashboardApiKeyOutcomeResponseSchema,
+  dashboardApiKeyRequestsQuerySchema,
+  dashboardApiKeyRequestsResponseSchema,
   dashboardApiKeyPageResponseSchema,
   dashboardApiKeyParamsSchema,
   dashboardApiKeyPriorityBodySchema,
@@ -1123,6 +1125,7 @@ const remainingContracts: Array<[ContractMethod, string]> = [
   ['GET', '/v1/dashboard/keys/:id/usage'],
   ['GET', '/v1/dashboard/keys/:id/bundle-usage'],
   ['GET', '/v1/dashboard/keys/:id/outcomes'],
+  ['GET', '/v1/dashboard/keys/:id/requests'],
   ['GET', '/v1/dashboard/keys/pending'],
   ['POST', '/v1/dashboard/keys/:id/approve'],
   ['POST', '/v1/dashboard/keys/bulk-approve'],
@@ -1311,6 +1314,7 @@ register('GET', '/v1/dashboard/keys/all', { querystring: dashboardApiKeyListQuer
 register('GET', '/v1/dashboard/keys/:id/usage', { params: dashboardApiKeyParamsSchema, querystring: dashboardApiKeyUsageQuerySchema, response: { 200: dashboardApiKeyUsageResponseSchema } });
 register('GET', '/v1/dashboard/keys/:id/bundle-usage', { params: dashboardApiKeyParamsSchema, querystring: dashboardApiKeyUsageLimitQuerySchema, response: { 200: dashboardApiKeyBundleUsageResponseSchema } });
 register('GET', '/v1/dashboard/keys/:id/outcomes', { params: dashboardApiKeyParamsSchema, querystring: dashboardApiKeyUsageLimitQuerySchema, response: { 200: dashboardApiKeyOutcomeResponseSchema } });
+register('GET', '/v1/dashboard/keys/:id/requests', { params: dashboardApiKeyParamsSchema, querystring: dashboardApiKeyRequestsQuerySchema, response: { 200: dashboardApiKeyRequestsResponseSchema } });
 register('POST', '/v1/dashboard/keys/:id/approve', { params: dashboardApiKeyParamsSchema, response: { 200: dashboardApiKeyOkResponseSchema } });
 register('POST', '/v1/dashboard/keys/:id/deny', { params: dashboardApiKeyParamsSchema, response: { 200: dashboardApiKeyOkResponseSchema } });
 register('GET', '/v1/dashboard/backup/schedule', { response: { 200: backupScheduleResponseSchema } });

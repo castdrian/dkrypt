@@ -55,7 +55,7 @@ test('backup routes validate access, versioned payloads, and restore workflows',
     const exported = await server.inject({ method: 'GET', url: '/v1/dashboard/backup/export', headers: { cookie: managerCookie } });
     expect(exported.statusCode).toBe(200);
     expect(exported.headers['content-disposition']).toContain('dkrypt-backup.json');
-    expect(exported.json()).toMatchObject({ backupVersion: 11, decryptQuotaLedger: expect.any(Array) });
+    expect(exported.json()).toMatchObject({ backupVersion: 12, decryptQuotaLedger: expect.any(Array), apiKeyRequestHistory: expect.any(Object) });
     expect(exported.json()).not.toHaveProperty('projects');
     expect(exported.json()).not.toHaveProperty('artifactProjectLinks');
 
@@ -125,7 +125,7 @@ test('backup snapshots can be created, downloaded, and deleted through native ro
     const download = await server.inject({ method: 'GET', url: `/v1/dashboard/backup/history/${snapshotId}/download`, headers: { cookie: viewerCookie } });
     expect(download.statusCode).toBe(200);
     expect(download.headers['content-disposition']).toContain('dkrypt-backup.json');
-    expect(JSON.parse(download.body)).toMatchObject({ backupVersion: 11 });
+    expect(JSON.parse(download.body)).toMatchObject({ backupVersion: 12 });
 
     const viewerDrill = await server.inject({ method: 'POST', url: `/v1/dashboard/backup/history/${snapshotId}/drill`, headers: { cookie: viewerCookie } });
     expect(viewerDrill.statusCode).toBe(403);

@@ -1,12 +1,11 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { isIP } from 'node:net';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
-import type { DiagnosticReportInboxRoute, DiagnosticReportListRoute, DiagnosticReportPreviewRoute, DiagnosticReportSubmitRoute } from '#dashboardDiagnosticReportContracts.js';
-import { diagnosticReportListResponseSchema, diagnosticReportPreviewBodySchema, diagnosticReportPreviewResponseSchema, diagnosticReportRecordSchema, diagnosticReportSubmitBodySchema } from '#dashboardDiagnosticReportContracts.js';
+import type { DiagnosticReportInboxRoute, DiagnosticReportListRoute, DiagnosticReportPreviewRoute, DiagnosticReportReplyRoute, DiagnosticReportSubmitRoute } from '#dashboardDiagnosticReportContracts.js';
+import { diagnosticReportListResponseSchema, diagnosticReportPreviewBodySchema, diagnosticReportPreviewResponseSchema, diagnosticReportRecordSchema, diagnosticReportReplyBodySchema, diagnosticReportReplyParamsSchema, diagnosticReportSubmitBodySchema } from '#dashboardDiagnosticReportContracts.js';
 import { getAuthProfile } from '#identity.js';
 import { config } from '#config.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
-import { PermissionFlag } from '#permissions.js';
+import { hasPermission, PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { DEFAULT_PROJECT_ID } from '#store/state.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
@@ -33,7 +32,7 @@ function getDefaultRepository(): DiagnosticReportRepository {
 }
 
 function sanitizeText(value: string): string {
-  return value.replace(/\r\n?/g, '\n').replace(sensitiveValuePattern, (match) => match.includes(':') && isIP(match) !== 6 ? match : '[redacted]').trim().slice(0, 5000);
+  return value.replace(/\r\n?/g, '\n').replace(sensitiveValuePattern, '[redacted]').trim().slice(0, 5000);
 }
 
 function signature(userId: string, category: string, summary: string, details: string, expiresAt: number): string {
@@ -47,9 +46,18 @@ function tokenMatches(candidate: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function visibleReport(report: DiagnosticReportRecord): Omit<DiagnosticReportRecord, 'userId' | 'projectId'> {
-  const { userId: _userId, projectId: _projectId, ...visible } = report;
-  return visible;
+function visibleReport(report: DiagnosticReportRecord) {
+  const { userId, projectId: _projectId, messages, ...visible } = report;
+  return {
+    ...visible,
+    ...(messages ? { messages: messages.map((message) => ({
+      id: message.id,
+      authorDisplayName: message.authorId === userId ? getAuthProfile(userId)?.displayName ?? 'Reporter' : getAuthProfile(message.authorId)?.displayName ?? 'dkrypt support',
+      authorRole: message.authorId === userId ? 'reporter' as const : 'support' as const,
+      body: message.body,
+      createdAt: message.createdAt,
+    })) } : {}),
+  };
 }
 
 export function createDashboardDiagnosticReportRoutes(overrides: Partial<Omit<DiagnosticReportServices, 'repository'>> & { repository?: DiagnosticReportRepository } = {}): FastifyPluginAsyncTypebox {
@@ -135,6 +143,28 @@ export function createDashboardDiagnosticReportRoutes(overrides: Partial<Omit<Di
     }, () => {
       prune();
       return { reports: repository.listRecent(300).map((report) => ({ ...visibleReport(report), userId: report.userId, userDisplayName: getAuthProfile(report.userId)?.displayName ?? report.userId })) };
+    });
+
+    server.post<DiagnosticReportReplyRoute>('/v1/dashboard/diagnostic-reports/:id/replies', {
+      schema: { hide: true, params: diagnosticReportReplyParamsSchema, body: diagnosticReportReplyBodySchema, response: { 200: diagnosticReportRecordSchema } },
+    }, (request, reply) => {
+      const session = getFastifySession(request)!;
+      const report = repository.findById(request.params.id);
+      if (!report || report.expiresAt <= Date.now() || (report.userId !== session.sub && !hasPermission(session.permissions, PermissionFlag.viewDiagnosticReports))) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'support report not found');
+      }
+      const body = sanitizeText(request.body.message);
+      if (!body) {
+        reply.code(400);
+        return createHttpErrorEnvelope(request.id, 400, 'write a message before replying');
+      }
+      const updated = repository.appendMessage(report.id, { id: randomUUID(), authorId: session.sub, body, createdAt: Date.now() }, Date.now());
+      if (!updated) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'support report not found');
+      }
+      return visibleReport(updated);
     });
   };
 }

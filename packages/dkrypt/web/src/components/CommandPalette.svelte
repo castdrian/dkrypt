@@ -27,13 +27,16 @@
 		jumpToKeyUsage,
 		jumpToUser,
 		artifactDetailJumpState,
+		appDetailJumpState,
+		decryptSearchJumpState,
 		deviceDetailJumpState,
 		jobDetailJumpState,
 		openHelp,
 		paletteState,
-		requestFocusSearch,
 		requestOpenBatch,
 		setActiveTab,
+		focusViewState,
+		setFocusView,
 		setSettingsSubtab,
 		setTheme,
 		showToast,
@@ -240,7 +243,8 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 
 	function navigateQuickResult(result: DashboardQuickSearchResult): void {
 		if (result.kind === 'app') {
-			requestFocusSearch(result.id);
+			decryptSearchJumpState.bundleId = result.id;
+			setActiveTab('home');
 			return;
 		}
 		if (result.kind === 'job') {
@@ -298,6 +302,19 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 				subtitle: result.subtitle,
 				run: () => navigateQuickResult(result),
 			});
+			if (result.kind === 'app') {
+				base.push({
+					id: `app-details-${result.id}`,
+					label: `App details: ${result.title}`,
+					keywords: `${result.id} ${result.subtitle ?? ''} releases artifacts statistics`,
+					category: 'Details',
+					subtitle: 'View app releases and saved IPAs',
+					run: () => {
+						appDetailJumpState.bundleId = result.id;
+						setActiveTab('insights');
+					},
+				});
+			}
 			if (result.kind === 'artifact') {
 				base.push({
 					id: `download-${result.id}`,
@@ -322,6 +339,13 @@ import { resolveInterfaceLanguage } from "#lib/locale";
 			label: "Go to Insights",
 			category: "Navigation",
 			run: () => setActiveTab("insights"),
+		});
+		base.push({
+			id: "focus-view",
+			label: focusViewState.enabled ? "Exit focus view" : "Enter focus view",
+			category: "Preferences",
+			keywords: "hide navigation distraction free",
+			run: () => setFocusView(!focusViewState.enabled),
 		});
 		base.push({
 			id: "docs",

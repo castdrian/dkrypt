@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import AdmZip from 'adm-zip';
 import { preserveOpenApiPathOrder } from './openapiPathOrder.js';
 
 const stateDir = mkdtempSync(path.join('/tmp', 'dkrypt-client-generation-'));
@@ -24,10 +25,543 @@ const routes = Object.entries(document.paths ?? {}).flatMap(([route, methods]) =
 const outputDirectory = path.resolve(process.cwd(), 'clients');
 mkdirSync(path.join(outputDirectory, 'typescript'), { recursive: true });
 mkdirSync(path.join(outputDirectory, 'python'), { recursive: true });
+mkdirSync(path.join(outputDirectory, 'go'), { recursive: true });
+mkdirSync(path.join(outputDirectory, 'swift'), { recursive: true });
+mkdirSync(path.join(outputDirectory, 'rust', 'src'), { recursive: true });
 writeFileSync(openApiPath, `${JSON.stringify(document, null, 2)}\n`);
 writeFileSync(path.join(outputDirectory, 'typescript', 'dkrypt.ts'), renderTypeScript(routes));
 writeFileSync(path.join(outputDirectory, 'python', 'dkrypt_client.py'), renderPython(routes));
+writeFileSync(path.join(outputDirectory, 'go', 'go.mod'), renderGoModule());
+writeFileSync(path.join(outputDirectory, 'go', 'dkrypt.go'), renderGoClient());
+writeFileSync(path.join(outputDirectory, 'go', 'dkrypt_test.go'), renderGoClientTests());
+writeFileSync(path.join(outputDirectory, 'swift', 'DkryptClient.swift'), renderSwiftClient());
+writeFileSync(path.join(outputDirectory, 'rust', 'Cargo.toml'), renderRustManifest());
+writeFileSync(path.join(outputDirectory, 'rust', 'src', 'lib.rs'), renderRustClient());
+writeFileSync(path.join(outputDirectory, 'postman.collection.json'), `${JSON.stringify(renderPostmanCollection(document), null, 2)}\n`);
+writeFileSync(path.join(outputDirectory, 'README.md'), renderClientReadme());
+const downloadsDirectory = path.resolve(process.cwd(), 'web', 'public', 'downloads');
+mkdirSync(downloadsDirectory, { recursive: true });
+writeFileSync(path.join(downloadsDirectory, 'dkrypt-postman.json'), `${JSON.stringify(renderPostmanCollection(document), null, 2)}\n`);
+writeFileSync(path.join(downloadsDirectory, 'dkrypt-bruno.zip'), renderBrunoCollection(document));
+writeFileSync(path.join(downloadsDirectory, 'dkrypt-go-sdk.zip'), renderSdkArchive([
+  [path.join(outputDirectory, 'go', 'go.mod'), 'dkrypt-go/go.mod'],
+  [path.join(outputDirectory, 'go', 'dkrypt.go'), 'dkrypt-go/dkrypt.go'],
+  [path.join(outputDirectory, 'go', 'dkrypt_test.go'), 'dkrypt-go/dkrypt_test.go'],
+]));
+writeFileSync(path.join(downloadsDirectory, 'dkrypt-swift-sdk.zip'), renderSdkArchive([
+  [path.join(outputDirectory, 'swift', 'DkryptClient.swift'), 'dkrypt-swift/DkryptClient.swift'],
+]));
+writeFileSync(path.join(downloadsDirectory, 'dkrypt-rust-sdk.zip'), renderSdkArchive([
+  [path.join(outputDirectory, 'rust', 'Cargo.toml'), 'dkrypt-rust/Cargo.toml'],
+  [path.join(outputDirectory, 'rust', 'src', 'lib.rs'), 'dkrypt-rust/src/lib.rs'],
+]));
 await server.close();
+
+function renderSdkArchive(files: Array<[string, string]>): Buffer {
+  const archive = new AdmZip();
+  for (const [filePath, archivePath] of files) archive.addFile(archivePath, readFileSync(filePath));
+  return archive.toBuffer();
+}
+
+function renderClientReadme(): string {
+  return `# dkrypt API clients
+
+The API key SDKs use dkrypt's public decrypt, job status, and IPA artifact routes. They never call dashboard or billing endpoints and send the API key only to the configured dkrypt origin. Use HTTPS for remote instances; plain HTTP is allowed only for localhost.
+
+## Go
+
+Import the source from the Go client folder or download the Go SDK archive. Create a client with the instance URL and API key, then call \u0060Decrypt\u0060, \u0060GetJob\u0060, \u0060ListArtifacts\u0060, or \u0060DownloadArtifact\u0060.
+
+## Swift
+
+Add \u0060DkryptClient.swift\u0060 to an app target or download the Swift SDK archive. Use the async \u0060decrypt\u0060, \u0060getJob\u0060, \u0060listArtifacts\u0060, and \u0060downloadArtifact\u0060 methods.
+
+## Rust
+
+Copy the Rust client folder into a Cargo workspace or download its archive. The crate uses Tokio-compatible async methods and reqwest.
+
+## API collections
+
+Import \u0060postman.collection.json\u0060 in Postman or import the Bruno archive. Set the collection's \u0060baseUrl\u0060 and \u0060apiKey\u0060 values locally.
+`;
+}
+
+function renderGoModule(): string {
+  return 'module github.com/castdrian/dkrypt/clients/go\n\ngo 1.22\n';
+}
+
+function renderGoClient(): string {
+  return `package dkrypt
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+type Client struct {
+	BaseURL string
+	APIKey string
+	HTTPClient *http.Client
+}
+
+type Job struct {
+	ID string \u0060json:"id"\u0060
+	Status string \u0060json:"status"\u0060
+	Progress string \u0060json:"progress,omitempty"\u0060
+	Error string \u0060json:"error,omitempty"\u0060
+	ArtifactID string \u0060json:"artifactId,omitempty"\u0060
+}
+
+type Artifact struct {
+	ID string \u0060json:"id"\u0060
+	BundleID string \u0060json:"bundleId"\u0060
+	VersionLabel string \u0060json:"versionLabel,omitempty"\u0060
+	FileSizeBytes int64 \u0060json:"fileSizeBytes,omitempty"\u0060
+}
+
+type ArtifactPage struct {
+	Artifacts []Artifact \u0060json:"artifacts"\u0060
+	NextCursor string \u0060json:"nextCursor,omitempty"\u0060
+}
+
+func (c *Client) request(ctx context.Context, method, requestPath string, body any, idempotencyKey string, output any) error {
+	base, err := parseBaseURL(c.BaseURL)
+	if err != nil { return err }
+	target, err := base.Parse(requestPath)
+	if err != nil || target.Host != base.Host || target.Scheme != base.Scheme {
+		return fmt.Errorf("dkrypt requests must use the configured origin")
+	}
+	var payload io.Reader
+	if body != nil {
+		encoded, marshalErr := json.Marshal(body)
+		if marshalErr != nil { return marshalErr }
+		payload = bytes.NewReader(encoded)
+	}
+	client := c.HTTPClient
+	if client == nil { client = http.DefaultClient }
+	request, err := http.NewRequestWithContext(ctx, method, target.String(), payload)
+	if err != nil { return err }
+	request.Header.Set("Accept", "application/json")
+	if body != nil { request.Header.Set("Content-Type", "application/json") }
+	if c.APIKey != "" { request.Header.Set("Authorization", "Bearer "+c.APIKey) }
+	if idempotencyKey != "" { request.Header.Set("Idempotency-Key", idempotencyKey) }
+	response, err := client.Do(request)
+	if err != nil { return err }
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("dkrypt request failed with HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	if output == nil { _, err = io.Copy(io.Discard, response.Body); return err }
+	return json.NewDecoder(response.Body).Decode(output)
+}
+
+func (c *Client) Decrypt(ctx context.Context, bundleID, version, idempotencyKey string) (Job, error) {
+	if idempotencyKey == "" { var token [16]byte; if _, err := rand.Read(token[:]); err != nil { return Job{}, err }; idempotencyKey = hex.EncodeToString(token[:]) }
+	body := map[string]string{"bundleId": bundleID}
+	if version != "" { body["version"] = version }
+	var result Job
+	err := c.request(ctx, http.MethodPost, "/v1/decrypts", body, idempotencyKey, &result)
+	return result, err
+}
+
+func parseBaseURL(value string) (*url.URL, error) {
+	base, err := url.Parse(value)
+	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") {
+		return nil, fmt.Errorf("invalid dkrypt base URL")
+	}
+	localHost := strings.EqualFold(base.Hostname(), "localhost") || base.Hostname() == "127.0.0.1" || base.Hostname() == "::1"
+	if base.Scheme == "http" && !localHost {
+		return nil, fmt.Errorf("Use an HTTPS dkrypt URL; HTTP is allowed only for localhost")
+	}
+	return base, nil
+}
+
+func (c *Client) GetJob(ctx context.Context, id string) (Job, error) {
+	var result Job
+	err := c.request(ctx, http.MethodGet, "/v1/jobs/"+url.PathEscape(id), nil, "", &result)
+	return result, err
+}
+
+func (c *Client) ListArtifacts(ctx context.Context, query string, limit int, cursor string) (ArtifactPage, error) {
+	if limit < 1 { limit = 1 }; if limit > 100 { limit = 100 }
+	params := url.Values{"limit": []string{fmt.Sprint(limit)}}
+	if query != "" { params.Set("q", query) }; if cursor != "" { params.Set("cursor", cursor) }
+	var result ArtifactPage
+	err := c.request(ctx, http.MethodGet, "/v1/artifacts?"+params.Encode(), nil, "", &result)
+	return result, err
+}
+
+func (c *Client) DownloadArtifact(ctx context.Context, id string) ([]byte, error) {
+	base, err := parseBaseURL(c.BaseURL)
+	if err != nil { return nil, err }
+	target, err := base.Parse("/v1/artifacts/"+url.PathEscape(id)+"/file")
+	if err != nil || target.Host != base.Host || target.Scheme != base.Scheme { return nil, fmt.Errorf("dkrypt requests must use the configured origin") }
+	client := c.HTTPClient; if client == nil { client = http.DefaultClient }
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil); if err != nil { return nil, err }
+	request.Header.Set("Accept", "application/octet-stream"); if c.APIKey != "" { request.Header.Set("Authorization", "Bearer "+c.APIKey) }
+	response, err := client.Do(request); if err != nil { return nil, err }; defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 { detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096)); return nil, fmt.Errorf("dkrypt download failed with HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(detail))) }
+	return io.ReadAll(response.Body)
+}
+`;
+}
+
+function renderGoClientTests(): string {
+  return `package dkrypt
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestDecryptUsesConfiguredOriginAndIdempotency(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.URL.Path != "/v1/decrypts" { t.Fatalf("unexpected path: %s", request.URL.Path) }
+		if request.Header.Get("Authorization") != "Bearer test-key" { t.Fatal("API key was not sent") }
+		if request.Header.Get("Idempotency-Key") != "stable-key" { t.Fatal("idempotency key was not sent") }
+		var body map[string]string
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil { t.Fatal(err) }
+		if body["bundleId"] != "com.example.app" { t.Fatalf("unexpected request body: %v", body) }
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte("{\\"id\\":\\"job-1\\",\\"status\\":\\"queued\\"}"))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, APIKey: "test-key"}
+	job, err := client.Decrypt(context.Background(), "com.example.app", "", "stable-key")
+	if err != nil { t.Fatal(err) }
+	if job.ID != "job-1" || job.Status != "queued" || requests != 1 { t.Fatalf("unexpected result: %+v, requests=%d", job, requests) }
+}
+
+func TestRemoteHTTPBaseURLIsRejected(t *testing.T) {
+    client := Client{BaseURL: "http://dkrypt.example", APIKey: "test-key"}
+    err := client.request(context.Background(), http.MethodGet, "/v1/jobs/job-1", nil, "", nil)
+    if err == nil || err.Error() != "Use an HTTPS dkrypt URL; HTTP is allowed only for localhost" { t.Fatalf("expected remote HTTP to be rejected, got %v", err) }
+}
+
+func TestListArtifactsEncodesFiltersAndClampsLimits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("q") != "A & B" || request.URL.Query().Get("cursor") != "cursor/one" || request.URL.Query().Get("limit") != "100" { t.Fatalf("unexpected query: %s", request.URL.RawQuery) }
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte("{\\"artifacts\\":[],\\"nextCursor\\":\\"next\\"}"))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL}
+	page, err := client.ListArtifacts(context.Background(), "A & B", 500, "cursor/one")
+	if err != nil { t.Fatal(err) }
+	if page.NextCursor != "next" { t.Fatalf("unexpected page: %+v", page) }
+}
+
+func TestDownloadArtifactReturnsTheIPABytes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/artifacts/id%2Fone/file" && request.URL.Path != "/v1/artifacts/id/one/file" { t.Fatalf("unexpected path: %s", request.URL.Path) }
+		if request.Header.Get("Authorization") != "Bearer test-key" { t.Fatal("API key was not sent") }
+		_, _ = response.Write([]byte("ipa-data"))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, APIKey: "test-key"}
+	data, err := client.DownloadArtifact(context.Background(), "id/one")
+	if err != nil { t.Fatal(err) }
+	if string(data) != "ipa-data" { t.Fatalf("unexpected file data: %s", data) }
+}
+`;
+}
+
+function renderSwiftClient(): string {
+  return `import Foundation
+
+public struct DkryptJob: Decodable, Sendable {
+    public let id: String
+    public let status: String
+    public let progress: String?
+    public let error: String?
+    public let artifactId: String?
+}
+
+public struct DkryptArtifact: Decodable, Sendable {
+    public let id: String
+    public let bundleId: String
+    public let versionLabel: String?
+    public let fileSizeBytes: Int64?
+}
+
+public struct DkryptArtifactPage: Decodable, Sendable {
+    public let artifacts: [DkryptArtifact]
+    public let nextCursor: String?
+}
+
+public struct DkryptClient: Sendable {
+    public let baseURL: URL
+    public let apiKey: String?
+    public let session: URLSession
+
+    public init(baseURL: URL, apiKey: String? = nil, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.apiKey = apiKey
+        self.session = session
+    }
+
+    public func decrypt(bundleId: String, version: String? = nil, idempotencyKey: String = UUID().uuidString) async throws -> DkryptJob {
+        var body: [String: String] = ["bundleId": bundleId]
+        if let version { body["version"] = version }
+        return try await request("/v1/decrypts", method: "POST", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    public func getJob(id: String) async throws -> DkryptJob {
+        try await request("/v1/jobs/" + Self.pathComponent(id))
+    }
+
+    public func listArtifacts(query: String? = nil, limit: Int = 100, cursor: String? = nil) async throws -> DkryptArtifactPage {
+        var components = URLComponents()
+        components.path = "/v1/artifacts"
+        var items = [URLQueryItem(name: "limit", value: String(max(1, min(100, limit))))]
+        if let query, !query.isEmpty { items.append(URLQueryItem(name: "q", value: query)) }
+        if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
+        components.queryItems = items
+        return try await request(components.string ?? "/v1/artifacts")
+    }
+
+    public func downloadArtifact(id: String) async throws -> Data {
+        try await requestData("/v1/artifacts/" + Self.pathComponent(id) + "/file")
+    }
+
+    private func request<T: Decodable>(_ path: String, method: String = "GET", body: [String: String]? = nil, idempotencyKey: String? = nil) async throws -> T {
+        let data = try await requestData(path, method: method, body: body, idempotencyKey: idempotencyKey)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func requestData(_ path: String, method: String = "GET", body: [String: String]? = nil, idempotencyKey: String? = nil) async throws -> Data {
+        let host = (baseURL.host ?? "").lowercased()
+        let allowsHTTP = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+        guard baseURL.scheme?.lowercased() == "https" || allowsHTTP else { throw URLError(.secureConnectionFailed) }
+        guard var target = URLComponents(url: baseURL, resolvingAgainstBaseURL: false), let origin = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+        let relative = URLComponents(string: path)
+        guard relative?.host == nil, relative?.scheme == nil else { throw URLError(.badURL) }
+        target.path = relative?.path ?? path
+        target.queryItems = relative?.queryItems
+        guard target.scheme == origin.scheme, target.host == origin.host, target.port == origin.port, let url = target.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let apiKey { request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization") }
+        if let body { request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONEncoder().encode(body) }
+        if let idempotencyKey { request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key") }
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(response.statusCode) else { throw NSError(domain: "DkryptClient", code: response.statusCode, userInfo: [NSLocalizedDescriptionKey: String(decoding: data, as: UTF8.self)]) }
+        return data
+    }
+
+    private static func pathComponent(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? value
+    }
+}
+`;
+}
+
+function renderRustManifest(): string {
+  return `[package]
+name = "dkrypt-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+`;
+}
+
+function renderRustClient(): string {
+  return `use reqwest::{Client, Method, Response, Url};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::error::Error;
+
+#[derive(Clone)]
+pub struct DkryptClient {
+    base_url: Url,
+    api_key: Option<String>,
+    http: Client,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Job {
+    pub id: String,
+    pub status: String,
+    pub progress: Option<String>,
+    pub error: Option<String>,
+    pub artifact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    pub id: String,
+    pub bundle_id: String,
+    pub version_label: Option<String>,
+    pub file_size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactPage {
+    pub artifacts: Vec<Artifact>,
+    pub next_cursor: Option<String>,
+}
+
+impl DkryptClient {
+    pub fn new(base_url: &str, api_key: Option<String>) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let base_url = Url::parse(base_url)?;
+        let host = base_url.host_str().unwrap_or_default();
+        let allows_http = ["localhost", "127.0.0.1", "::1"].contains(&host);
+        if !["http", "https"].contains(&base_url.scheme()) || host.is_empty() { return Err("invalid dkrypt base URL".into()); }
+        if base_url.scheme() == "http" && !allows_http { return Err("Use an HTTPS dkrypt URL; HTTP is allowed only for localhost".into()); }
+        Ok(Self { base_url, api_key, http: Client::new() })
+    }
+
+    fn url(&self, path: &str) -> Result<Url, Box<dyn Error + Send + Sync>> {
+        let target = self.base_url.join(path)?;
+        if target.origin() != self.base_url.origin() { return Err("dkrypt requests must use the configured origin".into()); }
+        Ok(target)
+    }
+
+    async fn send(&self, method: Method, path: &str, body: Option<Value>, idempotency_key: Option<&str>) -> Result<Response, Box<dyn Error + Send + Sync>> {
+        let mut request = self.http.request(method, self.url(path)?).header("Accept", "application/json");
+        if let Some(key) = &self.api_key { request = request.bearer_auth(key); }
+        if let Some(key) = idempotency_key { request = request.header("Idempotency-Key", key); }
+        if let Some(body) = body { request = request.json(&body); }
+        let response = request.send().await?;
+        if !response.status().is_success() { let status = response.status(); let detail = response.text().await.unwrap_or_default(); return Err(format!("dkrypt request failed with HTTP {status}: {detail}").into()); }
+        Ok(response)
+    }
+
+    pub async fn decrypt(&self, bundle_id: &str, version: Option<&str>, idempotency_key: &str) -> Result<Job, Box<dyn Error + Send + Sync>> {
+        let mut body = json!({"bundleId": bundle_id});
+        if let Some(version) = version { body["version"] = json!(version); }
+        Ok(self.send(Method::POST, "/v1/decrypts", Some(body), Some(idempotency_key)).await?.json().await?)
+    }
+
+    pub async fn get_job(&self, id: &str) -> Result<Job, Box<dyn Error + Send + Sync>> {
+        let path = format!("/v1/jobs/{}", encode_path_component(id));
+        Ok(self.send(Method::GET, &path, None, None).await?.json().await?)
+    }
+
+    pub async fn list_artifacts(&self, query: Option<&str>, limit: usize, cursor: Option<&str>) -> Result<ArtifactPage, Box<dyn Error + Send + Sync>> {
+        let mut url = self.url("/v1/artifacts")?;
+        { let mut params = url.query_pairs_mut(); params.append_pair("limit", &limit.clamp(1, 100).to_string()); if let Some(query) = query { params.append_pair("q", query); } if let Some(cursor) = cursor { params.append_pair("cursor", cursor); } }
+        let path = url.path().to_string() + "?" + url.query().unwrap_or_default();
+        Ok(self.send(Method::GET, &path, None, None).await?.json().await?)
+    }
+
+    pub async fn download_artifact(&self, id: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+        let path = format!("/v1/artifacts/{}/file", encode_path_component(id));
+        let mut request = self.http.get(self.url(&path)?).header("Accept", "application/octet-stream");
+        if let Some(key) = &self.api_key { request = request.bearer_auth(key); }
+        let response = request.send().await?;
+        if !response.status().is_success() { let status = response.status(); let detail = response.text().await.unwrap_or_default(); return Err(format!("dkrypt download failed with HTTP {status}: {detail}").into()); }
+        Ok(response.bytes().await?.to_vec())
+    }
+}
+
+fn encode_path_component(value: &str) -> String {
+    let mut result = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) { result.push(byte as char); }
+        else { result.push_str(&format!("%{byte:02X}")); }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DkryptClient;
+
+    #[test]
+    fn client_rejects_requests_to_a_different_origin() {
+        let client = DkryptClient::new("https://dkrypt.example", None).expect("valid base URL");
+        assert!(client.url("https://attacker.example/v1/jobs").is_err());
+        assert!(client.url("//attacker.example/v1/jobs").is_err());
+    }
+
+    #[test]
+    fn client_allows_plain_http_only_for_localhost() {
+        assert!(DkryptClient::new("http://localhost:3000", None).is_ok());
+        assert!(DkryptClient::new("http://127.0.0.1:3000", None).is_ok());
+        assert!(DkryptClient::new("http://dkrypt.example", None).is_err());
+    }
+}
+`;
+}
+
+function renderPostmanCollection(document: { paths?: Record<string, Record<string, unknown>> }): unknown {
+  const items = Object.entries(document.paths ?? {}).flatMap(([path, methods]) => Object.keys(methods)
+    .filter((method) => ['get', 'post', 'put', 'patch', 'delete'].includes(method.toLowerCase()))
+    .map((method) => {
+      const route = path.replace(/\{([^}]+)\}/g, '{{$1}}');
+      const name = `${method.toUpperCase()} ${path}`;
+      const request: Record<string, unknown> = {
+        method: method.toUpperCase(),
+        header: [{ key: 'Accept', value: 'application/json' }],
+        url: { raw: `{{baseUrl}}${route}`, host: ['{{baseUrl}}'], path: route.split('/').filter(Boolean) },
+      };
+      if (method.toLowerCase() === 'post') {
+        const example = path === '/v1/decrypts'
+          ? { bundleId: 'com.example.app' }
+          : path === '/v1/testflight/decrypt'
+            ? { bundleId: 'com.example.app', appId: 123456789, build: { id: 987654321, cfBundleShortVersion: '1.0', cfBundleVersion: '42', bundleId: 'com.example.app' } }
+            : path === '/v1/jobs/status'
+              ? { ids: ['{{jobId}}'] }
+              : undefined;
+        if (example) request.body = { mode: 'raw', raw: JSON.stringify(example, null, 2), options: { raw: { language: 'json' } } };
+      }
+      return { name, request, response: [] };
+    }));
+  return {
+    info: { name: 'dkrypt Public API', description: 'Public API-key operations for dkrypt decrypt jobs and IPA artifacts.', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
+    auth: { type: 'bearer', bearer: [{ key: 'token', value: '{{apiKey}}', type: 'string' }] },
+    variable: [{ key: 'baseUrl', value: 'http://localhost:3000' }, { key: 'apiKey', value: '' }, { key: 'jobId', value: '' }],
+    item: items,
+  };
+}
+
+function renderBrunoCollection(document: { paths?: Record<string, Record<string, unknown>> }): Buffer {
+  const archive = new AdmZip();
+  archive.addFile('dkrypt/bruno.json', Buffer.from(JSON.stringify({ version: '1', name: 'dkrypt Public API', type: 'collection', ignore: ['node_modules', '.git'] }, null, 2) + '\n'));
+  archive.addFile('dkrypt/environments/Local.bru', Buffer.from('vars {\n  baseUrl: http://localhost:3000\n  apiKey: replace-with-your-api-key\n  jobId: replace-with-a-job-id\n}\n'));
+  let sequence = 0;
+  for (const [path, methods] of Object.entries(document.paths ?? {})) {
+    for (const method of Object.keys(methods).filter((candidate) => ['get', 'post', 'put', 'patch', 'delete'].includes(candidate.toLowerCase()))) {
+      sequence += 1;
+      const route = path.replace(/\{([^}]+)\}/g, '{{$1}}');
+      const name = `${method.toUpperCase()} ${path}`;
+      const body = path === '/v1/decrypts'
+        ? '\nbody:json {\n  {\n    "bundleId": "com.example.app"\n  }\n}\n'
+        : path === '/v1/testflight/decrypt'
+          ? '\nbody:json {\n  {\n    "bundleId": "com.example.app",\n    "appId": 123456789,\n    "build": { "id": 987654321, "cfBundleShortVersion": "1.0", "cfBundleVersion": "42", "bundleId": "com.example.app" }\n  }\n}\n'
+          : path === '/v1/jobs/status'
+            ? '\nbody:json {\n  { "ids": ["{{jobId}}"] }\n}\n'
+            : '';
+      const content = `meta {\n  name: ${name}\n  type: http\n  seq: ${sequence}\n}\n\n${method.toLowerCase()} {\n  url: {{baseUrl}}${route}\n  body: ${body ? 'json' : 'none'}\n  auth: bearer\n}\n\nauth:bearer {\n  token: {{apiKey}}\n}\n\nheaders {\n  Accept: application/json\n}\n${body}`;
+      archive.addFile(`dkrypt/${String(sequence).padStart(2, '0')}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.bru`, Buffer.from(content));
+    }
+  }
+  return archive.toBuffer();
+}
 
 function renderTypeScript(routes: string[]): string {
   const routeUnion = routes.map((route) => `  | ${JSON.stringify(route)}`).join('\n');
@@ -271,8 +805,9 @@ export class DkryptClient {
   private buildUrl(path: string): URL {
     const baseUrl = new URL(this.baseUrl);
     const url = new URL(path, baseUrl);
-    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== baseUrl.origin) {
-      throw new Error('dkrypt requests must use the configured origin');
+    const allowsHttp = ['localhost', '127.0.0.1', '[::1]'].includes(baseUrl.hostname.toLowerCase());
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== baseUrl.origin || (url.protocol === 'http:' && !allowsHttp)) {
+      throw new Error('Use an HTTPS dkrypt URL; HTTP is allowed only for localhost');
     }
     return url;
   }
@@ -537,11 +1072,12 @@ class DkryptClient:
         target = urlsplit(request_url)
         if (
             target.scheme.lower() not in ("http", "https")
+            or (target.scheme.lower() == "http" and target.hostname not in ("localhost", "127.0.0.1", "::1"))
             or target.username is not None
             or target.password is not None
             or self._origin(base) != self._origin(target)
         ):
-            raise ValueError("dkrypt requests must use the configured origin")
+            raise ValueError("dkrypt requests must use the configured origin over HTTPS except on localhost")
         return request_url
 
     @staticmethod

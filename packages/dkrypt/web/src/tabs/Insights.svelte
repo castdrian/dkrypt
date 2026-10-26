@@ -33,6 +33,7 @@
 	import { sessionHasAnyPermission } from "#lib/session.svelte";
 	import {
 		jumpToHistoryFailureCategory,
+		appDetailJumpState,
 		requestFocusSearch,
 		setActiveTab,
 	} from "#lib/ui.svelte";
@@ -197,6 +198,13 @@
 		statsBundleId = bundleId;
 		statsOpen = true;
 	}
+
+	$effect(() => {
+		const bundleId = appDetailJumpState.bundleId;
+		if (!bundleId) return;
+		appDetailJumpState.bundleId = null;
+		openStats(bundleId);
+	});
 
 	function inspectAnomaly(jobId: string): void {
 		setActiveTab("home");

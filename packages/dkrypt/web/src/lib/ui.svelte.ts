@@ -418,6 +418,11 @@ export function resolvePrompt(value: string | null): void {
 }
 
 export const paletteState = $state<{ open: boolean }>({ open: false });
+export const focusViewState = $state<{ enabled: boolean }>({ enabled: false });
+
+export function setFocusView(enabled: boolean): void {
+  focusViewState.enabled = enabled;
+}
 
 export function openPalette(): void {
   paletteState.open = true;
@@ -474,6 +479,8 @@ export function requestFocusSearch(bundleId?: string): void {
 
 export const jobDetailJumpState = $state<{ id: string | null }>({ id: null });
 export const artifactDetailJumpState = $state<{ id: string | null }>({ id: null });
+export const appDetailJumpState = $state<{ bundleId: string | null }>({ bundleId: null });
+export const decryptSearchJumpState = $state<{ bundleId: string | null }>({ bundleId: null });
 export const deviceDetailJumpState = $state<{ id: string | null }>({ id: null });
 export const logSearchJumpState = $state<{ value: { query: string; scope?: string } | null }>({ value: null });
 

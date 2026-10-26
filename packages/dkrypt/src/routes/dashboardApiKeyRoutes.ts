@@ -14,6 +14,7 @@ import type {
   DashboardApiKeyIdRoute,
   DashboardApiKeyListRoute,
   DashboardApiKeyOutcomeRoute,
+  DashboardApiKeyRequestsRoute,
   DashboardApiKeyPageRoute,
   DashboardApiKeyPriorityRoute,
   DashboardApiKeyRegenerateRoute,
@@ -38,6 +39,7 @@ import {
   getApiKeyBundleUsage,
   getApiKeyById,
   getApiKeyOutcomeUsage,
+  getApiKeyRequestHistory,
   getApiKeyUsage,
   getUserEffectivePermissions,
   listAllApiKeysPage,
@@ -328,6 +330,18 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
     if (!hasUsageAccess(key.ownerId, sub, permissions)) return respondWithError(request, reply, 403, 'not your key');
     const limit = Math.min(Math.max(Number.parseInt(String(request.query.limit ?? '10'), 10) || 10, 1), 30);
     return { outcomes: getApiKeyOutcomeUsage(request.params.id, limit) };
+  });
+
+  server.get<DashboardApiKeyRequestsRoute>('/v1/dashboard/keys/:id/requests', {
+    schema: getRouteContract('GET', '/v1/dashboard/keys/:id/requests'),
+    preHandler: canInspectApiKeyUsage,
+  }, (request, reply) => {
+    const key = getApiKeyById(request.params.id);
+    if (!key) return respondWithError(request, reply, 404, 'key not found');
+    const { sub, permissions } = getFastifySession(request)!;
+    if (!hasUsageAccess(key.ownerId, sub, permissions)) return respondWithError(request, reply, 403, 'not your key');
+    const limit = Math.min(Math.max(Number.parseInt(String(request.query.limit ?? '100'), 10) || 100, 1), 100);
+    return { requests: getApiKeyRequestHistory(request.params.id, limit) };
   });
 
   server.get<DashboardApiKeyListRoute>('/v1/dashboard/keys/pending', {

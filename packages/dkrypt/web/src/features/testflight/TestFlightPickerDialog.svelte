@@ -163,7 +163,7 @@
   {#if deviceOptions.length > 1}
     <div class="mb-3">
       <label for="testflight-device" class="mb-1 block text-xs text-muted">Use device</label>
-      <Select id="testflight-device" items={deviceOptions} bind:value={selectedDeviceId} onValueChange={() => load(appId)} />
+      <Select id="testflight-device" ariaLabel="Use device" items={deviceOptions} bind:value={selectedDeviceId} onValueChange={() => load(appId)} />
     </div>
   {:else if deviceOptions.length === 1}
     <div class="mb-3 text-xs text-muted">Verified on {deviceOptions[0].label}</div>

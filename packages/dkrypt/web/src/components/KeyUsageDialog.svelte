@@ -2,9 +2,11 @@
 	import {
 		fetchKeyBundleUsage,
 		fetchKeyOutcomeUsage,
+		fetchKeyRequestHistory,
 		fetchKeyUsage,
 		type ApiKeyBundleUsage,
 		type ApiKeyOutcomeUsage,
+		type ApiKeyRequestHistoryEntry,
 		type ApiKeyUsageBucket,
 	} from "#lib/api";
 	import {
@@ -14,7 +16,7 @@
 	} from "#lib/appCatalog.svelte";
 	import Dialog from "#lib/components/ui/Dialog.svelte";
 	import Sparkline from "#components/Sparkline.svelte";
-	import { fmtCalendarDate, fmtNumber } from "#lib/format.svelte";
+	import { fmtCalendarDate, fmtDateTime, fmtNumber } from "#lib/format.svelte";
 
 	let {
 		open = $bindable(),
@@ -35,17 +37,33 @@
 	let usage = $state<ApiKeyUsageBucket[] | null>(null);
 	let bundleUsage = $state<ApiKeyBundleUsage[] | null>(null);
 	let outcomeUsage = $state<ApiKeyOutcomeUsage[] | null>(null);
+	let requests = $state<ApiKeyRequestHistoryEntry[] | null>(null);
+	let requestsError = $state('');
+
+	async function loadRecentRequests(): Promise<void> {
+		requests = null;
+		requestsError = '';
+		try {
+			requests = (await fetchKeyRequestHistory(keyId)).requests;
+		} catch (error) {
+			requests = [];
+			requestsError = error instanceof Error ? error.message : 'Could not load recent requests.';
+		}
+	}
 
 	$effect(() => {
 		if (open && keyId) {
 			usage = null;
 			bundleUsage = null;
 			outcomeUsage = null;
+			requests = null;
+			requestsError = '';
 			void fetchKeyUsage(keyId, 14).then((r) => (usage = r.usage));
 			void fetchKeyBundleUsage(keyId).then(
 				(r) => (bundleUsage = r.bundles),
 			);
 			void fetchKeyOutcomeUsage(keyId).then((r) => (outcomeUsage = r.outcomes));
+			void loadRecentRequests();
 		}
 	});
 
@@ -69,7 +87,7 @@
 	);
 </script>
 
-<Dialog {open} {onOpenChange} class="max-w-sm">
+<Dialog {open} {onOpenChange} class="max-h-[85dvh] max-w-2xl overflow-y-auto">
 	<div class="mb-1 truncate text-sm font-medium" title={keyName}>
 		{keyName} - usage
 	</div>
@@ -178,6 +196,29 @@
 						</div>
 					{/each}
 				</div>
+			</div>
+		{/if}
+		{#if requests === null}
+			<div class="border-border mt-3 border-t pt-3 text-xs text-muted">Loading recent requests…</div>
+		{:else}
+			<div class="border-border mt-3 border-t pt-3">
+				<div class="mb-2 text-xs font-medium">Recent requests <span class="font-normal text-muted">· routes only, no request data</span></div>
+				{#if requestsError}
+					<div class="flex flex-wrap items-center gap-2 text-xs text-warn" role="alert"><span>{requestsError}</span><button type="button" class="rounded-md border border-border px-2 py-1 text-muted hover:bg-panel-muted" onclick={() => void loadRecentRequests()}>Try again</button></div>
+				{:else if requests.length === 0}
+					<div class="text-xs text-muted">No requests have been recorded for this key.</div>
+				{:else}
+					<div class="max-h-60 overflow-auto rounded-lg border border-border/70">
+						<table class="w-full min-w-[34rem] text-left text-[11px]">
+							<thead class="sticky top-0 bg-panel-muted text-muted"><tr><th class="px-2.5 py-2 font-medium">Time</th><th class="px-2.5 py-2 font-medium">Request</th><th class="px-2.5 py-2 font-medium">Result</th><th class="px-2.5 py-2 text-right font-medium">Duration</th></tr></thead>
+							<tbody>
+								{#each requests as request (`${request.at}-${request.method}-${request.route}-${request.status}`)}
+									<tr class="border-t border-border/60"><td class="whitespace-nowrap px-2.5 py-2 text-muted">{fmtDateTime(request.at)}</td><td class="px-2.5 py-2 font-mono">{request.method} {request.route}</td><td class="px-2.5 py-2"><span class={request.status >= 500 ? 'text-err' : request.status >= 400 ? 'text-warn' : 'text-ok'}>{request.status}</span></td><td class="px-2.5 py-2 text-right tabular-nums text-muted">{request.durationMs === undefined ? '—' : `${request.durationMs} ms`}</td></tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	{/if}

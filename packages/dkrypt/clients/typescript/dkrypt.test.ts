@@ -114,6 +114,21 @@ test('TypeScript client never sends an API key to a different origin', async () 
   expect(called).toBe(false);
 });
 
+test('TypeScript client allows plain HTTP only for localhost', async () => {
+  let called = false;
+  const fetchImpl = (async () => {
+    called = true;
+    return new Response(JSON.stringify({ id: 'job-1' }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const remote = new DkryptClient('http://dkrypt.example', { apiKey: 'dk_test_key', fetchImpl });
+  await expect(remote.request({ path: '/v1/jobs/job-1' })).rejects.toThrow('HTTPS');
+  expect(called).toBe(false);
+
+  const local = new DkryptClient('http://localhost:3000', { apiKey: 'dk_test_key', fetchImpl });
+  await expect(local.request({ path: '/v1/jobs/job-1' })).resolves.toEqual({ id: 'job-1' });
+  expect(called).toBe(true);
+});
+
 test('TypeScript client returns the HTTP error for non-object error JSON', async () => {
   const fetchImpl = (async () => new Response(JSON.stringify('upstream error'), { status: 502 })) as unknown as typeof fetch;
   const client = new DkryptClient('https://ipa.dylib.dev', { apiKey: 'dk_test_key', fetchImpl, retry: { baseDelayMs: 0 } });

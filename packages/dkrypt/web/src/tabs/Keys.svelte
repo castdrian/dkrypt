@@ -524,7 +524,7 @@
     <label for="key-name" class="mb-1 block text-xs text-muted">Name</label>
     <Input id="key-name" placeholder="e.g. laptop, ci-runner" bind:value={keyName} />
     <label for="key-expiry" class="mt-3 mb-1 block text-xs text-muted">Expires</label>
-    <Select id="key-expiry" items={EXPIRY_OPTIONS} bind:value={keyExpiry} class="w-full" />
+    <Select id="key-expiry" ariaLabel="Expires" items={EXPIRY_OPTIONS} bind:value={keyExpiry} class="w-full" />
     <label for="key-scope" class="mt-3 mb-1 block text-xs text-muted">Restrict to bundle IDs (optional)</label>
     <Input id="key-scope" placeholder="e.g. com.example.app, com.example.app2" bind:value={keyScope} />
     <div class="mt-1 text-xs text-muted">Comma-separated. Leave blank for a key that can decrypt anything.</div>

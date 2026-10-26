@@ -218,9 +218,10 @@ const optionalVersionedProperties = {
   billing: Type.Optional(JsonObject),
   identities: Type.Optional(JsonObject),
   decryptQuotaLedger: Type.Optional(Type.Array(JsonObject)),
+  apiKeyRequestHistory: Type.Optional(Type.Record(Type.String(), Type.Array(JsonObject))),
 };
 
-function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
+function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
   return Type.Object({
     backupVersion: Type.Literal(version),
     ...commonBackupProperties,
@@ -238,11 +239,12 @@ const BackupV8 = backupVersionSchema(8, BackupV8Fields);
 const BackupV9 = backupVersionSchema(9, BackupV9Fields);
 const BackupV10 = backupVersionSchema(10, BackupV10Fields);
 const BackupV11 = backupVersionSchema(11, BackupV11Fields);
+const BackupV12 = backupVersionSchema(12, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)) });
 
-export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11]);
+export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11, BackupV12]);
 
 export const backupExportResponseSchema = Type.Object({
-  ...BackupV11.properties,
+  ...BackupV12.properties,
   exportedAt: Type.Number(),
 }, { additionalProperties: true });
 

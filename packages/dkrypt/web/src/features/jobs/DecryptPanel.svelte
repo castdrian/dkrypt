@@ -45,7 +45,7 @@
 		formatSearchResultMeta,
 		shouldShowSearchResultStatus,
 	} from "#lib/searchResultPresentation";
-	import { showToast } from "#lib/ui.svelte";
+import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { cn } from "#lib/utils";
 	import TestFlightPickerDialog from "#features/testflight/TestFlightPickerDialog.svelte";
@@ -350,6 +350,14 @@
 	let etaConfidenceByBundle = $state<Record<string, string>>({});
 	let etaSamplesByBundle = $state<Record<string, number>>({});
 	const fetchedEtaBundles = new Set<string>();
+
+	$effect(() => {
+		const bundleId = decryptSearchJumpState.bundleId;
+		if (!bundleId) return;
+		decryptSearchJumpState.bundleId = null;
+		term = bundleId;
+		void runSearch(bundleId);
+	});
 
 	$effect(() => {
 		for (const r of results) {

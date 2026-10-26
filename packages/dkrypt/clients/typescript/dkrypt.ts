@@ -247,8 +247,9 @@ export class DkryptClient {
   private buildUrl(path: string): URL {
     const baseUrl = new URL(this.baseUrl);
     const url = new URL(path, baseUrl);
-    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== baseUrl.origin) {
-      throw new Error('dkrypt requests must use the configured origin');
+    const allowsHttp = ['localhost', '127.0.0.1', '[::1]'].includes(baseUrl.hostname.toLowerCase());
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== baseUrl.origin || (url.protocol === 'http:' && !allowsHttp)) {
+      throw new Error('Use an HTTPS dkrypt URL; HTTP is allowed only for localhost');
     }
     return url;
   }

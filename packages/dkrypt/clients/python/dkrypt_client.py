@@ -205,11 +205,12 @@ class DkryptClient:
         target = urlsplit(request_url)
         if (
             target.scheme.lower() not in ("http", "https")
+            or (target.scheme.lower() == "http" and target.hostname not in ("localhost", "127.0.0.1", "::1"))
             or target.username is not None
             or target.password is not None
             or self._origin(base) != self._origin(target)
         ):
-            raise ValueError("dkrypt requests must use the configured origin")
+            raise ValueError("dkrypt requests must use the configured origin over HTTPS except on localhost")
         return request_url
 
     @staticmethod

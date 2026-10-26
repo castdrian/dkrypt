@@ -24,6 +24,14 @@ class Response:
 
 
 class DkryptClientTests(unittest.TestCase):
+    def test_plain_http_is_allowed_only_for_localhost(self):
+        remote_client = DkryptClient('http://dkrypt.example', api_key='dk_test_key')
+        with self.assertRaisesRegex(ValueError, 'HTTPS'):
+            remote_client.request('GET', '/v1/jobs/job-1')
+
+        local_client = DkryptClient('http://localhost:3000', api_key='dk_test_key')
+        self.assertEqual(local_client._build_url('/v1/jobs/job-1'), 'http://localhost:3000/v1/jobs/job-1')
+
     @patch('dkrypt_client.DkryptClient._send')
     def test_decrypt_helper_sends_idempotency_key_and_version(self, send):
         send.return_value = b'{"id":"job-1","status":"queued"}'

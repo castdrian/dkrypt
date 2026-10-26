@@ -33,6 +33,8 @@ test('diagnostic reports persist across restart and are removed at their expiry'
   const restoredRepository = createDiagnosticReportRepository(openStateCollectionDatabase({ stateDir }, ['diagnostic_reports']));
   try {
     expect(restoredRepository.listByUser('member', 10)).toEqual([report]);
+    expect(restoredRepository.appendMessage(report.id, { id: 'reply-1', authorId: 'support', body: 'Try again now.', createdAt: now + 10 }, now + 10)).toMatchObject({ messages: [{ id: 'reply-1', body: 'Try again now.' }] });
+    expect(restoredRepository.findById(report.id)?.messages).toHaveLength(1);
     expect(restoredRepository.pruneExpired(report.expiresAt)).toBe(1);
     expect(restoredRepository.listRecent(10)).toEqual([]);
   } finally {

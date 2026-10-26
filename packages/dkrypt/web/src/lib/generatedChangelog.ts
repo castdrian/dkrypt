@@ -1,5 +1,25 @@
 export const GENERATED_CHANGELOG = [
   {
+    "date": "2026-10-26",
+    "title": "fix: scan each published image architecture",
+    "description": "Released in daafc56."
+  },
+  {
+    "date": "2026-10-25",
+    "title": "feat: expand operations insights and release tooling",
+    "description": "Released in b5c8c19."
+  },
+  {
+    "date": "2026-10-25",
+    "title": "feat: expand API integrations and deployment tooling",
+    "description": "Released in b9d07ad."
+  },
+  {
+    "date": "2026-10-25",
+    "title": "feat: add worker operations and workflow polish",
+    "description": "Released in a3e5e32."
+  },
+  {
     "date": "2026-10-25",
     "title": "test: persist queue deadline before worker recovery",
     "description": "Released in 008d522."
@@ -18,25 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-25",
     "title": "fix: coordinate job workers with durable leases",
     "description": "Released in d1650e5."
-  },
-  {
-    "date": "2026-10-25",
-    "title": "fix: normalize migrated project state",
-    "description": "Released in 33060de."
-  },
-  {
-    "date": "2026-10-25",
-    "title": "fix: preserve retries in generated clients",
-    "description": "Released in c26faa6."
-  },
-  {
-    "date": "2026-10-25",
-    "title": "feat: complete account-wide workflows and offline checks",
-    "description": "Released in f8ef7f5."
-  },
-  {
-    "date": "2026-10-25",
-    "title": "feat: improve workflows and remove project spaces",
-    "description": "Released in 3a80fc3."
   }
 ] as const;

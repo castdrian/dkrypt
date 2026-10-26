@@ -8,19 +8,25 @@ import { createInterface } from 'node:readline/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-const [command, ...args] = process.argv.slice(2);
+const cliArgs = process.argv.slice(2);
+let requestedProfile = process.env.DKRYPT_PROFILE;
+if (cliArgs[0] === '--profile') {
+  requestedProfile = cliArgs[1];
+  cliArgs.splice(0, 2);
+}
+const [command, ...args] = cliArgs;
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login\ndkrypt logout\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt doctor [--json]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt doctor [--json]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
 if (command === 'completion') {
   const completions = {
-    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout completion proxy-config doctor decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
-    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout completion proxy-config doctor decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
-    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout completion proxy-config doctor decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
+    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    profile) COMPREPLY=( $(compgen -W "list use delete" -- "$cur") ); return ;;\n    --profile) COMPREPLY=(); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout profile completion proxy-config doctor decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
+    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout profile completion proxy-config doctor decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    profile) _values "action" list use delete ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
+    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout profile completion proxy-config doctor decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from profile" -a "list use delete"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l profile -r\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
   };
   if (!args[0] || !(args[0] in completions)) throw new Error('Choose bash, zsh, or fish');
   process.stdout.write(completions[args[0]]);
@@ -53,12 +59,28 @@ if (command === 'proxy-config') {
 async function readSavedConfig() {
   try {
     const value = JSON.parse(await readFile(configPath, 'utf8'));
-    if (typeof value.apiUrl !== 'string' || typeof value.apiKey !== 'string') throw new Error();
-    return value;
+    if (value && typeof value.profiles === 'object' && value.profiles !== null && !Array.isArray(value.profiles)) {
+      const profiles = Object.fromEntries(Object.entries(value.profiles).filter(([name, profile]) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(name) && profile && typeof profile.apiUrl === 'string' && typeof profile.apiKey === 'string'));
+      const activeProfile = typeof value.activeProfile === 'string' && profiles[value.activeProfile] ? value.activeProfile : Object.keys(profiles)[0];
+      return { profiles, activeProfile };
+    }
+    if (typeof value.apiUrl === 'string' && typeof value.apiKey === 'string') return { activeProfile: 'default', profiles: { default: { apiUrl: value.apiUrl, apiKey: value.apiKey } } };
+    throw new Error();
   } catch (error) {
-    if (error?.code === 'ENOENT') return {};
+    if (error?.code === 'ENOENT') return { profiles: {}, activeProfile: undefined };
     throw new Error('Saved dkrypt CLI sign-in is invalid. Run dkrypt logout, then dkrypt login.');
   }
+}
+
+async function writeSavedConfig(config) {
+  await mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = configPath + '.' + process.pid + '.tmp';
+  await writeFile(temporaryPath, JSON.stringify(config), { mode: 0o600 });
+  await rename(temporaryPath, configPath);
+}
+
+function selectedProfileName(saved) {
+  return optionValue('--profile') ?? requestedProfile ?? saved.activeProfile ?? 'default';
 }
 
 function validateApiUrl(value) {
@@ -100,21 +122,23 @@ function readHiddenInput(prompt) {
 async function login() {
   if (!process.stdin.isTTY) throw new Error('dkrypt login needs an interactive terminal');
   const saved = await readSavedConfig();
+  const profileName = optionValue('--profile') ?? requestedProfile ?? saved.activeProfile ?? 'default';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(profileName)) throw new Error('Profile names must be 1 to 48 letters, numbers, hyphens, or underscores');
+  const existingProfile = saved.profiles[profileName];
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   let apiUrl;
   try {
-    const enteredUrl = await prompt.question('dkrypt URL' + (saved.apiUrl ? ' (' + saved.apiUrl + ')' : '') + ': ');
-    apiUrl = validateApiUrl(enteredUrl.trim() || saved.apiUrl || 'https://ipa.dylib.dev');
+    const enteredUrl = await prompt.question(`dkrypt URL${existingProfile?.apiUrl ? ' (' + existingProfile.apiUrl + ')' : ''}: `);
+    apiUrl = validateApiUrl(enteredUrl.trim() || existingProfile?.apiUrl || 'https://ipa.dylib.dev');
   } finally {
     prompt.close();
   }
   const apiKey = await readHiddenInput('API key (input hidden): ');
   if (apiKey.length < 8) throw new Error('Enter a valid API key');
-  await mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
-  const temporaryPath = configPath + '.' + process.pid + '.tmp';
-  await writeFile(temporaryPath, JSON.stringify({ apiUrl, apiKey }), { mode: 0o600 });
-  await rename(temporaryPath, configPath);
-  process.stdout.write('Signed in. The local configuration is readable only by your account.\n');
+  saved.profiles[profileName] = { apiUrl, apiKey };
+  saved.activeProfile = profileName;
+  await writeSavedConfig(saved);
+  process.stdout.write(`Signed in to profile "${profileName}". The local configuration is readable only by your account.\n`);
 }
 
 if (command === 'login') {
@@ -123,14 +147,51 @@ if (command === 'login') {
 }
 
 if (command === 'logout') {
-  await rm(configPath, { force: true });
-  process.stdout.write('Signed out from the saved dkrypt CLI configuration.\n');
+  const saved = await readSavedConfig();
+  const profileName = optionValue('--profile') ?? requestedProfile ?? saved.activeProfile ?? 'default';
+  delete saved.profiles[profileName];
+  const names = Object.keys(saved.profiles);
+  if (names.length === 0) await rm(configPath, { force: true });
+  else {
+    saved.activeProfile = saved.activeProfile === profileName ? names[0] : saved.activeProfile;
+    await writeSavedConfig(saved);
+  }
+  process.stdout.write(`Signed out from profile "${profileName}".\n`);
   process.exit(0);
 }
 
-const savedConfig = process.env.DKRYPT_API_URL && process.env.DKRYPT_API_KEY ? {} : await readSavedConfig();
-const baseUrl = process.env.DKRYPT_API_URL ?? savedConfig.apiUrl;
-const apiKey = process.env.DKRYPT_API_KEY ?? savedConfig.apiKey;
+if (command === 'profile') {
+  const saved = await readSavedConfig();
+  const action = args[0];
+  if (action === 'list') {
+    for (const name of Object.keys(saved.profiles).sort()) process.stdout.write(`${name}${name === saved.activeProfile ? ' (active)' : ''}\n`);
+    if (Object.keys(saved.profiles).length === 0) process.stdout.write('No saved profiles. Run dkrypt login --profile <name>.\n');
+  } else if (action === 'use') {
+    const name = args[1];
+    if (!name || !saved.profiles[name]) throw new Error('Choose an existing profile. Run dkrypt profile list.');
+    saved.activeProfile = name;
+    await writeSavedConfig(saved);
+    process.stdout.write(`Using profile "${name}".\n`);
+  } else if (action === 'delete') {
+    const name = args[1] ?? selectedProfileName(saved);
+    if (!saved.profiles[name]) throw new Error(`Profile "${name}" was not found`);
+    delete saved.profiles[name];
+    const names = Object.keys(saved.profiles);
+    if (names.length === 0) await rm(configPath, { force: true });
+    else {
+      if (saved.activeProfile === name) saved.activeProfile = names[0];
+      await writeSavedConfig(saved);
+    }
+    process.stdout.write(`Deleted profile "${name}".\n`);
+  } else throw new Error('Use dkrypt profile list, use <name>, or delete <name>');
+  process.exit(0);
+}
+
+const savedConfig = await readSavedConfig();
+const profileName = selectedProfileName(savedConfig);
+const profile = savedConfig.profiles[profileName] ?? {};
+const baseUrl = process.env.DKRYPT_API_URL ?? profile.apiUrl;
+const apiKey = process.env.DKRYPT_API_KEY ?? profile.apiKey;
 if (!baseUrl || !apiKey) throw new Error('Set DKRYPT_API_URL and DKRYPT_API_KEY in the environment, or run dkrypt login');
 validateApiUrl(baseUrl);
 const origin = new URL(baseUrl).origin;

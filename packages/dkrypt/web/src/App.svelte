@@ -9,8 +9,10 @@
 		KeyRound,
 		Lock,
 		LogOut,
+		Maximize2,
 		MessageSquareWarning,
 		Monitor,
+		Minimize2,
 		Moon,
 		Pencil,
 		PanelRightOpen,
@@ -107,6 +109,7 @@
 		setActiveTab,
 		setHighContrast,
 		setFormattingLocale,
+		setFocusView,
 		setInterfaceLanguage,
 		setSoundEnabled,
 		setTheme,
@@ -123,6 +126,7 @@
 		soundEnabledState,
 		highContrastState,
 		formattingLocaleState,
+		focusViewState,
 		interfaceLanguageState,
 		systemLocalesState,
 		tabState,
@@ -698,7 +702,7 @@ initDensity();
 	<div class="app-shell min-h-screen bg-background">
 		<MaintenanceBanner />
 		<div class="flex min-h-screen">
-			<aside class="app-sidebar relative hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex" style:width={`${sidebarState.collapsed ? 64 : sidebarState.width}px`}>
+			<aside class="app-sidebar relative hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex" style:width={`${sidebarState.collapsed ? 64 : sidebarState.width}px`} style:display={focusViewState.enabled ? 'none' : undefined}>
 				<div class={cn("border-b border-sidebar-border", sidebarState.collapsed ? "px-2 py-3" : "px-4 py-4")}>
 					<div class={cn("flex items-center gap-3", sidebarState.collapsed && "flex-col gap-1")}>
 						<div class="bg-sidebar-primary/15 flex size-9 items-center justify-center rounded-lg">
@@ -753,7 +757,7 @@ initDensity();
 				{/if}
 			</aside>
 			<div class="min-w-0 flex-1">
-		<header
+		<header style:display={focusViewState.enabled ? 'none' : undefined}
 			class="glass-topbar sticky top-0 z-30 flex flex-wrap items-center gap-3 px-3 py-3 sm:px-5 lg:flex-nowrap xl:px-8"
 		>
 			<div class="flex items-center gap-3 lg:hidden">
@@ -830,6 +834,16 @@ initDensity();
 				<Button
 					variant="secondary"
 					size="icon"
+					class="hidden lg:inline-flex"
+					onclick={() => setFocusView(true)}
+					aria-label="Enter focus view"
+					title="Enter focus view"
+				>
+					<Maximize2 class="h-4 w-4" />
+				</Button>
+				<Button
+					variant="secondary"
+					size="icon"
 					onclick={openPalette}
 					lang={interfaceLanguage}
 					aria-label={msg("command.open")}
@@ -857,7 +871,7 @@ initDensity();
 					<DropdownMenu.Trigger
 						class="relative shrink-0 cursor-pointer rounded-full border border-border transition-colors hover:border-primary"
 						lang={interfaceLanguage}
-						aria-label={msg("account.menu")}
+						aria-label={`${msg("account.menu")} ${initials(sessionState.displayName ?? sessionState.sub ?? "")}`}
 						title={msg("account.menu")}
 					>
 						<Avatar
@@ -1218,7 +1232,7 @@ initDensity();
 			</div>
 		</header>
 		<main
-			class={cn("mx-auto px-3 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-5 sm:pt-5 lg:px-6 lg:pb-6", sidebarState.collapsed ? "max-w-[2200px]" : "max-w-[1760px]")}
+			class={cn("mx-auto px-3 pt-4 sm:px-5 sm:pt-5 lg:px-6 lg:pb-6", focusViewState.enabled ? "max-w-none px-4 pb-6 sm:px-8" : sidebarState.collapsed ? "max-w-[2200px] pb-[calc(5rem+env(safe-area-inset-bottom))]" : "max-w-[1760px] pb-[calc(5rem+env(safe-area-inset-bottom))]")}
 		>
 			<SessionExpiryBanner />
 			<ConnectionBanner />
@@ -1263,13 +1277,17 @@ initDensity();
 						</div>
 					{/if}
 				</div>
-				{#if tabState.active !== "docs"}
+				{#if tabState.active !== "docs" && !focusViewState.enabled}
 					<div class="hidden min-w-0 flex-col gap-4 min-[1440px]:sticky min-[1440px]:top-6 min-[1440px]:flex">
 						<StatusPanel />
 					</div>
 				{/if}
 			</div>
 		</main>
+		{#if focusViewState.enabled}
+			<Button variant="secondary" size="icon" class="fixed top-3 right-3 z-50 shadow-lg" onclick={() => setFocusView(false)} aria-label="Exit focus view" title="Exit focus view"><Minimize2 class="h-4 w-4" /></Button>
+		{/if}
+		{#if !focusViewState.enabled}
 		<Button
 			variant="outline"
 			size="icon"
@@ -1279,7 +1297,8 @@ initDensity();
 		>
 			<PanelRightOpen class="h-4 w-4" />
 		</Button>
-		{#if mobileStatusOpen}
+		{/if}
+		{#if mobileStatusOpen && !focusViewState.enabled}
 			<Button
 				variant="ghost"
 				type="button"
@@ -1288,7 +1307,7 @@ initDensity();
 				aria-label="Close status drawer"
 			></Button>
 		{/if}
-		<aside
+		<aside style:display={focusViewState.enabled ? 'none' : undefined}
 			class={cn(
 				"fixed top-0 right-0 z-50 h-[100dvh] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto border-l border-border bg-panel p-3 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-2xl transition-transform duration-200 min-[1440px]:hidden",
 				mobileStatusOpen ? "translate-x-0" : "translate-x-full",
@@ -1303,7 +1322,7 @@ initDensity();
 			</div>
 			<StatusPanel />
 		</aside>
-		<nav class="mobile-primary-nav fixed z-40 flex overflow-x-auto border border-border bg-card p-1 shadow-lg lg:hidden" aria-label={msg("nav.primary")} lang={interfaceLanguage}>
+		<nav style:display={focusViewState.enabled ? 'none' : undefined} class="mobile-primary-nav fixed z-40 flex overflow-x-auto border border-border bg-card p-1 shadow-lg lg:hidden" aria-label={msg("nav.primary")} lang={interfaceLanguage}>
 			{#each visibleTabs as t (t.id)}
 				<Button
 					variant={tabState.active === t.id ? "secondary" : "ghost"}

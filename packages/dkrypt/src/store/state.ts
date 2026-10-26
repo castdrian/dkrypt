@@ -62,6 +62,16 @@ export interface ApiKeyOutcomeUsage {
   maxLatencyMs?: number;
 }
 
+export interface ApiKeyRequestHistoryEntry {
+  at: number;
+  method: string;
+  route: string;
+  status: number;
+  durationMs?: number;
+}
+
+const MAX_API_KEY_REQUEST_HISTORY = 500;
+
 export interface Role {
   id: string;
   name: string;
@@ -752,6 +762,7 @@ interface PersistedState {
   vapidKeys?: VapidKeys;
   apiKeyBundleUsage: Record<string, Record<string, number>>;
   apiKeyOutcomeUsage: Record<string, Record<string, ApiKeyOutcomeUsage>>;
+  apiKeyRequestHistory: Record<string, ApiKeyRequestHistoryEntry[]>;
   webhookDeliveryLog: WebhookDeliveryEntry[];
   discordRolePerks: DiscordRolePerk[];
   discordGuilds: DiscordGuildConfiguration[];
@@ -832,6 +843,7 @@ function defaultState(): PersistedState {
     pushSubscriptions: {},
     apiKeyBundleUsage: {},
     apiKeyOutcomeUsage: {},
+    apiKeyRequestHistory: {},
     webhookDeliveryLog: [],
     discordRolePerks: [],
     discordGuilds: [],
@@ -1425,6 +1437,12 @@ function normalizeLoadedState(migrated: PersistedState): PersistedState {
   migrated.testFlightCatalog = isTestFlightCatalogCacheShape(migrated.testFlightCatalog) ? migrated.testFlightCatalog : undefined;
   migrated.notifications = Array.isArray(migrated.notifications) ? migrated.notifications.slice(0, MAX_NOTIFICATIONS) : [];
   migrated.testFlightSubscriptions = Array.isArray(migrated.testFlightSubscriptions) ? migrated.testFlightSubscriptions : [];
+  migrated.apiKeyRequestHistory = migrated.apiKeyRequestHistory && typeof migrated.apiKeyRequestHistory === 'object'
+    ? Object.fromEntries(Object.entries(migrated.apiKeyRequestHistory).map(([keyId, entries]) => [
+      keyId,
+      Array.isArray(entries) ? entries.filter((entry) => typeof entry === 'object' && entry !== null && Number.isFinite(entry.at) && typeof entry.method === 'string' && typeof entry.route === 'string' && Number.isFinite(entry.status)).slice(0, MAX_API_KEY_REQUEST_HISTORY) : [],
+    ]))
+    : {};
   migrated.projects = [projectRepository.findById(DEFAULT_PROJECT_ID) ?? createDefaultProject()];
   migrated.jobHistory = migrated.jobHistory.map((entry) => ({ ...entry, projectId: DEFAULT_PROJECT_ID }));
   migrated.watches = migrated.watches.map((watch) => ({ ...watch, projectId: DEFAULT_PROJECT_ID }));
@@ -2418,6 +2436,9 @@ export function deleteUserPersonalData(username: string): boolean {
   for (const keyId of Object.keys(state.apiKeyOutcomeUsage)) {
     if (!state.apiKeys.some((key) => key.id === keyId)) delete state.apiKeyOutcomeUsage[keyId];
   }
+  for (const keyId of Object.keys(state.apiKeyRequestHistory)) {
+    if (!state.apiKeys.some((key) => key.id === keyId)) delete state.apiKeyRequestHistory[keyId];
+  }
   state.auditLog = state.auditLog.map((entry) => ({
     ...entry,
     actor: entry.actor.toLowerCase() === lower ? 'deleted-user' : entry.actor,
@@ -2593,6 +2614,7 @@ export function revokeApiKey(id: string, requesterId: string, requesterIsAdmin: 
   delete state.apiKeyUsage[id];
   delete state.apiKeyBundleUsage[id];
   delete state.apiKeyOutcomeUsage[id];
+  delete state.apiKeyRequestHistory[id];
   persistNow();
   return true;
 }
@@ -2718,8 +2740,20 @@ export function getApiKeyBundleUsage(id: string, limit = 10): { bundleId: string
 
 const MAX_TRACKED_OUTCOMES_PER_KEY = 30;
 
+function safeApiRoute(path: string): string {
+  const route = path.split('?', 1)[0].split('/').map((segment) => {
+    if (/^[0-9]+$/.test(segment) || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment)) return ':id';
+    if (/^[A-Za-z0-9_-]{32,}$/.test(segment)) return ':id';
+    if (/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,}$/.test(segment)) return ':id';
+    return segment;
+  }).join('/');
+  return route.slice(0, 200);
+}
+
 export function recordApiKeyOutcome(id: string, method: string, path: string, status: number, durationMs?: number): void {
-  const route = `${method} ${path}`;
+  const normalizedMethod = method.toUpperCase().slice(0, 10);
+  const normalizedPath = safeApiRoute(path);
+  const route = `${normalizedMethod} ${normalizedPath}`;
   const perKey = state.apiKeyOutcomeUsage[id] ?? {};
   const outcome = perKey[route] ?? { route, success: 0, clientError: 0, serverError: 0, lastAt: Date.now() };
   if (status < 400) outcome.success += 1;
@@ -2738,6 +2772,15 @@ export function recordApiKeyOutcome(id: string, method: string, path: string, st
     if (oldest) delete perKey[oldest];
   }
   state.apiKeyOutcomeUsage[id] = perKey;
+  const history = state.apiKeyRequestHistory[id] ?? [];
+  history.unshift({
+    at: outcome.lastAt,
+    method: normalizedMethod,
+    route: normalizedPath,
+    status: Math.max(100, Math.min(599, Math.floor(status))),
+    ...(durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {}),
+  });
+  state.apiKeyRequestHistory[id] = history.slice(0, MAX_API_KEY_REQUEST_HISTORY);
   dirty = true;
 }
 
@@ -2745,6 +2788,10 @@ export function getApiKeyOutcomeUsage(id: string, limit = 10): ApiKeyOutcomeUsag
   return Object.values(state.apiKeyOutcomeUsage[id] ?? {})
     .sort((a, b) => b.lastAt - a.lastAt)
     .slice(0, limit);
+}
+
+export function getApiKeyRequestHistory(id: string, limit = 100): ApiKeyRequestHistoryEntry[] {
+  return (state.apiKeyRequestHistory[id] ?? []).slice(0, Math.max(1, Math.min(MAX_API_KEY_REQUEST_HISTORY, Math.floor(limit)))).map((entry) => ({ ...entry }));
 }
 
 export function getUserPriority(username: string): number {
@@ -3957,7 +4004,7 @@ export function markNotificationsRead(userId: string, ids?: string[]): number {
   return changed;
 }
 
-const BACKUP_VERSION = 11;
+const BACKUP_VERSION = 12;
 
 type BackupDeviceRecord = Omit<DeviceRecord, 'transport' | 'host' | 'udid'>
   & { transport: DeviceTransport }
@@ -3985,6 +4032,7 @@ export interface BackupPayload {
   rootSessionVersion: number;
   apiKeyUsage: Record<string, ApiKeyUsageBucket[]>;
   apiKeyBundleUsage: Record<string, Record<string, number>>;
+  apiKeyRequestHistory: Record<string, ApiKeyRequestHistoryEntry[]>;
   deviceActivity: DeviceActivityEntry[];
   testFlightSubscriptions: TestFlightSubscription[];
   rootMfa?: UserMfaRecord;
@@ -4037,6 +4085,7 @@ export function exportBackup(): BackupPayload {
     rootSessionVersion: state.rootSessionVersion,
     apiKeyUsage: state.apiKeyUsage,
     apiKeyBundleUsage: state.apiKeyBundleUsage,
+    apiKeyRequestHistory: state.apiKeyRequestHistory,
     deviceActivity: state.deviceActivity,
     testFlightSubscriptions: getTestFlightSubscriptions(),
     rootMfa: state.rootMfa,
@@ -4448,6 +4497,7 @@ interface ValidatedBackupPayload {
   rootSessionVersion: number;
   apiKeyUsage: Record<string, ApiKeyUsageBucket[]>;
   apiKeyBundleUsage?: Record<string, Record<string, number>>;
+  apiKeyRequestHistory?: Record<string, ApiKeyRequestHistoryEntry[]>;
   deviceActivity?: DeviceActivityEntry[];
   testFlightSubscriptions: TestFlightSubscription[];
   rootMfa?: UserMfaRecord;
@@ -4470,8 +4520,11 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'not a valid backup file' };
   const b = raw as Record<string, unknown>;
 
-  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== BACKUP_VERSION) {
+  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== BACKUP_VERSION) {
     return { ok: false, error: `unsupported backup version (expected 3 through ${BACKUP_VERSION})` };
+  }
+  if (b.backupVersion >= 12 && (typeof b.apiKeyRequestHistory !== 'object' || b.apiKeyRequestHistory === null || Array.isArray(b.apiKeyRequestHistory) || Object.values(b.apiKeyRequestHistory).some((entries) => !Array.isArray(entries) || !entries.every((entry) => typeof entry === 'object' && entry !== null && Number.isFinite(entry.at) && typeof entry.method === 'string' && typeof entry.route === 'string' && Number.isFinite(entry.status))))) {
+    return { ok: false, error: 'apiKeyRequestHistory is missing or malformed' };
   }
   if (b.backupVersion === BACKUP_VERSION && (!Array.isArray(b.decryptQuotaLedger) || !b.decryptQuotaLedger.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.jobId === 'string' && typeof entry.ownerId === 'string' && Number.isFinite(entry.admittedAt) && ['reserved', 'consumed'].includes(entry.state)))) {
     return { ok: false, error: 'decrypt quota ledger is missing or malformed' };
@@ -4586,6 +4639,7 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
         typeof b.apiKeyBundleUsage === 'object' && b.apiKeyBundleUsage !== null
           ? (b.apiKeyBundleUsage as Record<string, Record<string, number>>)
           : undefined,
+      apiKeyRequestHistory: b.backupVersion >= 12 ? b.apiKeyRequestHistory as Record<string, ApiKeyRequestHistoryEntry[]> : {},
       deviceActivity: Array.isArray(b.deviceActivity) ? (b.deviceActivity as DeviceActivityEntry[]) : undefined,
       testFlightSubscriptions: Array.isArray(b.testFlightSubscriptions) ? (b.testFlightSubscriptions as TestFlightSubscription[]) : [],
       rootMfa: b.rootMfa as UserMfaRecord | undefined,
@@ -4656,7 +4710,7 @@ export interface BackupRestoreDrill {
   checks: { label: string; ok: boolean; detail: string }[];
 }
 
-function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedState, 'allowedUsers' | 'roles' | 'projects' | 'apiKeys' | 'settings' | 'watches' | 'devices' | 'jobHistory' | 'auditLog' | 'schedulerRunHistory' | 'userPrefs' | 'apiKeyUsage' | 'rootSessionVersion' | 'apiKeyBundleUsage' | 'deviceActivity' | 'testFlightSubscriptions' | 'rootMfa' | 'passkeys'> {
+function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedState, 'allowedUsers' | 'roles' | 'projects' | 'apiKeys' | 'settings' | 'watches' | 'devices' | 'jobHistory' | 'auditLog' | 'schedulerRunHistory' | 'userPrefs' | 'apiKeyUsage' | 'rootSessionVersion' | 'apiKeyBundleUsage' | 'apiKeyRequestHistory' | 'deviceActivity' | 'testFlightSubscriptions' | 'rootMfa' | 'passkeys'> {
   return {
     allowedUsers: payload.allowedUsers.map((user) => ({ ...user, username: user.username.toLowerCase() })),
     roles: payload.roles.map((role) => ({ ...role, permissions: serializeBits(consolidatePermissionBits(upgradePermissionBits(parseBits(role.permissions)))) })),
@@ -4675,6 +4729,7 @@ function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedSt
     apiKeyUsage: payload.apiKeyUsage,
     rootSessionVersion: payload.rootSessionVersion,
     apiKeyBundleUsage: payload.apiKeyBundleUsage ?? {},
+    apiKeyRequestHistory: payload.apiKeyRequestHistory ?? {},
     deviceActivity: payload.deviceActivity?.slice(0, MAX_DEVICE_ACTIVITY) ?? [],
     testFlightSubscriptions: payload.testFlightSubscriptions.map(cloneTestFlightSubscription),
     rootMfa: payload.rootMfa,
@@ -4780,6 +4835,7 @@ function restoredStateForPayload(payload: ValidatedBackupPayload, restored: Back
   const restoredState: PersistedState = { ...structuredClone(baseState), ...restored };
   if (payload.lastSchedulerRunAt) restoredState.lastSchedulerRunAt = payload.lastSchedulerRunAt;
   restoredState.apiKeyBundleUsage = payload.apiKeyBundleUsage ?? {};
+  restoredState.apiKeyRequestHistory = payload.apiKeyRequestHistory ?? {};
   restoredState.apiKeyOutcomeUsage = {};
   restoredState.deviceActivity = payload.deviceActivity?.slice(0, MAX_DEVICE_ACTIVITY) ?? [];
   return restoredState;

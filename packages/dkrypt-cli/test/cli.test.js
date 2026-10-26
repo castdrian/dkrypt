@@ -63,6 +63,77 @@ test('CLI logout removes saved credentials without requiring API credentials', a
   await assert.rejects(readFile(configPath));
 });
 
+test('CLI profiles list names without revealing credentials and switch the active profile', async () => {
+  const configPath = '/tmp/dkrypt-cli-profiles-' + process.pid + '.json';
+  const config = {
+    activeProfile: 'home',
+    profiles: {
+      home: { apiUrl: 'https://home.example', apiKey: 'home-secret-key' },
+      work: { apiUrl: 'https://work.example', apiKey: 'work-secret-key' },
+    },
+  };
+  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const listed = spawn(process.execPath, [cliPath, 'profile', 'list'], { env: { ...process.env, DKRYPT_CONFIG_PATH: configPath } });
+  const listResult = await new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    listed.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    listed.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    listed.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  assert.equal(listResult.status, 0, listResult.stderr);
+  assert.match(listResult.stdout, /home \(active\)/);
+  assert.match(listResult.stdout, /work/);
+  assert.doesNotMatch(listResult.stdout, /secret/);
+  const switched = spawn(process.execPath, [cliPath, 'profile', 'use', 'work'], { env: { ...process.env, DKRYPT_CONFIG_PATH: configPath } });
+  const switchResult = await new Promise((resolve) => {
+    let stderr = '';
+    switched.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    switched.on('close', (status) => resolve({ status, stderr }));
+  });
+  assert.equal(switchResult.status, 0, switchResult.stderr);
+  assert.equal(JSON.parse(await readFile(configPath, 'utf8')).activeProfile, 'work');
+});
+
+test('CLI one-off profile selection uses only that profile for API calls', async () => {
+  const configPath = '/tmp/dkrypt-cli-selected-profile-' + process.pid + '.json';
+  await writeFile(configPath, JSON.stringify({
+    activeProfile: 'home',
+    profiles: {
+      home: { apiUrl: 'https://home.example', apiKey: 'home-secret-key' },
+      lab: { apiUrl: 'http://127.0.0.1:0', apiKey: 'lab-secret-key' },
+    },
+  }), { mode: 0o600 });
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, authorization: request.headers.authorization });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ id: 'job-lab', status: 'queued' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  try {
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.profiles.lab.apiUrl = `http://127.0.0.1:${address.port}`;
+    await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const child = spawn(process.execPath, [cliPath, '--profile', 'lab', 'status', 'job-lab'], { env: { ...process.env, DKRYPT_CONFIG_PATH: configPath } });
+    const result = await new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /job-lab/);
+    assert.deepEqual(requests, [{ url: '/v1/jobs/job-lab', authorization: 'Bearer lab-secret-key' }]);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('CLI status sends the API key to the scoped job endpoint', async () => {
   const requests = [];
   const server = createServer((request, response) => {

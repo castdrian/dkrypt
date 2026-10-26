@@ -76,10 +76,10 @@
 </script>
 
 <Popover.Root bind:open {onOpenChange}>
-  <Popover.Trigger class={cn(buttonVariants('secondary', 'icon'), 'relative')} aria-label="Notifications" title="Notifications">
+  <Popover.Trigger class={cn(buttonVariants('secondary', 'icon'), 'relative')} aria-label={unseenCount > 0 ? `Notifications ${unseenCount > 9 ? '9+' : unseenCount}` : 'Notifications'} title="Notifications">
     <Bell class="h-4 w-4" />
     {#if unseenCount > 0}
-      <span class="bg-err absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-medium text-white">
+      <span aria-hidden="true" class="bg-err absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-medium text-white">
         {unseenCount > 9 ? '9+' : unseenCount}
       </span>
     {/if}

@@ -69,6 +69,7 @@ import {
   recordApiKeyBundleUsage,
   recordApiKeyOutcome,
   getApiKeyOutcomeUsage,
+  getApiKeyRequestHistory,
   recordJobHistory,
   recordJobResolutionNotice,
   recordNotification,
@@ -582,7 +583,7 @@ describe('exportBackup / importBackup', () => {
     addAllowedUser('roundtrip-user', [role.id], 'tester');
     const backup = exportBackup();
 
-    expect(backup.backupVersion).toBe(11);
+    expect(backup.backupVersion).toBe(12);
     expect(backup.allowedUsers.some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(backup).not.toHaveProperty('projects');
 
@@ -873,16 +874,19 @@ describe('exportBackup / importBackup', () => {
   test('snapshot JSON and SQLite include state mutations pending the periodic flush', () => {
     const usageKey = `backup-consistency-${randomUUID()}`;
     recordApiKeyBundleUsage(usageKey, 'com.example.pending');
+    recordApiKeyOutcome(usageKey, 'GET', '/v1/jobs/:id', 200, 12);
     const entry = createBackupSnapshot('manual', 'backup-consistency-test');
     const jsonPath = path.join(config.stateDir, 'backups', entry.filename);
     const databasePath = path.join(config.stateDir, 'backups', entry.databaseFilename!);
-    const payload = JSON.parse(readFileSync(jsonPath, 'utf8')) as { apiKeyBundleUsage: Record<string, Record<string, number>> };
+    const payload = JSON.parse(readFileSync(jsonPath, 'utf8')) as { apiKeyBundleUsage: Record<string, Record<string, number>>; apiKeyRequestHistory: Record<string, Array<{ route: string }>> };
     const database = openStateDatabase({ stateDir: path.dirname(databasePath), filename: path.basename(databasePath) });
 
     try {
-      const stored = database.readState() as { apiKeyBundleUsage: Record<string, Record<string, number>> };
+      const stored = database.readState() as { apiKeyBundleUsage: Record<string, Record<string, number>>; apiKeyRequestHistory: Record<string, Array<{ route: string }>> };
       expect(payload.apiKeyBundleUsage[usageKey]).toEqual({ 'com.example.pending': 1 });
       expect(stored.apiKeyBundleUsage[usageKey]).toEqual(payload.apiKeyBundleUsage[usageKey]);
+      expect(payload.apiKeyRequestHistory[usageKey]).toHaveLength(1);
+      expect(stored.apiKeyRequestHistory[usageKey]).toEqual(payload.apiKeyRequestHistory[usageKey]);
       expect(entry.restoreDrillStatus).toBe('passed');
     } finally {
       database.close();
@@ -904,6 +908,19 @@ describe('exportBackup / importBackup', () => {
       latencyCount: 2,
       averageLatencyMs: 20,
       maxLatencyMs: 30,
+    }]);
+  });
+
+  test('API key request history stores route-level outcomes without identifiers or query values', () => {
+    const keyId = `request-history-${randomUUID()}`;
+    recordApiKeyOutcome(keyId, 'get', '/v1/jobs/123456?token=secret', 503, 12.4);
+
+    expect(getApiKeyRequestHistory(keyId)).toEqual([{
+      at: expect.any(Number),
+      method: 'GET',
+      route: '/v1/jobs/:id',
+      status: 503,
+      durationMs: 12,
     }]);
   });
 

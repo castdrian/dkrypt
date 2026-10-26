@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { Check, CircleCheck, CircleX, Download, ExternalLink, Gauge, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, ShieldCheck, X, Zap } from 'lucide-svelte';
+  import { Check, CircleCheck, CircleX, Download, ExternalLink, Gauge, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, Search, ShieldCheck, X, Zap } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import Card from '#lib/components/ui/Card.svelte';
   import LegalLinks from '#components/LegalLinks.svelte';
-  import { pushDecryptUsageAlertThresholds, refreshSession } from '#lib/session.svelte';
+  import { pushDecryptUsageAlertThresholds, refreshSession, sessionHasPermission } from '#lib/session.svelte';
+  import { PermissionFlag } from '#lib/permissions';
   import { confirmDialog, decryptUsageAlertThresholdsState, showToast } from '#lib/ui.svelte';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
-  import { fetchBillingInvoices, redeemBillingAccessCode, type BillingInvoice } from '#lib/api';
+  import { fetchBillingInvoices, fetchBillingQuotaHistory, redeemBillingAccessCode, type BillingInvoice, type BillingQuotaHistoryEntry } from '#lib/api';
 
   type PlanId = 'viewer' | 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
   type CheckoutState = 'success' | 'cancelled' | undefined;
@@ -81,6 +82,14 @@
   let billing = $state<BillingData | undefined>();
   let invoices = $state<BillingInvoice[]>([]);
   let invoiceWarnings = $state<string[]>([]);
+  let receiptQuery = $state('');
+  let receiptProvider = $state<'all' | 'stripe' | 'nowpayments'>('all');
+  let receiptStatus = $state('all');
+  let quotaHistory = $state<BillingQuotaHistoryEntry[] | null>(null);
+  let quotaHistoryOpen = $state(false);
+  let quotaHistoryLoading = $state(false);
+  let accessCheckLoading = $state(false);
+  let accessCheckLines = $state<Array<{ label: string; ok: boolean; detail: string }> | null>(null);
   let loading = $state(true);
   let loadError = $state(false);
   let openingPlan = $state<PlanId | undefined>();
@@ -97,6 +106,24 @@
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
+  const visibleInvoices = $derived.by(() => invoices.filter((invoice) => {
+    const query = receiptQuery.trim().toLowerCase();
+    return (receiptProvider === 'all' || invoice.provider === receiptProvider)
+      && (receiptStatus === 'all' || invoice.status === receiptStatus)
+      && (!query || `${invoice.id} ${invoice.paymentId ?? ''} ${invoice.planId} ${invoice.provider}`.toLowerCase().includes(query));
+  }));
+  const planFit = $derived.by(() => {
+    if (!billing || billing.usageForecast.jobsInSample < 3) return null;
+    if (billing.entitlement.legacy) return { legacy: true as const, plan: undefined, expectedDaily: 0 };
+    const expectedDaily = billing.usageForecast.averagePerDay * 1.25;
+    const needsApi = billing.currentPlan?.api === true;
+    const needsPriority = (billing.currentPlan?.priority ?? 0) > 0;
+    const plan = [...billing.plans]
+      .filter((candidate) => !candidate.legacy && (!needsApi || candidate.api) && (!needsPriority || candidate.priority > 0))
+      .sort((a, b) => a.amount - b.amount)
+      .find((candidate) => candidate.dailyDecryptLimit === undefined || candidate.dailyDecryptLimit >= expectedDaily);
+    return { legacy: false as const, plan, expectedDaily };
+  });
 
   async function loadBilling(): Promise<void> {
     const response = await fetch('/v1/billing');
@@ -129,6 +156,43 @@
     const current = decryptUsageAlertThresholdsState.value;
     const next = current.includes(threshold) ? current.filter((value) => value !== threshold) : [...current, threshold];
     void pushDecryptUsageAlertThresholds(next).catch((error) => showToast(error instanceof Error ? error.message : 'Could not save usage alerts', 'error'));
+  }
+
+  async function checkAccess(): Promise<void> {
+    accessCheckLoading = true;
+    try {
+      await Promise.all([loadBilling(), refreshSession()]);
+      if (!billing) return;
+      const decryptReady = billing.entitlement.decrypt && sessionHasPermission(PermissionFlag.requestDecrypt);
+      const apiReady = billing.entitlement.api && sessionHasPermission(PermissionFlag.accessApi);
+      accessCheckLines = [
+        { label: 'Decrypt jobs', ok: decryptReady, detail: decryptReady ? 'Your plan and account permission both allow decrypt requests.' : billing.entitlement.decrypt ? 'Your plan is active, but your account role does not allow decrypt requests.' : 'Your current plan does not include paid decrypt access.' },
+        { label: 'IPA Library', ok: billing.entitlement.decrypt, detail: billing.entitlement.decrypt ? 'Your plan includes artifact library access.' : 'An active decrypt plan is required for paid library access.' },
+        { label: 'API keys', ok: apiReady, detail: apiReady ? 'Your plan and account permission allow API access.' : billing.entitlement.api ? 'Your plan includes API access, but your account role does not allow it.' : 'Your plan does not include API access.' },
+      ];
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not check account access.', 'error');
+    } finally {
+      accessCheckLoading = false;
+    }
+  }
+
+  async function toggleQuotaHistory(): Promise<void> {
+    quotaHistoryOpen = !quotaHistoryOpen;
+    if (!quotaHistoryOpen || quotaHistory !== null) return;
+    quotaHistoryLoading = true;
+    try {
+      quotaHistory = (await fetchBillingQuotaHistory()).entries;
+    } catch (error) {
+      quotaHistory = [];
+      showToast(error instanceof Error ? error.message : 'Could not load quota history.', 'error');
+    } finally {
+      quotaHistoryLoading = false;
+    }
+  }
+
+  function showPlan(plan: Plan): void {
+    document.getElementById(`billing-plan-${plan.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   function usageForecastLabel(): string {
@@ -366,10 +430,12 @@
       {#if billing}
         <div class="flex flex-wrap items-center gap-2">
           <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={statusVariant(billing.entitlement.status)} class="mt-1">{billing.entitlement.provider === 'gift' ? 'Prepaid' : statusLabel(billing.entitlement.status)}</Badge></div>
+          <Button variant="secondary" loading={accessCheckLoading} onclick={() => void checkAccess()}>Check my access</Button>
           {#if billing.entitlement.provider === 'stripe' && billing.customerId}<Button variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}><ExternalLink class="h-4 w-4" /> Manage billing</Button>{:else if billing.entitlement.provider === 'nowpayments'}<Button variant="secondary" loading={cancelling} onclick={() => void cancelSubscription()}>Stop crypto renewal</Button>{/if}
         </div>
       {/if}
     </div>
+    {#if accessCheckLines}<div class="mt-4 grid gap-2 rounded-xl border border-border bg-bg/40 p-3 sm:grid-cols-3" aria-live="polite">{#each accessCheckLines as line (line.label)}<div class="flex items-start gap-2 text-xs"><span class={line.ok ? 'text-ok' : 'text-warn'}>{#if line.ok}<Check class="size-3.5" />{:else}<CircleX class="size-3.5" />{/if}</span><span><span class="font-medium">{line.label}</span><span class="mt-0.5 block text-muted">{line.detail}</span></span></div>{/each}</div>{/if}
     {#if billing && billing.entitlement.planId !== 'viewer'}
       <div class="mt-4 rounded-xl border border-border bg-bg/50 px-3 py-3 text-sm">
         <div class="flex flex-wrap items-center gap-2 font-medium">Your decrypt allowance {#if billing.entitlement.legacy}<Badge variant="secondary">Grandfathered</Badge>{/if}</div>
@@ -378,7 +444,9 @@
         {#if billing.quota.limit !== null}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-2 rounded-lg border border-border/70 px-3 py-2"><div class="flex items-center justify-between gap-3 text-xs"><span>API request limit</span><span class="tabular-nums">{billing.apiRateUsage?.used ?? 0} of {billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute} per minute</span></div><div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-muted"><div class="h-full rounded-full bg-accent transition-[width]" style={`width: ${Math.min(100, ((billing.apiRateUsage?.used ?? 0) / (billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute)) * 100)}%`}></div></div><div class="mt-1 text-[11px] text-muted">Shared across all your API keys. Resets continuously over a rolling minute.</div></div>{/if}
         {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
-        <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a></div>
+        <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a><Button size="sm" variant="secondary" onclick={() => void toggleQuotaHistory()}>{quotaHistoryOpen ? 'Hide allowance history' : 'View allowance history'}</Button></div>
+        {#if quotaHistoryOpen}<div class="mt-3 border-t border-border pt-3">{#if quotaHistoryLoading}<div class="text-xs text-muted" role="status">Loading allowance history…</div>{:else if quotaHistory?.length}<ul class="divide-y divide-border/70">{#each quotaHistory as entry (`${entry.jobId}-${entry.at}`)}<li class="flex flex-wrap items-center justify-between gap-2 py-2 text-xs"><span class="min-w-0"><span class="font-medium">{entry.bundleId ?? 'Decrypt request'}</span>{#if entry.versionLabel}<span class="text-muted"> · {entry.versionLabel}</span>{/if}<span class="mt-0.5 block text-muted">{entry.status} · {entry.source ?? 'unknown source'}</span></span><span class="shrink-0 text-muted">{formatDate(new Date(entry.at).toISOString())} · {entry.state === 'consumed' ? 'used' : 'reserved'}</span></li>{/each}</ul>{:else}<div class="text-xs text-muted">No allowance activity is recorded yet.</div>{/if}</div>{/if}
+        {#if planFit}<div class="mt-3 rounded-lg border border-border/70 bg-panel-muted/30 p-3 text-xs"><div class="font-medium">Plan fit for your recent usage</div>{#if planFit.legacy}<p class="mt-1 text-muted">Your current plan is grandfathered. Its benefits stay in place; dkrypt will not recommend a switch that could remove them.</p>{:else if planFit.plan}<p class="mt-1 text-muted">At about {planFit.expectedDaily.toFixed(1)} decrypts per day with a 25% buffer, {planFit.plan.name} is the lowest-priced tier that fits. This estimate uses your recent usage and preserves any API or priority access already on your plan.</p><Button class="mt-2" size="sm" variant="secondary" onclick={() => showPlan(planFit.plan!)}>Compare {planFit.plan.name}</Button>{:else}<p class="mt-1 text-muted">No new tier covers this usage while preserving your current API and priority benefits. Your existing plan remains unchanged.</p>{/if}</div>{/if}
       </div>
     {/if}
   </Card>
@@ -387,13 +455,14 @@
     <Card>
       <div><h3 class="text-sm font-semibold">Invoices and payment receipts</h3><p class="mt-1 text-xs text-muted">Recent Stripe invoices and dkrypt crypto payment records for this account.</p></div>
       {#if invoiceWarnings.length}<div class="mt-3 text-xs text-muted">{invoiceWarnings.join(' · ')}</div>{/if}
-      {#if invoices.length}
+      <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_10rem_10rem]"><label class="relative"><Search class="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" /><input class="h-9 w-full rounded-lg border border-border bg-bg pl-9 pr-3 text-xs" bind:value={receiptQuery} placeholder="Search receipts" aria-label="Search receipts" /></label><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={receiptProvider} aria-label="Filter by payment provider"><option value="all">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option></select><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={receiptStatus} aria-label="Filter by payment status"><option value="all">All statuses</option>{#each [...new Set(invoices.map((invoice) => invoice.status))].sort() as status (status)}<option value={status}>{status}</option>{/each}</select></div>
+      {#if visibleInvoices.length}
         <ul class="mt-3 divide-y divide-border/70">
-          {#each invoices as invoice (invoice.id)}
-            <li class="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div class="min-w-0"><div class="font-medium">{planLabel(invoice.planId as PlanId)} · {invoice.provider === 'stripe' ? 'Stripe' : 'Crypto'}</div><div class="mt-1 text-xs text-muted">{formatDate(invoice.createdAt)} · {invoice.status}</div></div><div class="flex items-center gap-3"><span class="font-medium">{fmtCurrency(invoice.amountMinor / 100, invoice.currency)}</span>{#if invoice.invoiceUrl}<a class="rounded-md border border-border p-2" href={invoice.invoiceUrl} target="_blank" rel="noreferrer" aria-label="Open invoice"><ExternalLink class="h-4 w-4" /></a>{/if}</div></li>
+          {#each visibleInvoices as invoice (invoice.id)}
+            <li class="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div class="min-w-0"><div class="font-medium">{planLabel(invoice.planId as PlanId)} · {invoice.provider === 'stripe' ? 'Stripe' : 'Crypto'}</div><div class="mt-1 text-xs text-muted">{formatDate(invoice.createdAt)} · {invoice.status}</div><div class="mt-1 max-w-full truncate font-mono text-[10px] text-muted" data-sensitive="true">{invoice.provider === 'stripe' ? invoice.id : invoice.paymentId ?? invoice.id}</div></div><div class="flex items-center gap-3"><span class="font-medium">{fmtCurrency(invoice.amountMinor / 100, invoice.currency)}</span>{#if invoice.invoiceUrl}<a class="rounded-md border border-border p-2" href={invoice.invoiceUrl} target="_blank" rel="noreferrer" aria-label="Open invoice"><ExternalLink class="h-4 w-4" /></a>{/if}</div></li>
           {/each}
         </ul>
-      {:else if !invoiceWarnings.length}<p class="mt-3 text-sm text-muted">No payments have been recorded yet.</p>{/if}
+      {:else if invoices.length}<p class="mt-3 text-sm text-muted">No receipts match these filters.</p>{:else if !invoiceWarnings.length}<p class="mt-3 text-sm text-muted">No payments have been recorded yet.</p>{/if}
     </Card>
   {/if}
 
@@ -442,7 +511,7 @@
         {@const cryptoRenewal = billing.entitlement.provider === 'nowpayments' && billing.entitlement.status === 'past_due' && current}
         {@const blockedCryptoChange = billing.entitlement.provider === 'nowpayments' && billing.entitlement.status === 'past_due' && !current}
         {@const highlighted = plan.id === 'unlimited_priority' || plan.id === 'priority_api'}
-        <Card class={highlighted ? 'border-accent shadow-lg shadow-accent/10' : current ? 'border-ok/50' : ''}>
+        <Card id={`billing-plan-${plan.id}`} class={highlighted ? 'border-accent shadow-lg shadow-accent/10' : current ? 'border-ok/50' : ''}>
           <div class="flex h-full min-h-80 flex-col">
             <div class="mb-4 flex items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><h3 class="text-base font-semibold">{plan.name}</h3>{#if highlighted}<Badge>Highest priority</Badge>{/if}{#if current}<Badge variant="success">Current</Badge>{/if}</div><p class="mt-1 text-sm text-muted">{plan.description}</p></div>{#if plan.priority > 0}<Zap class="h-5 w-5 shrink-0 text-accent" />{:else if plan.api}<KeyRound class="h-5 w-5 shrink-0 text-accent" />{:else}<Gauge class="h-5 w-5 shrink-0 text-accent" />{/if}</div>
             <div class="mb-5"><span class="text-3xl font-semibold">{fallbackPrice(plan)}</span><span class="text-sm text-muted">{paymentProvider === 'crypto' ? '/30 days' : '/month'}</span></div>
