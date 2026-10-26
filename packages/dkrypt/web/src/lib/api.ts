@@ -492,6 +492,84 @@ export function fetchDashboardArtifactContents(id: string, options: { q?: string
   return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/contents?${params}`);
 }
 
+export interface IpaExecutableSlice {
+  architecture: string;
+  platform?: string;
+  minimumOsVersion?: string;
+  sdkVersion?: string;
+}
+
+export interface IpaExecutableReport {
+  path: string;
+  kind: 'app' | 'extension' | 'framework' | 'dynamic-library' | 'other';
+  bundleId?: string;
+  slices: IpaExecutableSlice[];
+  analysisState: 'analyzed' | 'too_large' | 'invalid';
+}
+
+export interface IpaSigningProfileReport {
+  path: string;
+  name?: string;
+  uuid?: string;
+  teamIdentifiers: string[];
+  platforms: string[];
+  createdAt?: string;
+  expiresAt?: string;
+  provisionedDeviceCount?: number;
+  distribution: 'development' | 'ad_hoc' | 'enterprise' | 'app_store' | 'unknown';
+  getTaskAllowed?: boolean;
+  applicationIdentifier?: string;
+}
+
+export interface IpaAssetReport {
+  path: string;
+  sizeBytes: number;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+}
+
+export interface IpaAnalysisReport {
+  executables: IpaExecutableReport[];
+  signing: { signatureFiles: string[]; profiles: IpaSigningProfileReport[]; certificateDetailsAvailable: false };
+  assets: IpaAssetReport[];
+  assetsTruncated: boolean;
+  totalFiles: number;
+}
+
+export interface ArtifactPrivateNote {
+  artifactId: string;
+  note: string;
+}
+
+export function fetchDashboardArtifactAnalysis(id: string): Promise<{ report: IpaAnalysisReport }> {
+  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/analysis`);
+}
+
+export async function fetchDashboardArtifactAssetPreview(id: string, assetPath: string): Promise<Blob> {
+  const params = new URLSearchParams({ path: assetPath });
+  const response = await request(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/asset-preview?${params}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(apiErrorMessage(body, response.status), response.status);
+  }
+  return response.blob();
+}
+
+export function fetchDashboardArtifactNote(id: string): Promise<ArtifactPrivateNote> {
+  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/note`);
+}
+
+export function updateDashboardArtifactNote(id: string, note: string): Promise<ArtifactPrivateNote> {
+  return apiJson(`/v1/dashboard/artifacts/${encodeURIComponent(id)}/note`, { method: 'PUT', body: JSON.stringify({ note }) });
+}
+
+export function analyzeDashboardIpa(file: File): Promise<IpaAnalysisReport> {
+  return apiJson('/v1/dashboard/ipa-analysis', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/vnd.dkrypt.ipa' },
+    body: file,
+  });
+}
+
 export interface ArtifactStructureComparison {
   before: { id: string; bundleId: string; versionLabel?: string; fileSizeBytes: number };
   after: { id: string; bundleId: string; versionLabel?: string; fileSizeBytes: number };

@@ -507,6 +507,7 @@ export interface TestFlightSubscription {
 
 export interface UserPrefs {
   artifactFilenameTemplate?: string;
+  artifactNotes?: Record<string, string>;
   shortcutBindings?: Record<string, string>;
   formattingLocale?: 'system' | 'en' | 'de';
   interfaceLanguage?: 'system' | 'en' | 'de';

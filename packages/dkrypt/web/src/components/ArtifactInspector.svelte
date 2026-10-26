@@ -1,17 +1,18 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { Copy, Download, FileSearch, FolderTree, Share2 } from 'lucide-svelte';
+  import { Copy, Download, FileSearch, FolderTree, Share2, ShieldCheck } from 'lucide-svelte';
   import AppIcon from '#components/AppIcon.svelte';
   import InspectorPane from '#components/InspectorPane.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import { buttonVariants } from '#lib/components/ui/variants';
-  import { fetchDashboardArtifact, fetchDashboardArtifactContents, type ArtifactPackageEntry, type ArtifactRecord } from '#lib/api';
+  import { fetchDashboardArtifact, fetchDashboardArtifactAnalysis, fetchDashboardArtifactAssetPreview, fetchDashboardArtifactContents, fetchDashboardArtifactNote, updateDashboardArtifactNote, type ArtifactPackageEntry, type ArtifactRecord, type IpaAnalysisReport } from '#lib/api';
   import { appDisplayName, appIconUrl } from '#lib/appCatalog.svelte';
   import { fmtSize, fmtTime } from '#lib/format.svelte';
   import { artifactDetailJumpState } from '#lib/ui.svelte';
   import { setQueryParams } from '#lib/urlState';
   import { showToast } from '#lib/ui.svelte';
+  import IpaAnalysisPanel from '#features/artifacts/IpaAnalysisPanel.svelte';
 
   let artifact = $state<ArtifactRecord | null>(null);
   let open = $state(false);
@@ -24,6 +25,15 @@
   let contentsEntries = $state<ArtifactPackageEntry[]>([]);
   let contentsNextOffset = $state<number | undefined>();
   let contentsTotal = $state(0);
+  let analysisOpen = $state(false);
+  let analysisLoading = $state(false);
+  let analysisError = $state('');
+  let analysisReport = $state<IpaAnalysisReport | null>(null);
+  let note = $state('');
+  let savedNote = $state('');
+  let noteLoading = $state(false);
+  let noteSaving = $state(false);
+  let noteError = $state('');
   let requestVersion = 0;
 
   async function loadArtifact(id: string): Promise<void> {
@@ -39,7 +49,17 @@
         contentsEntries = [];
         contentsNextOffset = undefined;
         contentsQuery = '';
+        analysisOpen = false;
+        analysisLoading = false;
+        analysisError = '';
+        analysisReport = null;
+        note = '';
+        savedNote = '';
+        noteLoading = false;
+        noteSaving = false;
+        noteError = '';
         setQueryParams({ artifact: id });
+        void loadNote(result.id, version);
       }
     } catch (cause) {
       if (version === requestVersion) error = cause instanceof Error ? cause.message : 'Could not load artifact details';
@@ -69,6 +89,14 @@
       contentsNextOffset = undefined;
       loading = false;
       error = '';
+      analysisOpen = false;
+      analysisReport = null;
+      analysisError = '';
+      note = '';
+      savedNote = '';
+      noteLoading = false;
+      noteSaving = false;
+      noteError = '';
       artifactDetailJumpState.id = null;
       setQueryParams({ artifact: undefined });
     }
@@ -121,6 +149,56 @@
     if (contentsOpen && contentsEntries.length === 0) await loadContents(true);
   }
 
+  async function loadNote(id: string, version: number): Promise<void> {
+    noteLoading = true;
+    try {
+      const result = await fetchDashboardArtifactNote(id);
+      if (version !== requestVersion) return;
+      note = result.note;
+      savedNote = result.note;
+    } catch (cause) {
+      if (version === requestVersion) noteError = cause instanceof Error ? cause.message : 'Could not load your private note';
+    } finally {
+      if (version === requestVersion) noteLoading = false;
+    }
+  }
+
+  async function saveNote(): Promise<void> {
+    if (!artifact || noteSaving) return;
+    const artifactId = artifact.id;
+    const version = requestVersion;
+    const submittedNote = note;
+    noteSaving = true;
+    noteError = '';
+    try {
+      const result = await updateDashboardArtifactNote(artifactId, submittedNote);
+      if (version !== requestVersion || artifact?.id !== artifactId) return;
+      note = result.note;
+      savedNote = result.note;
+      showToast('Private note saved', 'success');
+    } catch (cause) {
+      if (version === requestVersion && artifact?.id === artifactId) noteError = cause instanceof Error ? cause.message : 'Could not save your private note';
+    } finally {
+      if (version === requestVersion && artifact?.id === artifactId) noteSaving = false;
+    }
+  }
+
+  async function toggleAnalysis(): Promise<void> {
+    analysisOpen = !analysisOpen;
+    if (!analysisOpen || !artifact || analysisReport || analysisLoading) return;
+    analysisLoading = true;
+    analysisError = '';
+    const version = requestVersion;
+    try {
+      const result = await fetchDashboardArtifactAnalysis(artifact.id);
+      if (version === requestVersion) analysisReport = result.report;
+    } catch (cause) {
+      if (version === requestVersion) analysisError = cause instanceof Error ? cause.message : 'Could not analyze this IPA';
+    } finally {
+      if (version === requestVersion) analysisLoading = false;
+    }
+  }
+
   onDestroy(() => {
     requestVersion += 1;
   });
@@ -167,6 +245,28 @@
           <div><dt class="font-medium text-text">Signing</dt><dd>The code signature used by iOS to validate an app. Decrypting does not automatically make an IPA installable on every device.</dd></div>
         </dl>
       </details>
+    </section>
+    <section class="mt-4 overflow-hidden rounded-xl border border-border/70" aria-labelledby="artifact-inspector-analysis">
+      <button id="artifact-inspector-analysis" class="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-expanded={analysisOpen} onclick={() => void toggleAnalysis()}>
+        <ShieldCheck class="h-4 w-4 text-accent" /> Executable, signing and asset analysis <span class="ml-auto text-xs font-normal text-muted">{analysisReport ? `${analysisReport.executables.length} binaries` : 'Inspect IPA'}</span>
+      </button>
+      {#if analysisOpen}
+        <div class="border-t border-border/70 p-3">
+          {#if analysisLoading}<div class="py-6 text-center text-xs text-muted" role="status">Analyzing package…</div>
+          {:else if analysisError}<div class="text-xs text-err" role="alert">{analysisError}</div>
+          {:else if analysisReport}<IpaAnalysisPanel report={analysisReport} previewAsset={(assetPath) => fetchDashboardArtifactAssetPreview(artifact!.id, assetPath)} />{/if}
+        </div>
+      {/if}
+    </section>
+    <section class="mt-4 rounded-xl border border-border/70 p-4" aria-labelledby="artifact-inspector-note">
+      <h3 id="artifact-inspector-note" class="text-sm font-semibold">Your private note</h3>
+      <p class="mt-1 text-xs text-muted">Only you can see this note.</p>
+      <textarea class="mt-3 min-h-24 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm" maxlength="2000" bind:value={note} disabled={noteLoading || noteSaving} aria-label="Private artifact note" placeholder="Add a note for yourself"></textarea>
+      {#if noteError}<p class="mt-2 text-xs text-err" role="alert">{noteError}</p>{/if}
+      <div class="mt-2 flex items-center justify-between gap-2">
+        <span class="text-[11px] text-muted">{note.length}/2000</span>
+        <Button size="sm" variant="secondary" loading={noteSaving || noteLoading} disabled={note === savedNote} onclick={() => void saveNote()}>Save note</Button>
+      </div>
     </section>
     <section class="mt-4 overflow-hidden rounded-xl border border-border/70" aria-labelledby="artifact-inspector-contents">
       <button id="artifact-inspector-contents" class="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-expanded={contentsOpen} onclick={() => void toggleContents()}>

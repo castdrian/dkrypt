@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '#config.js';
 import type { ExtractedIpaMetadata } from '#util/ipaMetadata.js';
 import type { FairPlayVerificationResult } from '#util/ipaFairPlay.js';
+import type { IpaAnalysisReport, IpaAssetReport } from '#ipaAnalysis.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { commandWithResourceLimits } from '#jobs/resourceLimits.js';
 
@@ -16,23 +17,106 @@ interface IpaInspectionProcessResult {
   verification: FairPlayVerificationResult;
 }
 
-const MAX_INSPECTION_OUTPUT_BYTES = 1024 * 1024;
+const MAX_INSPECTION_OUTPUT_BYTES = 12 * 1024 * 1024;
 const workerPath = fileURLToPath(new URL('./ipaInspectionWorker.ts', import.meta.url));
 
-function workerCommand(ipaPath: string): string[] {
-  const limited = commandWithResourceLimits(process.execPath, [workerPath, ipaPath], config.appStoreOfflineWorkerMemoryMb, config.appStoreOfflineInspectTimeoutSeconds);
+interface IpaInspectionWaiter {
+  resolve: (release: () => void) => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+export class IpaInspectionCapacityError extends Error {
+  readonly retryAfterSeconds = 5;
+
+  constructor() {
+    super('IPA analysis is busy; retry shortly');
+  }
+}
+
+export class IpaInspectionCapacity {
+  private active = 0;
+  private readonly queue: IpaInspectionWaiter[] = [];
+
+  constructor(private readonly maximumActive: number, private readonly maximumQueued: number) {}
+
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('IPA inspection was cancelled'));
+    if (this.active < this.maximumActive) {
+      this.active += 1;
+      return Promise.resolve(this.createRelease());
+    }
+    if (this.queue.length >= this.maximumQueued) return Promise.reject(new IpaInspectionCapacityError());
+
+    return new Promise((resolve, reject) => {
+      const waiter: IpaInspectionWaiter = { resolve, reject, signal };
+      waiter.onAbort = () => {
+        const index = this.queue.indexOf(waiter);
+        if (index < 0) return;
+        this.queue.splice(index, 1);
+        reject(signal?.reason instanceof Error ? signal.reason : new Error('IPA inspection was cancelled'));
+      };
+      signal?.addEventListener('abort', waiter.onAbort, { once: true });
+      this.queue.push(waiter);
+      if (signal?.aborted) waiter.onAbort();
+    });
+  }
+
+  async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquire(signal);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private createRelease(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const waiter = this.queue.shift();
+      if (waiter) {
+        if (waiter.onAbort) waiter.signal?.removeEventListener('abort', waiter.onAbort);
+        waiter.resolve(this.createRelease());
+      } else {
+        this.active -= 1;
+      }
+    };
+  }
+}
+
+const ipaAnalysisCapacity = new IpaInspectionCapacity(1, 2);
+
+function workerCommand(ipaPath: string, mode: 'inspect' | 'analysis' | 'asset-preview', extraArgs: string[] = []): string[] {
+  const limited = commandWithResourceLimits(process.execPath, [workerPath, ipaPath, mode, ...extraArgs], config.appStoreOfflineWorkerMemoryMb, config.appStoreOfflineInspectTimeoutSeconds);
   return [limited.command, ...limited.args];
 }
 
-export function inspectIpaInIsolatedProcess(
+function runIpaWorker(
   ipaPath: string,
+  mode: 'inspect' | 'analysis' | 'asset-preview',
+  extraArgs: string[] = [],
   signal?: AbortSignal,
   onChildProcess?: (child: ChildProcess | undefined) => void,
-): Promise<IpaInspection> {
+): Promise<unknown> {
+  const operation = () => runIpaWorkerProcess(ipaPath, mode, extraArgs, signal, onChildProcess);
+  return mode === 'inspect' ? operation() : ipaAnalysisCapacity.run(operation, signal);
+}
+
+function runIpaWorkerProcess(
+  ipaPath: string,
+  mode: 'inspect' | 'analysis' | 'asset-preview',
+  extraArgs: string[] = [],
+  signal?: AbortSignal,
+  onChildProcess?: (child: ChildProcess | undefined) => void,
+): Promise<unknown> {
   if (signal?.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('IPA inspection was cancelled'));
 
   return new Promise((resolve, reject) => {
-    const [command, ...args] = workerCommand(ipaPath);
+    const [command, ...args] = workerCommand(ipaPath, mode, extraArgs);
     const child = spawn(command!, args, {
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
@@ -97,14 +181,47 @@ export function inspectIpaInIsolatedProcess(
         return;
       }
       try {
-        const result = JSON.parse(stdout.toString('utf8')) as IpaInspectionProcessResult;
-        if (!result.metadata?.summary || !result.metadata.infoPlist || !result.verification?.primaryExecutable) {
-          throw new Error('IPA inspection worker returned an invalid result');
-        }
-        resolve(result);
+        resolve(JSON.parse(stdout.toString('utf8')));
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  });
+}
+
+export function inspectIpaInIsolatedProcess(
+  ipaPath: string,
+  signal?: AbortSignal,
+  onChildProcess?: (child: ChildProcess | undefined) => void,
+): Promise<IpaInspection> {
+  return runIpaWorker(ipaPath, 'inspect', [], signal, onChildProcess).then((value) => {
+    const result = value as IpaInspectionProcessResult;
+    if (!result.metadata?.summary || !result.metadata.infoPlist || !result.verification?.primaryExecutable) throw new Error('IPA inspection worker returned an invalid result');
+    return result;
+  });
+}
+
+export function analyzeIpaInIsolatedProcess(
+  ipaPath: string,
+  signal?: AbortSignal,
+  onChildProcess?: (child: ChildProcess | undefined) => void,
+): Promise<IpaAnalysisReport> {
+  return runIpaWorker(ipaPath, 'analysis', [], signal, onChildProcess).then((value) => {
+    const result = value as IpaAnalysisReport;
+    if (!Array.isArray(result.executables) || !Array.isArray(result.assets) || !Array.isArray(result.signing?.profiles)) throw new Error('IPA analysis worker returned an invalid result');
+    return result;
+  });
+}
+
+export function readIpaAssetPreviewInIsolatedProcess(
+  ipaPath: string,
+  assetPath: string,
+  signal?: AbortSignal,
+  onChildProcess?: (child: ChildProcess | undefined) => void,
+): Promise<{ data: Buffer; mimeType: IpaAssetReport['mimeType'] }> {
+  return runIpaWorker(ipaPath, 'asset-preview', [assetPath], signal, onChildProcess).then((value) => {
+    const result = value as { data?: unknown; mimeType?: unknown };
+    if (typeof result.data !== 'string' || !/^(?:image\/png|image\/jpeg|image\/gif|image\/webp)$/.test(String(result.mimeType))) throw new Error('IPA asset preview worker returned an invalid result');
+    return { data: Buffer.from(result.data, 'base64'), mimeType: result.mimeType as IpaAssetReport['mimeType'] };
   });
 }

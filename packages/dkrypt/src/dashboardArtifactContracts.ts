@@ -55,6 +55,47 @@ export const dashboardArtifactContentsResponseSchema = Type.Object({
   nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
 }, additionalProperties);
 
+const ipaAnalysisResponseSchema = Type.Object({
+  executables: Type.Array(Type.Object({
+    path: Type.String(),
+    kind: Type.Union([Type.Literal('app'), Type.Literal('extension'), Type.Literal('framework'), Type.Literal('dynamic-library'), Type.Literal('other')]),
+    bundleId: Type.Optional(bundleIdSchema),
+    slices: Type.Array(Type.Object({
+      architecture: Type.String(),
+      platform: Type.Optional(Type.String()),
+      minimumOsVersion: Type.Optional(Type.String()),
+      sdkVersion: Type.Optional(Type.String()),
+    }, additionalProperties)),
+    analysisState: Type.Union([Type.Literal('analyzed'), Type.Literal('too_large'), Type.Literal('invalid')]),
+  }, additionalProperties)),
+  signing: Type.Object({
+    signatureFiles: Type.Array(Type.String()),
+    profiles: Type.Array(Type.Object({
+      path: Type.String(),
+      name: Type.Optional(Type.String()),
+      uuid: Type.Optional(Type.String()),
+      teamIdentifiers: Type.Array(Type.String()),
+      platforms: Type.Array(Type.String()),
+      createdAt: Type.Optional(Type.String()),
+      expiresAt: Type.Optional(Type.String()),
+      provisionedDeviceCount: Type.Optional(Type.Integer({ minimum: 0 })),
+      distribution: Type.Union([Type.Literal('development'), Type.Literal('ad_hoc'), Type.Literal('enterprise'), Type.Literal('app_store'), Type.Literal('unknown')]),
+      getTaskAllowed: Type.Optional(Type.Boolean()),
+      applicationIdentifier: Type.Optional(Type.String()),
+    }, additionalProperties)),
+    certificateDetailsAvailable: Type.Literal(false),
+  }, additionalProperties),
+  assets: Type.Array(Type.Object({ path: Type.String(), sizeBytes: Type.Integer({ minimum: 0 }), mimeType: Type.String() }, additionalProperties)),
+  assetsTruncated: Type.Boolean(),
+  totalFiles: Type.Integer({ minimum: 0 }),
+}, additionalProperties);
+
+export const dashboardArtifactNoteBodySchema = Type.Object({ note: Type.String({ maxLength: 2_000 }) }, additionalProperties);
+export const dashboardArtifactNoteResponseSchema = Type.Object({ artifactId: identifierSchema, note: Type.String({ maxLength: 2_000 }), updatedAt: Type.Optional(Type.Number({ minimum: 0 })) }, additionalProperties);
+export const dashboardIpaAnalysisResponseSchema = Type.Object({ report: ipaAnalysisResponseSchema }, additionalProperties);
+export const dashboardIpaAnalysisUploadResponseSchema = ipaAnalysisResponseSchema;
+export const dashboardArtifactAssetPreviewQuerySchema = Type.Object({ path: Type.String({ minLength: 1, maxLength: 1_024 }) }, additionalProperties);
+
 export const dashboardArtifactPinBodySchema = Type.Object({ pinned: Type.Boolean() }, additionalProperties);
 
 export const dashboardArtifactPinResponseSchema = Type.Object({
@@ -179,6 +220,27 @@ export type DashboardArtifactContentsRoute = {
   Params: Static<typeof dashboardArtifactParamsSchema>;
   Querystring: Static<typeof dashboardArtifactContentsQuerySchema>;
   Reply: { 200: Static<typeof dashboardArtifactContentsResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactAnalysisRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Reply: { 200: Static<typeof dashboardIpaAnalysisResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope; 429: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactNoteRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Reply: { 200: Static<typeof dashboardArtifactNoteResponseSchema>; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactNoteUpdateRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Body: Static<typeof dashboardArtifactNoteBodySchema>;
+  Reply: { 200: Static<typeof dashboardArtifactNoteResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope; 409: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactAssetPreviewRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Querystring: Static<typeof dashboardArtifactAssetPreviewQuerySchema>;
 };
 
 export type DashboardArtifactPinRoute = {

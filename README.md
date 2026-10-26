@@ -193,7 +193,7 @@ Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility polic
 GitHub workflows can use the [dkrypt decrypt action](action.yml) to submit a decrypt, wait for its result, and download the IPA. Pin a released version:
 
 ```yaml
-- uses: castdrian/dkrypt@v1.1.1
+- uses: castdrian/dkrypt@v1.2.0
   id: decrypt
   with:
     api-key: ${{ secrets.DKRYPT_API_KEY }}
@@ -205,6 +205,55 @@ The action verifies the downloaded IPA’s SHA-256 and byte count against dkrypt
 Set `channel: testflight` and omit `version` to resolve the latest available TestFlight build. Set `version` to an exact selector such as `352.0_118977` to request a specific build. To download an existing result without submitting a decrypt, pass `artifact-id` or `latest-cached-channel: testflight` (or `appstore`). These artifact modes are mutually exclusive with each other and with a new decrypt request. Use an API key with decrypt and artifact access, and TestFlight scope when requesting TestFlight builds.
 
 Set `resolve-only: 'true'` to return the matching release version, build, channel, and cache status without creating a job or downloading an IPA. To process several apps in one step, pass `bundle-ids` as a JSON array; the action records per-app outcomes in `results-json`, adds a workflow summary table, and fails the step if any app fails. The output `path` for each successful download is included in that app’s result.
+
+For independent jobs per app, use a GitHub Actions matrix:
+
+```yaml
+name: decrypt-matrix
+on:
+  workflow_dispatch:
+jobs:
+  decrypt:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle_id:
+          - com.example.app
+          - com.example.another
+    steps:
+      - uses: castdrian/dkrypt@v1.2.0
+        id: decrypt
+        with:
+          api-key: ${{ secrets.DKRYPT_API_KEY }}
+          bundle-id: ${{ matrix.bundle_id }}
+          channel: testflight
+```
+
+The action can also publish an already verified IPA to a GitHub Release. Grant `contents: write`, set `publish-to-release: 'true'`, pass `github-token: ${{ github.token }}` and an existing `release-tag`. Release creation is opt-in with `create-release: 'true'`; in a matrix, create the release in a separate job before parallel uploads. The action refuses an existing asset with the same name and returns `release-url` and `release-asset-url`.
+
+```yaml
+name: publish-decrypted-ipa
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: castdrian/dkrypt@v1.2.0
+        with:
+          api-key: ${{ secrets.DKRYPT_API_KEY }}
+          bundle-id: com.example.app
+          publish-to-release: 'true'
+          github-token: ${{ github.token }}
+          release-tag: ${{ github.ref_name }}
+```
+
+For Fastlane, use the local plugin in [fastlane-plugin-dkrypt](fastlane-plugin-dkrypt/README.md). It submits App Store or TestFlight jobs and only exposes the downloaded IPA after size and SHA-256 verification. The generated [Swift client](packages/dkrypt/clients/swift/DkryptClient.swift) supports release resolution, job waiting, artifact listing, and verified downloads; [download its SDK archive](packages/dkrypt/web/public/downloads/dkrypt-swift-sdk.zip).
+
+The dashboard artifact inspector includes an analyze-only IPA upload, executable compatibility details, signing and provisioning summaries, and an image asset browser. Analyze-only uploads are temporary and do not queue a decrypt or add an artifact to the library. Artifact notes are private to the signed-in account.
 
 Dashboard, billing, account, session, health, and administration routes are internal to dkrypt and are not available to generated API keys. The public OpenAPI document is available at `/openapi.json` and the Scalar reference UI at `/reference`.
 

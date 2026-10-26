@@ -42,6 +42,33 @@ inputs:
     description: Maximum total time for all IPA download attempts
     required: false
     default: '600'
+  publish-to-release:
+    description: Upload the verified IPA to a GitHub Release after download
+    required: false
+    default: 'false'
+  github-token:
+    description: Token with contents:write permission for release publishing
+    required: false
+  release-tag:
+    description: Existing GitHub Release tag to receive the IPA
+    required: false
+  create-release:
+    description: Create a GitHub Release when the tag does not already have one
+    required: false
+    default: 'false'
+  release-name:
+    description: Name to use if the action creates a release
+    required: false
+  release-notes:
+    description: Notes to use if the action creates a release
+    required: false
+  release-draft:
+    description: Create new releases as drafts
+    required: false
+    default: 'false'
+  release-asset-name:
+    description: Optional .ipa filename to use for the uploaded release asset
+    required: false
 outputs:
   job-id:
     description: Created or reused dkrypt job ID; empty when downloading an existing artifact
@@ -97,6 +124,12 @@ outputs:
   failure-count:
     description: Number of failed apps in a bundle-ids run
     value: ${{ steps.dkrypt.outputs.failure-count }}
+  release-url:
+    description: GitHub Release page receiving the verified IPA; empty when publishing is disabled
+    value: ${{ steps.dkrypt.outputs.release-url }}
+  release-asset-url:
+    description: Download URL for the uploaded release IPA; empty when publishing is disabled
+    value: ${{ steps.dkrypt.outputs.release-asset-url }}
 runs:
   using: composite
   steps:
@@ -115,4 +148,12 @@ runs:
         DKRYPT_OUTPUT: ${{ inputs.output }}
         DKRYPT_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
         DKRYPT_DOWNLOAD_TIMEOUT_SECONDS: ${{ inputs.download-timeout-seconds }}
+        DKRYPT_PUBLISH_TO_RELEASE: ${{ inputs.publish-to-release }}
+        DKRYPT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        DKRYPT_RELEASE_TAG: ${{ inputs.release-tag }}
+        DKRYPT_RELEASE_NAME: ${{ inputs.release-name }}
+        DKRYPT_RELEASE_NOTES: ${{ inputs.release-notes }}
+        DKRYPT_CREATE_RELEASE: ${{ inputs.create-release }}
+        DKRYPT_RELEASE_DRAFT: ${{ inputs.release-draft }}
+        DKRYPT_RELEASE_ASSET_NAME: ${{ inputs.release-asset-name }}
       run: node "$GITHUB_ACTION_PATH/action.mjs"

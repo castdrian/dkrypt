@@ -8,7 +8,7 @@ Import the source from the Go client folder or download the Go SDK archive. Crea
 
 ## Swift
 
-Add `DkryptClient.swift` to an app target or download the Swift SDK archive. Use the async `decrypt`, `getJob`, `listArtifacts`, and `downloadArtifact` methods.
+Add `DkryptClient.swift` to an app target or download the Swift SDK archive. Use `resolveRelease` to resolve the latest App Store or TestFlight build, `decrypt` and `waitForJob` to run a job, and `listArtifacts` and `downloadArtifact` to retrieve results. Both download methods verify the reported byte count and SHA-256 before returning data or promoting a file.
 
 ## Rust
 

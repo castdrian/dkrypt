@@ -4,6 +4,7 @@ import { appendFile, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
+import { publishVerifiedIpaToGitHubRelease } from './github-release.mjs';
 
 const BUNDLE_ID_RE = /^[A-Za-z0-9.-]{3,200}$/;
 
@@ -17,7 +18,7 @@ function safeFilePart(value) {
   return String(value ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function isResolveOnly(value) {
+function isEnabled(value) {
   return value === true || String(value).toLowerCase() === 'true';
 }
 
@@ -103,7 +104,8 @@ async function runSingleAction(config, dependencies = {}) {
   const downloadTimeoutSeconds = validatePositiveInteger(config.downloadTimeoutSeconds ?? 600, 'Download timeout', 3_600);
   const artifactId = config.artifactId?.trim();
   const latestCachedChannel = config.latestCachedChannel?.trim();
-  const resolveOnly = isResolveOnly(config.resolveOnly);
+  const resolveOnly = isEnabled(config.resolveOnly);
+  const publishToRelease = isEnabled(config.publishToRelease);
   const artifactModeCount = Number(Boolean(artifactId)) + Number(Boolean(latestCachedChannel));
   const summaryContext = dependencies.summaryContext;
   if (summaryContext) {
@@ -117,6 +119,7 @@ async function runSingleAction(config, dependencies = {}) {
     throw new Error('artifact downloads cannot be combined with bundle-id or version');
   }
   if (resolveOnly && artifactModeCount > 0) throw new Error('resolve-only cannot be combined with artifact download inputs');
+  if (resolveOnly && publishToRelease) throw new Error('publish-to-release requires a downloaded IPA and cannot be combined with resolve-only');
   if (latestCachedChannel && !['appstore', 'testflight'].includes(latestCachedChannel)) {
     throw new Error('latest-cached-channel must be appstore or testflight');
   }
@@ -264,6 +267,30 @@ async function runSingleAction(config, dependencies = {}) {
     retryMaxMs: dependencies.retryMaxMs,
   });
 
+  const release = publishToRelease
+    ? await (dependencies.publishRelease ?? publishVerifiedIpaToGitHubRelease)({
+      token: config.githubToken,
+      repository: config.githubRepository,
+      apiUrl: config.githubApiUrl,
+      tag: config.releaseTag,
+      releaseName: config.releaseName,
+      releaseNotes: config.releaseNotes,
+      createRelease: isEnabled(config.createRelease),
+      draft: isEnabled(config.releaseDraft),
+      assetName: config.releaseAssetName?.trim() || `${safeFilePart(artifact.bundleId)}-${safeFilePart(artifact.versionLabel ?? artifact.buildNumber ?? artifact.id)}.ipa`,
+      filePath: download.outputPath,
+      sha256: download.sha256,
+      sizeBytes: download.sizeBytes,
+    }, {
+      fetchImpl: dependencies.githubFetchImpl,
+      sleep: dependencies.sleep,
+      log,
+      maxAttempts: dependencies.githubMaxAttempts,
+      requestTimeoutMs: dependencies.githubRequestTimeoutMs,
+      uploadTimeoutSeconds: dependencies.githubUploadTimeoutSeconds,
+    })
+    : undefined;
+
   const isTestFlight = artifact.channel === 'testflight';
   const resolvedVersion = artifact.versionLabel ?? '';
   const build = artifact.buildNumber ?? '';
@@ -285,6 +312,8 @@ async function runSingleAction(config, dependencies = {}) {
     'size-bytes': String(download.sizeBytes),
     path: download.outputPath,
     output: download.outputPath,
+    'release-url': release?.releaseUrl ?? '',
+    'release-asset-url': release?.assetUrl ?? '',
   };
   await writeOutputs(outputFile, Object.fromEntries(Object.entries(outputs).filter(([name]) => name !== 'job-id' || !jobId)));
   log(`Downloaded and verified ${artifact.channel} IPA (${download.sizeBytes} bytes, SHA-256 ${download.sha256}) at ${download.outputPath}`);
@@ -296,6 +325,7 @@ async function runSingleAction(config, dependencies = {}) {
     artifactId: artifact.id,
     sizeBytes: download.sizeBytes,
     path: download.outputPath,
+    releaseUrl: release?.releaseUrl,
   });
   return outputs;
 }
@@ -358,7 +388,7 @@ export async function runBatchAction(config, dependencies = {}) {
   for (const bundleId of bundleIds) {
     const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dkrypt-action-app-'));
     const temporaryOutput = path.join(temporaryDirectory, 'outputs');
-    const resolveOnly = isResolveOnly(config.resolveOnly);
+    const resolveOnly = isEnabled(config.resolveOnly);
     const output = resolveOnly ? '' : path.join(directory, `${safeFilePart(bundleId)}.ipa`);
     try {
     const result = await runAction({
@@ -386,6 +416,8 @@ export async function runBatchAction(config, dependencies = {}) {
         sha256: outputs.sha256 || undefined,
         sizeBytes: outputs.size_bytes ? Number(outputs.size_bytes) : undefined,
         path: outputs.path || undefined,
+        releaseUrl: outputs['release-url'] || undefined,
+        releaseAssetUrl: outputs['release-asset-url'] || undefined,
         resolveOnly,
       });
       if (result.path) process.stdout.write(`Completed ${bundleId}: ${result.path}\n`);
@@ -421,6 +453,8 @@ export async function runBatchAction(config, dependencies = {}) {
     'size-bytes': '',
     path: '',
     output: '',
+    'release-url': '',
+    'release-asset-url': '',
     'results-json': JSON.stringify(results),
     'success-count': String(successCount),
     'failure-count': String(failureCount),
@@ -444,6 +478,16 @@ async function main() {
     resolveOnly: process.env.DKRYPT_RESOLVE_ONLY ?? '',
     timeoutSeconds: process.env.DKRYPT_TIMEOUT_SECONDS ?? '1800',
     downloadTimeoutSeconds: process.env.DKRYPT_DOWNLOAD_TIMEOUT_SECONDS ?? '600',
+    publishToRelease: process.env.DKRYPT_PUBLISH_TO_RELEASE ?? '',
+    githubToken: process.env.DKRYPT_GITHUB_TOKEN ?? '',
+    githubRepository: process.env.GITHUB_REPOSITORY ?? '',
+    githubApiUrl: process.env.GITHUB_API_URL ?? '',
+    releaseTag: process.env.DKRYPT_RELEASE_TAG ?? '',
+    releaseName: process.env.DKRYPT_RELEASE_NAME ?? '',
+    releaseNotes: process.env.DKRYPT_RELEASE_NOTES ?? '',
+    createRelease: process.env.DKRYPT_CREATE_RELEASE ?? '',
+    releaseDraft: process.env.DKRYPT_RELEASE_DRAFT ?? '',
+    releaseAssetName: process.env.DKRYPT_RELEASE_ASSET_NAME ?? '',
   };
   return config.bundleIds.trim() ? runBatchAction(config) : runAction(config);
 }

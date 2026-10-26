@@ -1,14 +1,15 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import { Archive, ArchiveRestore, Download, Grid2X2, List, Pin, PinOff, RefreshCw, X } from 'lucide-svelte';
+  import { Archive, ArchiveRestore, Download, Grid2X2, List, Pin, PinOff, RefreshCw, ScanSearch, X } from 'lucide-svelte';
   import AppIcon from '#components/AppIcon.svelte';
   import EmptyState from '#components/EmptyState.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import Card from '#lib/components/ui/Card.svelte';
   import Input from '#lib/components/ui/Input.svelte';
+  import Dialog from '#lib/components/ui/Dialog.svelte';
   import Select from '#lib/components/ui/Select.svelte';
-  import { downloadDashboardArtifactsZip, fetchArtifacts, observeArtifacts, setDashboardArtifactArchived, setDashboardArtifactPinned, setDashboardArtifactsArchived, setDashboardArtifactsArchivedByQuery, setDashboardArtifactsPinned, setDashboardArtifactsPinnedByQuery, undoDashboardArtifactChanges, type ArtifactRecord, type ArtifactUndoChange } from '#lib/api';
+  import { analyzeDashboardIpa, downloadDashboardArtifactsZip, fetchArtifacts, observeArtifacts, setDashboardArtifactArchived, setDashboardArtifactPinned, setDashboardArtifactsArchived, setDashboardArtifactsArchivedByQuery, setDashboardArtifactsPinned, setDashboardArtifactsPinnedByQuery, undoDashboardArtifactChanges, type ArtifactRecord, type ArtifactUndoChange, type IpaAnalysisReport } from '#lib/api';
   import { appDisplayName, appIconUrl, ensureAppCatalog } from '#lib/appCatalog.svelte';
   import { fmtBytesGB, fmtSize } from '#lib/format.svelte';
   import { createSavedViews } from '#lib/savedViews.svelte';
@@ -26,6 +27,7 @@
   import { getQueryParam, setQueryParams } from '#lib/urlState';
   import ArtifactLibraryRow from '#features/artifacts/ArtifactLibraryRow.svelte';
   import ArtifactCompareDialog from '#features/artifacts/ArtifactCompareDialog.svelte';
+  import IpaAnalysisPanel from '#features/artifacts/IpaAnalysisPanel.svelte';
 
   type ArtifactSourceFilter = 'all' | ArtifactRecord['channel'];
 
@@ -72,6 +74,12 @@
   let error = $state('');
   let refreshError = $state('');
   let archiveAnnouncement = $state('');
+  let analysisDialogOpen = $state(false);
+  let analysisUploadLoading = $state(false);
+  let analysisUploadError = $state('');
+  let analysisUploadName = $state('');
+  let analysisUploadReport = $state<IpaAnalysisReport | null>(null);
+  let analysisFileInput = $state<HTMLInputElement>();
   let stopObservingArtifacts: (() => void) | undefined;
   let artifactLoadVersion = 0;
   let artifactPageVersion = 0;
@@ -479,6 +487,25 @@
       bulkUpdating = false;
     }
   }
+
+  async function analyzeSelectedFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    analysisDialogOpen = true;
+    analysisUploadLoading = true;
+    analysisUploadError = '';
+    analysisUploadName = file.name;
+    analysisUploadReport = null;
+    try {
+      analysisUploadReport = await analyzeDashboardIpa(file);
+    } catch (cause) {
+      analysisUploadError = cause instanceof Error ? cause.message : 'Could not analyze this IPA';
+    } finally {
+      analysisUploadLoading = false;
+    }
+  }
 </script>
 
 {#if canDecrypt}
@@ -495,6 +522,8 @@
             <div class="text-muted mt-0.5 text-xs">{fmtBytesGB(totalBytes)} / {fmtBytesGB(maxBytes)} used</div>
           </div>
           <div class="flex shrink-0 items-center gap-1">
+            <input bind:this={analysisFileInput} class="sr-only" type="file" accept=".ipa,application/octet-stream" aria-label="Choose IPA to analyze" onchange={analyzeSelectedFile} />
+            <Button variant="secondary" size="sm" disabled={analysisUploadLoading} onclick={() => analysisFileInput?.click()}><ScanSearch class="h-3.5 w-3.5" />Analyze IPA</Button>
             {#if artifacts.length > 0}
               <Button variant={selectingArtifacts ? 'secondary' : 'ghost'} size="sm" aria-pressed={selectingArtifacts} onclick={toggleArtifactSelectionMode}>{selectingArtifacts ? 'Done selecting' : 'Select items'}</Button>
             {/if}
@@ -651,6 +680,16 @@
 </Card>
 {/if}
 <ArtifactCompareDialog bind:open={comparisonOpen} ids={comparisonIds} />
+<Dialog bind:open={analysisDialogOpen} title="Analyze IPA" class="max-h-[90dvh] max-w-5xl overflow-y-auto">
+  <div class="mb-4 flex items-start justify-between gap-3">
+    <div class="min-w-0"><h2 class="text-base font-semibold">Analyze IPA</h2><p class="mt-1 break-all text-xs text-muted">{analysisUploadName}</p></div>
+    <Button size="sm" variant="secondary" onclick={() => (analysisDialogOpen = false)}>Close</Button>
+  </div>
+  <p class="mb-4 rounded-lg border border-border/70 bg-panel-muted/30 p-3 text-xs text-muted">Analyze-only mode inspects the selected file for compatibility, signing, provisioning and images. It does not create a decrypt job or save the IPA to the library.</p>
+  {#if analysisUploadLoading}<div class="py-10 text-center text-sm text-muted" role="status">Uploading and analyzing IPA…</div>
+  {:else if analysisUploadError}<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-err" role="alert">{analysisUploadError}</div>
+  {:else if analysisUploadReport}<IpaAnalysisPanel report={analysisUploadReport} />{/if}
+</Dialog>
 
 <style>
   :global(.artifact-results-viewport) {

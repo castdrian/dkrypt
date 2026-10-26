@@ -108,6 +108,80 @@ test('submits the latest TestFlight decrypt, waits for completion, and verifies 
   }
 });
 
+test('publishes only the checksum-verified IPA to a GitHub Release', async () => {
+  const directory = await temporaryDirectory();
+  let releaseUploads = 0;
+  const fetchImpl = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/v1/decrypts') return apiResponse({ id: 'job-release', status: 'running', bundleId: 'com.example.app' }, 202);
+    if (url.pathname === '/v1/jobs/job-release/wait') return apiResponse({
+      id: 'job-release', status: 'done', bundleId: 'com.example.app', channel: 'appstore', resolvedVersion: '1.0',
+      artifactId: 'artifact-release', artifact: { id: 'artifact-release', bundleId: 'com.example.app', channel: 'appstore', versionLabel: '1.0', buildNumber: '42', sizeBytes: bytes.length, sha256, fileUrl: '/v1/artifacts/artifact-release/file' },
+    });
+    if (url.pathname === '/v1/artifacts/artifact-release/file') return new Response(bytes);
+    throw new Error(`unexpected API URL ${url}`);
+  };
+
+  try {
+    const result = await runAction(actionConfig(directory, {
+      bundleId: 'com.example.app',
+      publishToRelease: true,
+      githubToken: 'contents-token',
+      githubRepository: 'example/app',
+      releaseTag: 'v1.0',
+    }), {
+      fetchImpl,
+      log: () => {},
+      publishRelease: async (options) => {
+        releaseUploads += 1;
+        assert.equal(await readFile(options.filePath, 'utf8'), bytes.toString());
+        assert.equal(options.token, 'contents-token');
+        return { releaseUrl: 'https://github.com/example/app/releases/tag/v1.0', assetUrl: 'https://github.com/example/app/releases/download/v1.0/app.ipa' };
+      },
+    });
+    const outputs = await outputsAt(path.join(directory, 'github-output'));
+    assert.equal(releaseUploads, 1);
+    assert.equal(outputs['release-url'], 'https://github.com/example/app/releases/tag/v1.0');
+    assert.equal(outputs['release-asset-url'], 'https://github.com/example/app/releases/download/v1.0/app.ipa');
+    assert.equal(result.path, path.join(directory, 'download.ipa'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('does not publish an IPA that fails integrity verification', async () => {
+  const directory = await temporaryDirectory();
+  let releaseUploads = 0;
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/v1/decrypts') return apiResponse({ id: 'job-bad-release', status: 'running', bundleId: 'com.example.app' }, 202);
+    if (url.pathname === '/v1/jobs/job-bad-release/wait') return apiResponse({
+      id: 'job-bad-release', status: 'done', bundleId: 'com.example.app', channel: 'appstore', resolvedVersion: '1.0',
+      artifactId: 'artifact-bad-release', artifact: { id: 'artifact-bad-release', bundleId: 'com.example.app', channel: 'appstore', versionLabel: '1.0', buildNumber: '42', sizeBytes: bytes.length, sha256, fileUrl: '/v1/artifacts/artifact-bad-release/file' },
+    });
+    if (url.pathname === '/v1/artifacts/artifact-bad-release/file') return new Response(Buffer.from('tampered ipa'));
+    throw new Error(`unexpected API URL ${url}`);
+  };
+
+  try {
+    await assert.rejects(runAction(actionConfig(directory, {
+      bundleId: 'com.example.app',
+      publishToRelease: true,
+      githubToken: 'contents-token',
+      githubRepository: 'example/app',
+      releaseTag: 'v1.0',
+    }), {
+      fetchImpl,
+      maxAttempts: 1,
+      log: () => {},
+      publishRelease: async () => { releaseUploads += 1; },
+    }), /IPA response ended early/);
+    assert.equal(releaseUploads, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('adds failed single-app submissions to the workflow summary', async () => {
   const directory = await temporaryDirectory();
   const summaryPath = path.join(directory, 'summary');

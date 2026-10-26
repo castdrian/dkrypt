@@ -1,7 +1,13 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { ErrorEnvelope } from '#contracts.js';
-import type { DashboardArtifactArchiveRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactContentsRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute } from '#dashboardArtifactContracts.js';
-import { dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema } from '#dashboardArtifactContracts.js';
+import type { DashboardArtifactAnalysisRoute, DashboardArtifactArchiveRoute, DashboardArtifactAssetPreviewRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactContentsRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactNoteRoute, DashboardArtifactNoteUpdateRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute } from '#dashboardArtifactContracts.js';
+import { dashboardArtifactAssetPreviewQuerySchema, dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactNoteBodySchema, dashboardArtifactNoteResponseSchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema, dashboardIpaAnalysisResponseSchema, dashboardIpaAnalysisUploadResponseSchema } from '#dashboardArtifactContracts.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, setArtifactArchived, setArtifactPinned, setArtifactsArchived, setArtifactsPinned, touchArtifact, undoArtifactStateChanges } from '#artifacts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
@@ -14,8 +20,14 @@ import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { streamArtifactZip } from '#artifactZip.js';
 import type { ArtifactRecord } from '#artifactTypes.js';
 import { compareIpaStructures, readIpaStructure } from '#ipaStructure.js';
+import { analyzeIpaInIsolatedProcess, IpaInspectionCapacityError, readIpaAssetPreviewInIsolatedProcess } from '#jobs/ipaInspection.js';
 import { formatArtifactFilename } from '#artifactFilename.js';
-import { getUserPrefs } from '#store/state.js';
+import { getUserPrefs, updateUserPrefs } from '#store/state.js';
+
+const IPA_UPLOAD_CONTENT_TYPE = 'application/vnd.dkrypt.ipa';
+const MAX_ANALYSIS_UPLOAD_BYTES = 256 * 1024 * 1024;
+const MAX_PRIVATE_ARTIFACT_NOTES = 500;
+let activeIpaAnalysisUploads = 0;
 
 interface DashboardArtifactServices {
   artifactDownloadName: typeof artifactDownloadName;
@@ -30,6 +42,8 @@ interface DashboardArtifactServices {
   touchArtifact: typeof touchArtifact;
   recordAudit: typeof recordAudit;
   readIpaStructure: typeof readIpaStructure;
+  analyzeIpa: typeof analyzeIpaInIsolatedProcess;
+  previewIpaAsset: typeof readIpaAssetPreviewInIsolatedProcess;
 }
 
 const defaultServices: DashboardArtifactServices = {
@@ -45,6 +59,8 @@ const defaultServices: DashboardArtifactServices = {
   touchArtifact,
   recordAudit,
   readIpaStructure,
+  analyzeIpa: analyzeIpaInIsolatedProcess,
+  previewIpaAsset: readIpaAssetPreviewInIsolatedProcess,
 };
 
 const canRequestDecrypt = fastifyRequirePermission(PermissionFlag.requestDecrypt);
@@ -82,6 +98,9 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
   return async (server) => {
     server.addHook('preHandler', fastifyRequireSession);
     server.addHook('preHandler', recordFastifyDashboardActivity);
+    if (!server.hasContentTypeParser(IPA_UPLOAD_CONTENT_TYPE)) {
+      server.addContentTypeParser(IPA_UPLOAD_CONTENT_TYPE, (_request, payload, done) => done(null, payload));
+    }
 
     server.get<DashboardArtifactListRoute>('/v1/dashboard/artifacts', {
       schema: getRouteContract('GET', '/v1/dashboard/artifacts'),
@@ -169,6 +188,140 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       } catch {
         reply.code(400);
         return createHttpErrorEnvelope(request.id, 400, 'IPA package contents could not be read');
+      }
+    });
+
+    server.get<DashboardArtifactAnalysisRoute>('/v1/dashboard/artifacts/:id/analysis', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, response: { 200: dashboardIpaAnalysisResponseSchema, 400: ErrorEnvelope, 404: ErrorEnvelope, 429: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, async (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
+      }
+      try {
+        return { report: await services.analyzeIpa(artifact.filePath) };
+      } catch (error) {
+        if (error instanceof IpaInspectionCapacityError) {
+          reply.header('Retry-After', String(error.retryAfterSeconds)).code(429);
+          return createHttpErrorEnvelope(request.id, 429, error.message);
+        }
+        reply.code(400);
+        return createHttpErrorEnvelope(request.id, 400, 'IPA analysis could not be completed');
+      }
+    });
+
+    server.get<DashboardArtifactAssetPreviewRoute>('/v1/dashboard/artifacts/:id/asset-preview', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, querystring: dashboardArtifactAssetPreviewQuerySchema, response: { 429: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, async (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
+      }
+      try {
+        const preview = await services.previewIpaAsset(artifact.filePath, request.query.path);
+        return reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff').type(preview.mimeType).send(preview.data);
+      } catch (error) {
+        if (error instanceof IpaInspectionCapacityError) {
+          reply.header('Retry-After', String(error.retryAfterSeconds)).code(429);
+          return createHttpErrorEnvelope(request.id, 429, error.message);
+        }
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'IPA image asset is unavailable');
+      }
+    });
+
+    server.get<DashboardArtifactNoteRoute>('/v1/dashboard/artifacts/:id/note', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, response: { 200: dashboardArtifactNoteResponseSchema, 404: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
+      }
+      const userId = getFastifySession(request)!.sub;
+      return { artifactId: artifact.id, note: getUserPrefs(userId).artifactNotes?.[artifact.id] ?? '' };
+    });
+
+    server.put<DashboardArtifactNoteUpdateRoute>('/v1/dashboard/artifacts/:id/note', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, body: dashboardArtifactNoteBodySchema, response: { 200: dashboardArtifactNoteResponseSchema, 400: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(DEFAULT_PROJECT_ID)) {
+        reply.code(404);
+        return createHttpErrorEnvelope(request.id, 404, 'artifact not found');
+      }
+      const userId = getFastifySession(request)!.sub;
+      const prefs = getUserPrefs(userId);
+      const notes = { ...(prefs.artifactNotes ?? {}) };
+      const note = request.body.note.trim();
+      if (note) {
+        if (notes[artifact.id] === undefined && Object.keys(notes).length >= MAX_PRIVATE_ARTIFACT_NOTES) {
+          reply.code(409);
+          return createHttpErrorEnvelope(request.id, 409, 'private artifact note limit reached');
+        }
+        notes[artifact.id] = note;
+      } else {
+        delete notes[artifact.id];
+      }
+      updateUserPrefs(userId, { artifactNotes: notes });
+      return { artifactId: artifact.id, note };
+    });
+
+    server.post('/v1/dashboard/ipa-analysis', {
+      bodyLimit: MAX_ANALYSIS_UPLOAD_BYTES,
+      schema: { hide: true, response: { 200: dashboardIpaAnalysisUploadResponseSchema, 400: ErrorEnvelope, 413: ErrorEnvelope, 429: ErrorEnvelope } },
+      preHandler: canRequestDecrypt,
+    }, async (request, reply) => {
+      const input = request.body as Readable | undefined;
+      if (!input || typeof input.pipe !== 'function') {
+        reply.code(400);
+        return createHttpErrorEnvelope(request.id, 400, `upload the IPA as ${IPA_UPLOAD_CONTENT_TYPE}`);
+      }
+      if (activeIpaAnalysisUploads >= 1) {
+        reply.header('Retry-After', '5').code(429);
+        return createHttpErrorEnvelope(request.id, 429, 'An IPA upload is already being analyzed; retry shortly');
+      }
+      activeIpaAnalysisUploads += 1;
+      let temporaryDirectory: string | undefined;
+      let uploadedBytes = 0;
+      const enforceLimit = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          uploadedBytes += chunk.length;
+          if (uploadedBytes > MAX_ANALYSIS_UPLOAD_BYTES) {
+            const error = new Error('IPA upload exceeds the 256 MiB analysis limit') as Error & { statusCode?: number };
+            error.statusCode = 413;
+            callback(error);
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      try {
+        temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dkrypt-analysis-'));
+        const ipaPath = path.join(temporaryDirectory, 'upload.ipa');
+        await pipeline(input, enforceLimit, createWriteStream(ipaPath, { flags: 'wx', mode: 0o600 }));
+        if (uploadedBytes === 0) {
+          reply.code(400);
+          return createHttpErrorEnvelope(request.id, 400, 'IPA upload is empty');
+        }
+        return await services.analyzeIpa(ipaPath);
+      } catch (error) {
+        if (error instanceof IpaInspectionCapacityError) {
+          reply.header('Retry-After', String(error.retryAfterSeconds)).code(429);
+          return createHttpErrorEnvelope(request.id, 429, error.message);
+        }
+        const status = (error as { statusCode?: number })?.statusCode === 413 ? 413 : 400;
+        reply.code(status);
+        return createHttpErrorEnvelope(request.id, status, status === 413 ? 'IPA upload exceeds the 256 MiB analysis limit' : 'IPA upload could not be analyzed');
+      } finally {
+        if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+        activeIpaAnalysisUploads -= 1;
       }
     });
 

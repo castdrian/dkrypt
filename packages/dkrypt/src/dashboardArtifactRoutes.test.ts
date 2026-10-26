@@ -7,17 +7,107 @@ import Fastify from 'fastify';
 import { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import type { Response } from '#http.js';
 import type { ArtifactRecord } from '#artifacts.js';
-import { PermissionFlag } from '#permissions.js';
+import { PermissionFlag, serializeBits } from '#permissions.js';
 import { dashboardRouter } from '#routes/dashboard.js';
 import { createDashboardArtifactRoutes } from '#routes/dashboardArtifactRoutes.js';
 import { setSessionCookie } from '#session.js';
+import { addAllowedUser, createRole } from '#store/state.js';
 
-function sessionCookie(permissions = 0n): string {
+function sessionCookie(permissions = 0n, userId = 'root'): string {
   let value = '';
   const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as Response;
-  setSessionCookie(response, { sub: 'root', permissions });
+  setSessionCookie(response, { sub: userId, permissions });
   return value.split(';', 1)[0]!;
 }
+
+test('IPA reports and previews stay behind decrypt permission and analyze-only upload creates no artifact', async () => {
+  const record = artifact({ filePath: '/tmp/analysis-artifact.ipa' });
+  const report = {
+    executables: [],
+    signing: { signatureFiles: [], profiles: [], certificateDetailsAvailable: false as const },
+    assets: [],
+    assetsTruncated: false,
+    totalFiles: 0,
+  };
+  const analyzedPaths: string[] = [];
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardArtifactRoutes({
+    artifactFileAvailable: () => true,
+    getArtifactById: () => record,
+    analyzeIpa: async (filePath) => {
+      analyzedPaths.push(filePath);
+      return report;
+    },
+    previewIpaAsset: async (_filePath, assetPath) => {
+      expect(assetPath).toBe('Payload/Example.app/icon.png');
+      return { data: Buffer.from([137, 80, 78, 71]), mimeType: 'image/png' };
+    },
+  }));
+
+  try {
+    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/analysis', headers: { cookie: sessionCookie() } });
+    const analysis = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/analysis', headers });
+    const preview = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/asset-preview?path=Payload%2FExample.app%2Ficon.png', headers });
+    const uploaded = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/ipa-analysis',
+      headers: { ...headers, 'content-type': 'application/vnd.dkrypt.ipa' },
+      payload: Buffer.from('analyze only'),
+    });
+
+    expect(denied.statusCode).toBe(403);
+    expect(analysis.statusCode).toBe(200);
+    expect(analysis.json()).toEqual({ report });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.headers['content-type']).toBe('image/png');
+    expect(preview.headers['cache-control']).toBe('private, no-store');
+    expect(preview.headers['x-content-type-options']).toBe('nosniff');
+    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.json()).toEqual(report);
+    expect(analyzedPaths).toHaveLength(2);
+    expect(analyzedPaths[1]).not.toBe(record.filePath);
+    expect(dashboardRouter.routes.some((route) => route.path === '/v1/dashboard/ipa-analysis')).toBe(false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('artifact notes are private to the signed-in user and bounded', async () => {
+  const record = artifact({ filePath: '/tmp/private-note-artifact.ipa' });
+  const userOne = `artifact-note-one-${Date.now()}`;
+  const userTwo = `artifact-note-two-${Date.now()}`;
+  const decryptRole = createRole({ name: `Artifact note access ${userOne}`, color: '#5865f2', permissions: serializeBits(PermissionFlag.requestDecrypt) }, 'root');
+  const noAccessRole = createRole({ name: `Artifact note denied ${userTwo}`, color: '#3498db', permissions: serializeBits(0n) }, 'root');
+  addAllowedUser(userOne, [decryptRole.id], 'root');
+  addAllowedUser(userTwo, [decryptRole.id], 'root');
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardArtifactRoutes({ artifactFileAvailable: () => true, getArtifactById: () => record }));
+
+  try {
+    const saved = await server.inject({
+      method: 'PUT',
+      url: '/v1/dashboard/artifacts/artifact-1/note',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt, userOne) },
+      payload: { note: '  keep this build  ' },
+    });
+    const ownerRead = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/note', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt, userOne) } });
+    const otherRead = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/note', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt, userTwo) } });
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/note', headers: { cookie: sessionCookie(0n, userOne) } });
+    const noPermissionUser = `artifact-note-denied-${Date.now()}`;
+    addAllowedUser(noPermissionUser, [noAccessRole.id], 'root');
+    const deniedByPermission = await server.inject({ method: 'GET', url: '/v1/dashboard/artifacts/artifact-1/note', headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt, noPermissionUser) } });
+
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ artifactId: 'artifact-1', note: 'keep this build' });
+    expect(ownerRead.json()).toEqual({ artifactId: 'artifact-1', note: 'keep this build' });
+    expect(otherRead.json()).toEqual({ artifactId: 'artifact-1', note: '' });
+    expect(denied.statusCode).toBe(200);
+    expect(deniedByPermission.statusCode).toBe(403);
+  } finally {
+    await server.close();
+  }
+});
 
 function artifact(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord {
   return {
