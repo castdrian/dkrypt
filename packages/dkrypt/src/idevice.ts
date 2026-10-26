@@ -26,8 +26,11 @@ const AUTOCONFIRM_FLAG_PATH = '/tmp/autoinstall-autoconfirm.flag';
 const AUTOCONFIRM_FLAG_PATHS = [
   AUTOCONFIRM_FLAG_PATH,
   '/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag',
+  '/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag',
   '/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall-autoconfirm.flag',
   '/private/var/mobile/Library/Caches/com.apple.ios.StoreKitUIService/autoinstall-autoconfirm.flag',
+  '/private/var/mobile/Library/Caches/com.apple.CoreAuthUI/autoinstall-autoconfirm.flag',
+  '/private/var/mobile/Library/Caches/com.apple.AccountAuthenticationDialog/autoinstall-autoconfirm.flag',
 ];
 const AUTOCONFIRM_TTL_MS = 6 * 60_000;
 const APP_STORE_INSTALL_STATUS_PATH = '/tmp/autoinstall-as-install-status.json';
@@ -1524,8 +1527,11 @@ export async function isAppStoreRunning(conn: DeviceClient): Promise<boolean> {
   return stdout.trim().length > 0;
 }
 
-export function armAppStoreAutoConfirm(conn: DeviceClient, label = 'Install'): Promise<void> {
-  return writeRemoteFile(conn, AUTOCONFIRM_FLAG_PATH, `expiresAtMs=${Date.now() + AUTOCONFIRM_TTL_MS}\n${label}`);
+export async function armAppStoreAutoConfirm(conn: DeviceClient, label = 'Install'): Promise<void> {
+  const content = `expiresAtMs=${Date.now() + AUTOCONFIRM_TTL_MS}\n${label}`;
+  for (const path of AUTOCONFIRM_FLAG_PATHS) {
+    await writeRemoteFile(conn, path, content);
+  }
 }
 
 export async function clearAppStoreAutoConfirm(conn: DeviceClient): Promise<void> {

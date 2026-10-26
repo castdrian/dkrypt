@@ -124,7 +124,11 @@ static void autoinstallLog(NSString *line) {
         NSArray *paths = @[
             @"/tmp/autoinstall.log",
             @"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall.log",
-            @"/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall.log"
+            @"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall.log",
+            @"/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall.log",
+            @"/private/var/mobile/Library/Caches/com.apple.ios.StoreKitUIService/autoinstall.log",
+            @"/private/var/mobile/Library/Caches/com.apple.CoreAuthUI/autoinstall.log",
+            @"/private/var/mobile/Library/Caches/com.apple.AccountAuthenticationDialog/autoinstall.log"
         ];
         for (NSString *path in paths) {
             @try {
@@ -140,6 +144,7 @@ static void autoinstallLog(NSString *line) {
     } @catch (NSException *e) {}
 }
 
+static BOOL gIsPassbookProcess = NO;
 static NSString * const kBridgeRootPath = @"/tmp/autoinstall/v1";
 static NSString * const kASInstallStatusPath = @"/tmp/autoinstall-as-install-status.json";
 static NSString * const kFreeAppStoreAuthorizationPath = @"/tmp/autoinstall-free-appstore-authorization.json";
@@ -211,23 +216,36 @@ static void writeBridgeTransaction(NSString *channel, NSString *operationId, NSS
 
 static NSDictionary *autoinstallActiveFreeAppStoreAuthorization(void) {
     NSDictionary *authorization = readJSONFile(kFreeAppStoreAuthorizationPath);
+    if (!authorization && gIsPassbookProcess) {
+        authorization = readJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-free-appstore-authorization.json") ?:
+                        readJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-free-appstore-authorization.json");
+    }
     NSDictionary *status = readJSONFile(kASInstallStatusPath);
+    if (!status && gIsPassbookProcess) {
+        status = readJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-as-install-status.json") ?:
+                 readJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-as-install-status.json");
+    }
     NSString *operationId = [authorization[@"operationId"] isKindOfClass:[NSString class]] ? authorization[@"operationId"] : nil;
     NSString *appName = [authorization[@"appName"] isKindOfClass:[NSString class]] ? authorization[@"appName"] : nil;
     NSArray *appNames = [authorization[@"appNames"] isKindOfClass:[NSArray class]] ? authorization[@"appNames"] : nil;
     NSNumber *verifiedPrice = [authorization[@"verifiedPrice"] isKindOfClass:[NSNumber class]] ? authorization[@"verifiedPrice"] : nil;
     NSNumber *issuedAt = [authorization[@"issuedAt"] isKindOfClass:[NSNumber class]] ? authorization[@"issuedAt"] : nil;
     if (!operationId.length || (!appName.length && !appNames.count) || !verifiedPrice || !issuedAt) return nil;
-    if (![status[@"operationId"] isEqual:operationId]) return nil;
-    if (![status[@"state"] isEqual:@"requested"] && ![status[@"state"] isEqual:@"authorizing"]) return nil;
+    if (status && ![status[@"operationId"] isEqual:operationId]) return nil;
+    if (status && ![status[@"state"] isEqual:@"requested"] && ![status[@"state"] isEqual:@"authorizing"]) return nil;
     NSTimeInterval age = [NSDate date].timeIntervalSince1970 - issuedAt.doubleValue;
     if (age < 0 || age > 120 || verifiedPrice.doubleValue != 0) return nil;
     return authorization;
 }
 
 static void autoinstallClearFreeAppStoreAuthorization(NSString *operationId) {
-    NSDictionary *authorization = readJSONFile(kFreeAppStoreAuthorizationPath);
-    if ([authorization[@"operationId"] isEqual:operationId]) [[NSFileManager defaultManager] removeItemAtPath:kFreeAppStoreAuthorizationPath error:nil];
+    NSDictionary *authorization = readJSONFile(kFreeAppStoreAuthorizationPath) ?:
+                                  readJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-free-appstore-authorization.json");
+    if (!operationId || [authorization[@"operationId"] isEqual:operationId]) {
+        [[NSFileManager defaultManager] removeItemAtPath:kFreeAppStoreAuthorizationPath error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-free-appstore-authorization.json" error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-free-appstore-authorization.json" error:nil];
+    }
 }
 
 static void markAppStoreInstallAuthorizationPending(NSString *viewController) {
@@ -391,8 +409,11 @@ static NSArray *autoinstallAutoConfirmFlagPaths(void) {
     return @[
         kAutoConfirmFlagPath,
         @"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag",
+        @"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag",
         @"/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall-autoconfirm.flag",
-        @"/private/var/mobile/Library/Caches/com.apple.ios.StoreKitUIService/autoinstall-autoconfirm.flag"
+        @"/private/var/mobile/Library/Caches/com.apple.ios.StoreKitUIService/autoinstall-autoconfirm.flag",
+        @"/private/var/mobile/Library/Caches/com.apple.CoreAuthUI/autoinstall-autoconfirm.flag",
+        @"/private/var/mobile/Library/Caches/com.apple.AccountAuthenticationDialog/autoinstall-autoconfirm.flag"
     ];
 }
 
@@ -464,6 +485,10 @@ static NSString * const kSBResponsePath = @"/tmp/autoinstall-sb-response.json";
 typedef int (*SBSLaunchFn)(CFStringRef, unsigned char);
 
 static int sbsLaunchApplication(NSString *bundleId) {
+    if ([bundleId isEqualToString:@"com.apple.AppStore"]) {
+        char *const itmsArgs[] = {(char *)"/var/jb/usr/bin/uiopen", (char *)"--url", (char *)"itms-apps://", NULL};
+        runSpawnAsync("/var/jb/usr/bin/uiopen", itmsArgs);
+    }
     char *const args[] = {(char *)"/var/jb/usr/bin/uiopen", (char *)"--bundleid", (char *)bundleId.UTF8String, NULL};
     runSpawnAsync("/var/jb/usr/bin/uiopen", args);
     void *sbs = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
@@ -596,10 +621,48 @@ static void unlockDeviceIfLocked(void) {
             Class lsmCls = objc_getClass("SBLockScreenManager");
             if (lsmCls && [lsmCls respondsToSelector:sel_registerName("sharedInstance")]) {
                 id lsm = ((id (*)(id, SEL))objc_msgSend)(lsmCls, sel_registerName("sharedInstance"));
+                BOOL isLocked = YES;
+                if ([lsm respondsToSelector:sel_registerName("isUILocked")]) {
+                    isLocked = ((BOOL (*)(id, SEL))objc_msgSend)(lsm, sel_registerName("isUILocked"));
+                }
+                autoinstallLog([NSString stringWithFormat:@"unlockDeviceIfLocked: lsm=%@ isLocked=%d", lsm, isLocked]);
+
+                // 1. unlockUIFromSource:withOptions: with source=1 (Home), 12 (Biometric), 0
                 SEL unlockSel = sel_registerName("unlockUIFromSource:withOptions:");
-                if (lsm && [lsm respondsToSelector:unlockSel]) {
+                if ([lsm respondsToSelector:unlockSel]) {
+                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 1, nil);
+                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 12, nil);
                     ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, unlockSel, 0, nil);
-                    autoinstallLog(@"unlocked UI via SBLockScreenManager");
+                    autoinstallLog(@"called unlockUIFromSource:withOptions:");
+                }
+
+                // 2. _finishUIUnlockFromSource:withOptions:
+                SEL finishSel = sel_registerName("_finishUIUnlockFromSource:withOptions:");
+                if ([lsm respondsToSelector:finishSel]) {
+                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, finishSel, 12, nil);
+                    ((void (*)(id, SEL, int, id))objc_msgSend)(lsm, finishSel, 1, nil);
+                    autoinstallLog(@"called _finishUIUnlockFromSource:withOptions:");
+                }
+
+                // 3. coverSheetViewController dismissal
+                SEL csSel = sel_registerName("coverSheetViewController");
+                if ([lsm respondsToSelector:csSel]) {
+                    id cs = ((id (*)(id, SEL))objc_msgSend)(lsm, csSel);
+                    if (cs) {
+                        if ([cs respondsToSelector:sel_registerName("dismissModalContentIfPossible")]) {
+                            ((void (*)(id, SEL))objc_msgSend)(cs, sel_registerName("dismissModalContentIfPossible"));
+                        }
+                    }
+                }
+
+                // 4. SBMainWorkspace home button handling
+                Class wsCls = objc_getClass("SBMainWorkspace");
+                if (wsCls && [wsCls respondsToSelector:sel_registerName("sharedInstance")]) {
+                    id ws = ((id (*)(id, SEL))objc_msgSend)(wsCls, sel_registerName("sharedInstance"));
+                    if ([ws respondsToSelector:sel_registerName("handleHomeButtonSinglePress")]) {
+                        ((void (*)(id, SEL))objc_msgSend)(ws, sel_registerName("handleHomeButtonSinglePress"));
+                        autoinstallLog(@"called handleHomeButtonSinglePress on SBMainWorkspace");
+                    }
                 }
             }
         } @catch (NSException *e) {
@@ -1250,7 +1313,6 @@ static void startTestFlightSide(void) {
 }
 
 static BOOL gIsAppStoreProcess = NO;
-static BOOL gIsPassbookProcess = NO;
 static BOOL gIsAuthUIService = NO;
 
 static id gStashedConfirmVC = nil;
@@ -1337,16 +1399,19 @@ static void autoinstallClearPaymentAuthorizationGuard(void) {
 }
 
 static BOOL autoinstallIsPaymentAuthorizationController(UIViewController *controller) {
-    return [NSStringFromClass([controller class]) containsString:@"PKPaymentAuthorizationRemoteAlertViewController"];
+    NSString *className = NSStringFromClass([controller class]);
+    return [className containsString:@"PKPaymentAuthorizationRemoteAlertViewController"] || [className containsString:@"InAppPayment"];
 }
 
 static void autoinstallRecordPaymentAuthorizationPrompt(NSString *className) {
     gPaymentAuthorizationPromptVisible = YES;
     autoinstallWritePaymentAuthorizationGuard(className);
     markAppStoreInstallAuthorizationPending(className);
-    gConfirmDoneThisSheet = YES;
-    gConfirmAttemptActive = NO;
-    autoinstallClearAutoConfirmFlags();
+    if (!gIsPassbookProcess) {
+        gConfirmDoneThisSheet = YES;
+        gConfirmAttemptActive = NO;
+        autoinstallClearAutoConfirmFlags();
+    }
     autoinstallHoldPaymentAuthorizationGuardLock();
 }
 
@@ -1361,7 +1426,7 @@ static BOOL autoinstallVisibleControllerContainsPaymentAuthorization(UIViewContr
     if (!controller || [visited containsObject:controller]) return NO;
     [visited addObject:controller];
     NSString *className = NSStringFromClass([controller class]);
-    if ([className containsString:@"PKPaymentAuthorizationRemoteAlertViewController"]) {
+    if ([className containsString:@"PKPaymentAuthorizationRemoteAlertViewController"] || [className containsString:@"InAppPayment"]) {
         if (matchedClass) *matchedClass = className;
         return YES;
     }
@@ -1793,6 +1858,16 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
                         UIAlertController *alert = (UIAlertController *)vc;
                         for (UIAlertAction *act in alert.actions) {
                             NSString *title = act.title ?: @"";
+                            BOOL isNegative = NO;
+                            NSArray *negativeTerms = @[@"don't", @"don’t", @"not now", @"cancel", @"deny", @"disallow", @"never", @"no thanks"];
+                            for (NSString *neg in negativeTerms) {
+                                if ([title rangeOfString:neg options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                                    isNegative = YES;
+                                    break;
+                                }
+                            }
+                            if (isNegative) continue;
+
                             BOOL matchAlert = NO;
                             if (match.length && [title rangeOfString:match options:NSCaseInsensitiveSearch].location != NSNotFound) {
                                 matchAlert = YES;
@@ -1874,7 +1949,7 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
     for (id root in roots) {
         autoinstallWalkAX(root, ^(id el) {
             if (paymentAuthorizationPromptPending || actionAttempted) return;
-            if (autoinstallPaymentAuthorizationPromptPendingLocked()) {
+            if (!gIsPassbookProcess && autoinstallPaymentAuthorizationPromptPendingLocked()) {
                 paymentAuthorizationPromptPending = YES;
                 return;
             }
@@ -1888,6 +1963,13 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
             @try { if ([el respondsToSelector:@selector(accessibilityIdentifier)]) ident = [el accessibilityIdentifier] ?: @""; } @catch (NSException *e) {}
             NSString *cls = NSStringFromClass([el class]);
             NSString *hay = [NSString stringWithFormat:@"%@|%@|%@|%@|%@", cls, label, title, text, ident];
+            NSString *visibleText = [NSString stringWithFormat:@"%@|%@|%@", label, title, text];
+            NSArray *negativeTerms = @[@"don't", @"don’t", @"not now", @"cancel", @"deny", @"disallow", @"never", @"no thanks"];
+            for (NSString *neg in negativeTerms) {
+                if ([visibleText rangeOfString:neg options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                    return;
+                }
+            }
             if (gIsAppStoreProcess) {
                 if ([cls containsString:@"OfferButton"]) return;
                 if ([el isKindOfClass:[UIView class]]) {
@@ -1970,7 +2052,7 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
             }
             if (invoked) {
                 actionAttempted = YES;
-                if (autoinstallPaymentAuthorizationPromptPendingLocked()) {
+                if (!gIsPassbookProcess && autoinstallPaymentAuthorizationPromptPendingLocked()) {
                     rec[@"stoppedForPaymentAuthorization"] = @YES;
                     paymentAuthorizationPromptPending = YES;
                 }
@@ -1983,12 +2065,15 @@ static NSArray *autoinstallConfirmMatchingUnlocked(NSString *match) {
 }
 
 static NSArray *autoinstallConfirmMatching(NSString *match) {
-    if (autoinstallPaymentAuthorizationPromptVisible()) return @[];
-    __block NSArray *acted = @[];
-    if (!autoinstallRunWithPaymentAuthorizationGuard(^{
-        acted = autoinstallConfirmMatchingUnlocked(match);
-    })) return @[];
-    return acted;
+    if (!gIsPassbookProcess) {
+        if (autoinstallPaymentAuthorizationPromptVisible()) return @[];
+        __block NSArray *acted = @[];
+        if (!autoinstallRunWithPaymentAuthorizationGuard(^{
+            acted = autoinstallConfirmMatchingUnlocked(match);
+        })) return @[];
+        return acted;
+    }
+    return autoinstallConfirmMatchingUnlocked(match);
 }
 
 static NSArray *autoinstallInviteRoots(void) {
@@ -2079,7 +2164,8 @@ static void autoinstallScheduleInviteControls(NSUInteger attempt) {
 static void autoinstallScheduleConfirm(NSUInteger attempt) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSString *activeMatch = autoinstallAutoConfirmMatchAtPath(kAutoConfirmFlagPath) ?:
-                                autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag");
+                                autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag") ?:
+                                autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag");
         if (!activeMatch) {
             gConfirmAttemptActive = NO;
             return;
@@ -2112,7 +2198,8 @@ static void startPassbookSide(void) {
 
         if (gConfirmDoneThisSheet) return;
         NSString *match = autoinstallAutoConfirmMatchAtPath(kAutoConfirmFlagPath) ?:
-                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag");
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag") ?:
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag");
         if (!match) return;
         NSArray *acted = autoinstallConfirmMatching(match);
         if (acted.count > 0) {
@@ -2137,7 +2224,10 @@ static void startAuthUIServiceSide(void) {
         autoinstallRefreshPaymentAuthorizationPromptGuard();
         autoinstallHandlePasswordIfPresent();
         NSString *match = autoinstallAutoConfirmMatchAtPath(kAutoConfirmFlagPath) ?:
-                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall-autoconfirm.flag");
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.AuthKitUIService/autoinstall-autoconfirm.flag") ?:
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.ios.StoreKitUIService/autoinstall-autoconfirm.flag") ?:
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.CoreAuthUI/autoinstall-autoconfirm.flag") ?:
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.AccountAuthenticationDialog/autoinstall-autoconfirm.flag");
         if (!match) return;
         NSArray *acted = autoinstallConfirmMatching(match);
         if (acted.count > 0) autoinstallClearAutoConfirmFlags();
@@ -2164,7 +2254,8 @@ static void startAuthUIServiceSide(void) {
         autoinstallHandlePasswordIfPresent();
         if (gConfirmDoneThisSheet || gConfirmAttemptActive) return;
         NSString *match = autoinstallAutoConfirmMatchAtPath(kAutoConfirmFlagPath) ?:
-                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag");
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-autoconfirm.flag") ?:
+                          autoinstallAutoConfirmMatchAtPath(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-autoconfirm.flag");
         if (!match) return;
         gConfirmAttemptActive = YES;
         autoinstallScheduleConfirm(0);
@@ -2325,10 +2416,17 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
 
             writeBridgeTransaction(@"appstore", operationId, @"requested", @{@"ok": @YES, @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
             writeJSONFile(kASInstallStatusPath, @{@"ok": @YES, @"operationId": operationId, @"state": @"requested", @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
+            writeJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-as-install-status.json", @{@"ok": @YES, @"operationId": operationId, @"state": @"requested", @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
+            writeJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-as-install-status.json", @{@"ok": @YES, @"operationId": operationId, @"state": @"requested", @"adamId": adamId, @"versionId": versionId ?: [NSNull null]});
             if (appNames.count && verifiedPrice && verifiedPrice.doubleValue == 0) {
-                writeJSONFile(kFreeAppStoreAuthorizationPath, @{@"operationId": operationId, @"appNames": appNames, @"verifiedPrice": verifiedPrice, @"issuedAt": @([NSDate date].timeIntervalSince1970)});
+                NSDictionary *authData = @{@"operationId": operationId, @"appNames": appNames, @"verifiedPrice": verifiedPrice, @"issuedAt": @([NSDate date].timeIntervalSince1970)};
+                writeJSONFile(kFreeAppStoreAuthorizationPath, authData);
+                writeJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-free-appstore-authorization.json", authData);
+                writeJSONFile(@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-free-appstore-authorization.json", authData);
             } else {
                 [[NSFileManager defaultManager] removeItemAtPath:kFreeAppStoreAuthorizationPath error:nil];
+                [[NSFileManager defaultManager] removeItemAtPath:@"/private/var/mobile/Library/Caches/com.apple.PassbookUIService/autoinstall-free-appstore-authorization.json" error:nil];
+                [[NSFileManager defaultManager] removeItemAtPath:@"/private/var/mobile/Library/Caches/com.apple.PassbookUISceneService/autoinstall-free-appstore-authorization.json" error:nil];
             }
             [center _performPurchases:purchases hasBundlePurchase:NO withClientContext:(id)clientContext completionBlock:completion];
             respond(@{@"ok": @YES, @"requested": @YES, @"operationId": operationId});
@@ -2406,13 +2504,16 @@ static void startAppStoreSide(void) {
         autoinstallEnableAX();
         startAppStoreSide();
     } else if ([bundleId isEqualToString:@"com.apple.PassbookUIService"] || [processName isEqualToString:@"PassbookUIService"] ||
-               [bundleId isEqualToString:@"com.apple.PassbookSecureUIService"] || [processName isEqualToString:@"PassbookSecureUIService"]) {
+               [bundleId isEqualToString:@"com.apple.PassbookSecureUIService"] || [processName isEqualToString:@"PassbookSecureUIService"] ||
+               [bundleId isEqualToString:@"com.apple.PassbookUISceneService"] || [processName isEqualToString:@"PassbookUISceneService"]) {
         gIsPassbookProcess = YES;
         autoinstallEnableAX();
         startPassbookSide();
     } else if ([bundleId isEqualToString:@"com.apple.AuthKitUIService"] || [processName isEqualToString:@"AuthKitUIService"] ||
                [bundleId isEqualToString:@"com.apple.ios.StoreKitUIService"] || [processName isEqualToString:@"StoreKitUIService"] ||
-               [bundleId isEqualToString:@"com.apple.AppleIDSetupUIService"] || [processName isEqualToString:@"AppleIDSetupUIService"]) {
+               [bundleId isEqualToString:@"com.apple.AppleIDSetupUIService"] || [processName isEqualToString:@"AppleIDSetupUIService"] ||
+               [bundleId isEqualToString:@"com.apple.CoreAuthUI"] || [processName isEqualToString:@"CoreAuthUI"] ||
+               [bundleId isEqualToString:@"com.apple.AccountAuthenticationDialog"] || [processName isEqualToString:@"AccountAuthenticationDialog"]) {
         gIsAuthUIService = YES;
         autoinstallEnableAX();
         startAuthUIServiceSide();

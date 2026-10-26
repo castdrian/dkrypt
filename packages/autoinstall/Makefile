@@ -1,6 +1,6 @@
 THEOS_PACKAGE_SCHEME=rootless
 FINALPACKAGE=1
-INSTALL_TARGET_PROCESSES = TestFlight SpringBoard AppStore PassbookUIService PassbookSecureUIService AuthKitUIService StoreKitUIService AppleIDSetupUIService
+INSTALL_TARGET_PROCESSES = TestFlight SpringBoard AppStore PassbookUIService PassbookSecureUIService PassbookUISceneService AuthKitUIService StoreKitUIService AppleIDSetupUIService CoreAuthUI AccountAuthenticationDialog
 
 ARCHS := arm64
 TARGET := iphone:clang:latest:15.0

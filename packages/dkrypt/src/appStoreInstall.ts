@@ -295,7 +295,8 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
           const installedVersion = await readInstalledBundleVersions(conn, bundlePath);
           ensureNotCancelled();
           const { shortVersion } = installedVersion;
-          if (targetVersion && normalizeVersion(shortVersion ?? '') !== targetVersion) {
+          const isVersionMatch = !targetVersion || normalizeVersion(shortVersion ?? '') === targetVersion || (shortVersion ? compareVersions(shortVersion, targetVersion) === 0 : false);
+          if (!isVersionMatch) {
             const unexpectedVersion = shortVersion ?? 'unknown';
             if (lastUnexpectedVersion !== unexpectedVersion) {
               report(`waiting for App Store version ${targetVersion}; version ${unexpectedVersion} is currently installed`);

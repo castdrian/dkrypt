@@ -14,17 +14,23 @@
 			<string>com.apple.AuthKitUIService</string>
 			<string>com.apple.ios.StoreKitUIService</string>
 			<string>com.apple.AppleIDSetupUIService</string>
+			<string>com.apple.PassbookUISceneService</string>
+			<string>com.apple.CoreAuthUI</string>
+			<string>com.apple.AccountAuthenticationDialog</string>
 		</array>
 		<key>Executables</key>
 		<array>
 			<string>AppStore</string>
 			<string>PassbookUIService</string>
 			<string>PassbookSecureUIService</string>
+			<string>PassbookUISceneService</string>
 			<string>SpringBoard</string>
 			<string>TestFlight</string>
 			<string>AuthKitUIService</string>
 			<string>StoreKitUIService</string>
 			<string>AppleIDSetupUIService</string>
+			<string>CoreAuthUI</string>
+			<string>AccountAuthenticationDialog</string>
 		</array>
 	</dict>
 </dict>
