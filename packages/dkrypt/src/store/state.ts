@@ -429,6 +429,7 @@ export interface JobHistoryEntry {
 export interface AppCatalogEntry {
   bundleId: string;
   displayName: string;
+  displayNameLanguage?: 'en';
   iconUrl?: string;
   trackId?: number;
   sellerName?: string;
@@ -1531,6 +1532,7 @@ export function upsertAppCatalogEntry(entry: Omit<AppCatalogEntry, 'updatedAt'>)
     ...entry,
     bundleId,
     displayName: entry.displayName.trim(),
+    displayNameLanguage: entry.displayNameLanguage ?? previous?.displayNameLanguage,
     iconUrl: entry.iconUrl ?? previous?.iconUrl,
     trackId: entry.trackId ?? previous?.trackId,
     sellerName: entry.sellerName ?? previous?.sellerName,
@@ -1564,6 +1566,7 @@ export function upsertAppCatalogEntries(entries: Array<Omit<AppCatalogEntry, 'up
       upsertAppCatalogEntry({
         bundleId: entry.bundleId,
         displayName: entry.displayName,
+        displayNameLanguage: entry.displayNameLanguage,
         iconUrl: entry.iconUrl,
         trackId: entry.trackId,
         sellerName: entry.sellerName,

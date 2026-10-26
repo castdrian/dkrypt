@@ -30,6 +30,7 @@ export const dashboardAppMetadataQuerySchema = Type.Object({
 export const dashboardAppCatalogEntrySchema = Type.Object({
   bundleId: bundleIdSchema,
   displayName: Type.String(),
+  displayNameLanguage: Type.Optional(Type.Literal('en')),
   iconUrl: Type.Optional(Type.String()),
   trackId: Type.Optional(Type.Integer({ minimum: 1 })),
   sellerName: Type.Optional(Type.String()),

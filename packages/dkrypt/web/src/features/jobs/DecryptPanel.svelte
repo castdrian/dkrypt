@@ -151,7 +151,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	});
 
 	function testFlightAvailabilityTitle(app: TestFlightCatalogApp): string {
-		return `${app.displayName} · ${app.bundleId} · Access last checked ${fmtDateTime(app.lastVerifiedAt)}`;
+		return `${appDisplayName(app.bundleId, app.bundleId)} · ${app.bundleId} · Access last checked ${fmtDateTime(app.lastVerifiedAt)}`;
 	}
 
 	let versionsOpen = $state(false);
@@ -331,7 +331,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 		return {
 			bundleId: app.bundleId,
 			trackId: app.appId,
-			trackName: app.displayName,
+			trackName: appDisplayName(app.bundleId, app.bundleId),
 			version: "",
 			sellerName: app.sellerName ?? "",
 			artworkUrl: app.iconUrl ?? "",
@@ -377,7 +377,9 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	$effect(() => {
 		void ensureAppCatalog([
 			...recentBundleIdsState.items,
+			...starredAppsState.items.map((app) => app.bundleId),
 			...results.map((result) => result.bundleId),
+			...testFlightCatalogState.apps.map((app) => app.bundleId),
 		]);
 	});
 
@@ -489,14 +491,14 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 						class="h-auto max-w-42 justify-start truncate p-0 text-xs text-muted"
 						onclick={() => pickRecent(app.bundleId)}
 						title={app.bundleId}
-						>{appDisplayName(app.bundleId, app.trackName)}</Button
+						>{appDisplayName(app.bundleId)}</Button
 					>
 					<Button
 						variant="ghost"
 						size="icon"
 						class="text-warn hover:text-destructive h-6 w-6 rounded-full p-0"
 						onclick={() => removeStarredApp(app.bundleId)}
-						aria-label="Unstar {app.trackName}"
+						aria-label="Unstar {appDisplayName(app.bundleId)}"
 						title="Unstar"
 					>
 						<Star class="h-3 w-3" fill="currentColor" />
@@ -569,7 +571,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 					>
 						{#if app.iconUrl}<img src={app.iconUrl} alt="" class="h-7 w-7 shrink-0 rounded-lg" />{/if}
 						<span class="min-w-0">
-							<span class="block truncate text-xs font-medium">{app.displayName}</span>
+			<span class="block truncate text-xs font-medium">{appDisplayName(app.bundleId, app.bundleId)}</span>
 							<span class="block truncate text-[10px] text-muted">{app.bundleId}</span>
 						</span>
 					</Button>

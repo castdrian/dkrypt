@@ -3,6 +3,7 @@ import { throwIfAborted } from '#util/abort.js';
 import { getAppleAccountVaultStatus } from '#appleAccountVault.js';
 
 const DEFAULT_ITUNES_COUNTRY = 'US';
+const DEFAULT_ITUNES_LANGUAGE = 'en_us';
 
 async function defaultStorefrontCountry(): Promise<string> {
   let status: ReturnType<typeof getAppleAccountVaultStatus>;
@@ -28,7 +29,7 @@ async function defaultStorefrontCountry(): Promise<string> {
 }
 
 async function buildItunesUrl(endpoint: 'lookup' | 'search', params: Record<string, string>): Promise<string> {
-  const query = new URLSearchParams({ country: params.country ?? await defaultStorefrontCountry(), ...params });
+  const query = new URLSearchParams({ country: params.country ?? await defaultStorefrontCountry(), lang: DEFAULT_ITUNES_LANGUAGE, ...params });
   return `https://itunes.apple.com/${endpoint}?${query.toString()}`;
 }
 

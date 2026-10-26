@@ -70,7 +70,7 @@ async function runStorefrontVersionLookupInIsolatedProcess(): Promise<string> {
     "globalThis.fetch = async (input) => { globalThis.requestUrl = String(input); return new Response(JSON.stringify({ resultCount: 1, results: [{ version: '1.0', bundleId: 'org.mozilla.ios.Klar', trackId: 1073435754 }] }), { status: 200 }); };",
     "const { lookupCurrentVersion } = await import('./src/appStoreMetadata.ts');",
     "await lookupCurrentVersion('org.mozilla.ios.Klar');",
-    "console.log(new URL(globalThis.requestUrl).searchParams.get('country'));",
+    "console.log(globalThis.requestUrl);",
   ].join('\n');
   const child = Bun.spawn([process.execPath, '-e', script], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -149,7 +149,9 @@ describe('iTunes storefront selection', () => {
   });
 
   test('uses the authenticated Apple Account storefront for default metadata lookup', async () => {
-    await expect(runStorefrontVersionLookupInIsolatedProcess()).resolves.toBe('DE');
+    const result = await runStorefrontVersionLookupInIsolatedProcess();
+    expect(new URL(result).searchParams.get('country')).toBe('DE');
+    expect(new URL(result).searchParams.get('lang')).toBe('en_us');
   });
 
   test('does not guess a storefront when a configured Apple Account has no verified region', async () => {
@@ -168,6 +170,7 @@ describe('iTunes storefront selection', () => {
       const results = await searchApps('Discord');
       expect(requests).toHaveLength(2);
       expect(requests.every((url) => url.searchParams.get('country') === 'US')).toBe(true);
+      expect(requests.every((url) => url.searchParams.get('lang') === 'en_us')).toBe(true);
       expect(results[0]?.minimumOsVersion).toBe('16.0');
     } finally {
       restoreFetch();
@@ -183,6 +186,7 @@ describe('iTunes storefront selection', () => {
       expect(requests[0]?.pathname).toBe('/lookup');
       expect(requests[0]?.searchParams.get('id')).toBe('985746746');
       expect(requests[0]?.searchParams.get('entity')).toBe('software');
+      expect(requests[0]?.searchParams.get('lang')).toBe('en_us');
       expect(() => lookupAppMetadataByTrackId(-1)).toThrow();
     } finally {
       restoreFetch();
@@ -195,6 +199,7 @@ describe('iTunes storefront selection', () => {
     try {
       await lookupAppMetadataByTrackId(1510944943, 'AU');
       expect(requests[0]?.searchParams.get('country')).toBe('AU');
+      expect(requests[0]?.searchParams.get('lang')).toBe('en_us');
       expect(() => lookupAppMetadataByTrackId(1510944943, 'AUS')).toThrow();
     } finally {
       restoreFetch();

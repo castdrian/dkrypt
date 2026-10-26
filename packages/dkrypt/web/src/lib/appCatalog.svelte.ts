@@ -37,6 +37,7 @@ export function primeAppCatalogFromSearch(results: AppStoreSearchResult[]): void
     results.map((result) => ({
       bundleId: result.bundleId,
       displayName: result.trackName,
+      displayNameLanguage: 'en',
       iconUrl: result.artworkUrl,
       trackId: result.trackId,
       sellerName: result.sellerName,
@@ -51,7 +52,7 @@ export async function ensureAppCatalog(bundleIds: string[]): Promise<void> {
   const unique = normalizeBundleIds(bundleIds);
   const staleOrMissing = unique.filter((bundleId) => {
     const entry = catalogState.byBundleId[bundleId];
-    return (!entry?.metadataFetchedAt || Date.now() - entry.metadataFetchedAt >= APP_CATALOG_REVALIDATION_MS) && !inFlight.has(bundleId);
+    return (entry?.displayNameLanguage !== 'en' || !entry.metadataFetchedAt || Date.now() - entry.metadataFetchedAt >= APP_CATALOG_REVALIDATION_MS) && !inFlight.has(bundleId);
   }).slice(0, 40);
   if (staleOrMissing.length === 0) return;
 
@@ -74,7 +75,9 @@ export async function refreshAppCatalog(bundleIds: string[]): Promise<boolean> {
 }
 
 export function appDisplayName(bundleId: string, fallback?: string): string {
-  return catalogState.byBundleId[bundleId]?.displayName ?? fallback ?? bundleId;
+  const entry = catalogState.byBundleId[bundleId];
+  if (entry && entry.displayNameLanguage !== 'en') return bundleId;
+  return entry?.displayName ?? fallback ?? bundleId;
 }
 
 export function appIconUrl(bundleId: string): string | undefined {

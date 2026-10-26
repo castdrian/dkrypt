@@ -786,6 +786,7 @@ export interface TestFlightCatalogApp {
 export interface AppCatalogEntry {
   bundleId: string;
   displayName: string;
+  displayNameLanguage?: 'en';
   iconUrl?: string;
   trackId?: number;
   sellerName?: string;

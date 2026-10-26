@@ -245,13 +245,13 @@ test('app catalog cache and refresh routes retain their manager permissions', as
   }
 });
 
-test('metadata requests refresh stale app notes for regular dashboard users', async () => {
+test('metadata requests refresh cached non-English app names for regular dashboard users', async () => {
   const staleEntry: AppCatalogEntry = {
     bundleId: 'com.example.stale',
-    displayName: 'Example app',
+    displayName: 'Beispiel-App',
     releaseNotes: 'Old notes',
-    metadataFetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
-    updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    metadataFetchedAt: Date.now(),
+    updatedAt: Date.now(),
   };
   const catalog = new Map([[staleEntry.bundleId, staleEntry]]);
   const lookups: string[] = [];
@@ -286,8 +286,8 @@ test('metadata requests refresh stale app notes for regular dashboard users', as
 
     expect(response.statusCode).toBe(200);
     expect(lookups).toEqual(['com.example.stale']);
-    expect(response.json().entries).toMatchObject([{ releaseNotes: 'Current notes' }]);
-    expect(response.json().entries[0].metadataFetchedAt).toBeGreaterThan(staleEntry.metadataFetchedAt!);
+    expect(response.json().entries).toMatchObject([{ displayName: 'Example app', displayNameLanguage: 'en', releaseNotes: 'Current notes' }]);
+    expect(response.json().entries[0].metadataFetchedAt).toBeGreaterThanOrEqual(staleEntry.metadataFetchedAt!);
   } finally {
     await server.close();
   }

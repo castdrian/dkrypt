@@ -5,6 +5,7 @@
   import Button from '#lib/components/ui/Button.svelte';
   import Dialog from '#lib/components/ui/Dialog.svelte';
   import Input from '#lib/components/ui/Input.svelte';
+  import { appDisplayName, ensureAppCatalog } from '#lib/appCatalog.svelte';
   import { loadTestFlightCatalog } from '#lib/testflightCatalog.svelte';
   import { showToast } from '#lib/ui.svelte';
 
@@ -21,6 +22,10 @@
   let loadingMore = $state(false);
   let loading = $state(false);
   let submitting = $state(false);
+
+  $effect(() => {
+    if (open) void ensureAppCatalog(subscriptions.flatMap((subscription) => subscription.bundleId ? [subscription.bundleId] : []));
+  });
 
   function statusLabel(status: TestFlightSubscriptionDeviceStatus | TestFlightSubscription['status']): string {
     return status === 'active' ? 'Verified' : status === 'syncing' ? 'Syncing' : status === 'unavailable' ? 'Unavailable' : status === 'unsupported' ? 'Unsupported' : status === 'error' ? 'Error' : status === 'approved' ? 'Approved' : status === 'denied' ? 'Denied' : status === 'withdrawn' ? 'Withdrawn' : 'Pending';
@@ -109,7 +114,7 @@
               <div class="bg-secondary text-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"><ShieldCheck class="h-4 w-4" /></div>
             {/if}
             <div class="min-w-0 flex-1">
-              <div class="truncate text-xs font-medium">{subscription.displayName ?? subscription.url}</div>
+              <div class="truncate text-xs font-medium">{subscription.bundleId ? appDisplayName(subscription.bundleId, subscription.bundleId) : subscription.url}</div>
               <div class="truncate text-[11px] text-muted">{subscription.bundleId ?? subscription.url}</div>
             </div>
             <Badge variant={statusVariant(subscription.status)}>{statusLabel(subscription.status)}</Badge>

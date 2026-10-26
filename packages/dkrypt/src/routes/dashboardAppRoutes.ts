@@ -63,6 +63,7 @@ function catalogEntryFromMetadata(metadata: ItunesAppMetadata): Omit<AppCatalogE
   return {
     bundleId: metadata.bundleId,
     displayName: metadata.trackName,
+    displayNameLanguage: 'en',
     iconUrl: metadata.artworkUrl,
     trackId: metadata.trackId,
     sellerName: metadata.sellerName,
@@ -107,6 +108,7 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
         services.upsertAppCatalogEntries(results.map((result) => ({
           bundleId: result.bundleId,
           displayName: result.trackName,
+          displayNameLanguage: 'en',
           iconUrl: result.artworkUrl,
           trackId: result.trackId,
           sellerName: result.sellerName,
@@ -188,7 +190,7 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
       const existing = new Map(services.getAppCatalogEntries(bundleIds).map((entry) => [entry.bundleId, entry]));
       const staleOrMissing = bundleIds.filter((bundleId) => {
         const entry = existing.get(bundleId);
-        return !entry?.metadataFetchedAt || now - entry.metadataFetchedAt >= APP_CATALOG_REVALIDATION_MS;
+        return entry?.displayNameLanguage !== 'en' || !entry.metadataFetchedAt || now - entry.metadataFetchedAt >= APP_CATALOG_REVALIDATION_MS;
       }).slice(0, 40);
       if (staleOrMissing.length > 0) await fetchCatalogEntries(services, staleOrMissing);
 

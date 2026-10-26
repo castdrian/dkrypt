@@ -19,6 +19,7 @@
   import Card from '#lib/components/ui/Card.svelte';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasAnyPermission, sessionHasPermission } from '#lib/session.svelte';
+  import { appDisplayName, ensureAppCatalog } from '#lib/appCatalog.svelte';
   import { loadTestFlightCatalog, testFlightCatalogState } from '#lib/testflightCatalog.svelte';
   import { confirmDialog, showToast } from '#lib/ui.svelte';
 
@@ -34,6 +35,18 @@
   let busyBundleId = $state<string | null>(null);
 
   const deviceNames = $derived(new Map(devices.map((device) => [device.id, device.name])));
+
+  function entryName(entry: UnifiedTestFlightEntry): string {
+    const bundleId = entry.app?.bundleId ?? entry.subscription?.bundleId;
+    return bundleId ? appDisplayName(bundleId, bundleId) : entry.subscription?.url ?? 'TestFlight app';
+  }
+
+  $effect(() => {
+    void ensureAppCatalog([
+      ...testFlightCatalogState.apps.map((app) => app.bundleId),
+      ...subscriptions.flatMap((subscription) => subscription.bundleId ? [subscription.bundleId] : []),
+    ]);
+  });
 
   interface UnifiedTestFlightEntry {
     key: string;
@@ -53,7 +66,7 @@
       const key = `subscription:${subscription.id}`;
       entries.set(key, { key, subscription });
     }
-    return [...entries.values()].sort((a, b) => (a.app?.displayName ?? a.subscription?.displayName ?? a.subscription?.url ?? '').localeCompare(b.app?.displayName ?? b.subscription?.displayName ?? b.subscription?.url ?? ''));
+    return [...entries.values()].sort((a, b) => entryName(a).localeCompare(entryName(b)));
   });
 
   function statusLabel(status: TestFlightSubscriptionDeviceStatus | TestFlightSubscription['status']): string {
@@ -132,7 +145,8 @@
   }
 
   async function unsubscribe(subscription: TestFlightSubscription): Promise<void> {
-    if (!(await confirmDialog(`Stop dkrypt automation for ${subscription.displayName ?? subscription.url}? The app will be removed from enabled devices where possible.`, { confirmLabel: 'Unsubscribe', variant: 'destructive' }))) return;
+    const name = subscription.bundleId ? appDisplayName(subscription.bundleId, subscription.bundleId) : subscription.url;
+    if (!(await confirmDialog(`Stop dkrypt automation for ${name}? The app will be removed from enabled devices where possible.`, { confirmLabel: 'Unsubscribe', variant: 'destructive' }))) return;
     busyId = subscription.id;
     try {
       const result = await unsubscribeTestFlightSubscription(subscription.id);
@@ -147,7 +161,7 @@
   }
 
   async function unsubscribeDeviceApp(app: TestFlightCatalogApp): Promise<void> {
-    if (!(await confirmDialog(`Remove ${app.displayName} from the connected devices? TestFlight membership itself may remain active with Apple.`, { confirmLabel: 'Remove from devices', variant: 'destructive' }))) return;
+    if (!(await confirmDialog(`Remove ${appDisplayName(app.bundleId, app.bundleId)} from the connected devices? TestFlight membership itself may remain active with Apple.`, { confirmLabel: 'Remove from devices', variant: 'destructive' }))) return;
     busyBundleId = app.bundleId;
     try {
       const result = await unsubscribeTestFlightCatalogApp(app.bundleId);
@@ -178,7 +192,7 @@
           {@const subscription = entry.subscription}
           {@const bundleId = app?.bundleId ?? subscription?.bundleId}
           {@const protectedAccess = bundleId === 'com.hammerandchisel.discord'}
-          {@const displayName = app?.displayName ?? subscription?.displayName ?? subscription?.url ?? 'TestFlight app'}
+          {@const displayName = entryName(entry)}
           <div class="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="flex min-w-0 items-start gap-3">

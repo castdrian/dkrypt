@@ -296,7 +296,7 @@
 					if ("error" in buildsResult) throw new Error(buildsResult.error);
 					const build = buildsResult.builds.find((candidate) => candidate.bundleId === bundleId && candidate.cfBundleVersion === buildNumber);
 					if (!build) throw new Error("TestFlight build not found");
-					trackName = app.displayName;
+					trackName = appDisplayName(app.bundleId, app.bundleId);
 					versionLabel = `TestFlight ${selector}`;
 					testflight = { appId: app.appId, build };
 					response = await queueTestFlightDecrypt(bundleId, app.appId, build, false, selectedDeviceId, true);
@@ -424,7 +424,7 @@
 					{#each testFlightAppSelections as selection (selection.bundleId)}
 						<div class="border-border bg-panel-muted flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2">
 							<div class="min-w-0">
-								<div class="truncate text-xs font-medium">{selection.app?.displayName ?? selection.bundleId}</div>
+								<div class="truncate text-xs font-medium">{appDisplayName(selection.bundleId)}</div>
 								<div class="truncate font-mono text-[10px] text-muted">{selection.bundleId}</div>
 							</div>
 							{#if selection.devices.length === 0}
@@ -432,10 +432,10 @@
 							{:else if selection.devices.length === 1}
 								<span class="shrink-0 text-xs text-muted">{selection.devices[0]!.name}</span>
 							{:else}
-								<label class="sr-only" for={`batch-testflight-device-${selection.bundleId}`}>Eligible device for {selection.app?.displayName ?? selection.bundleId}</label>
+								<label class="sr-only" for={`batch-testflight-device-${selection.bundleId}`}>Eligible device for {appDisplayName(selection.bundleId)}</label>
 								<Select
 									id={`batch-testflight-device-${selection.bundleId}`}
-									ariaLabel={`Eligible device for ${selection.app?.displayName ?? selection.bundleId}`}
+									ariaLabel={`Eligible device for ${appDisplayName(selection.bundleId)}`}
 									items={selection.devices.map((device) => ({ value: device.id, label: device.name }))}
 									value={selectedDeviceByBundleId[selection.bundleId] ?? ""}
 									onValueChange={(deviceId) => setSelectedTestFlightDevice(selection.bundleId, deviceId)}
