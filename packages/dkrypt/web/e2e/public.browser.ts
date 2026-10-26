@@ -549,7 +549,7 @@ test('IPA Library visual layout stays consistent on desktop and mobile', async (
   await page.route('**/v1/dashboard/apps/metadata?*', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ entries: [{ bundleId: 'com.example.visual', displayName: 'Visual App', updatedAt: 1790604000000 }] }),
+      body: JSON.stringify({ entries: [{ bundleId: 'com.example.visual', displayName: 'Visual App', displayNameLanguage: 'en', updatedAt: 1790604000000 }] }),
     });
   });
   await page.route('**/v1/dashboard/artifacts**', async (route) => {
@@ -623,7 +623,7 @@ test('IPA Library keeps app and bundle names readable with browser and dashboard
   await mockStableDashboardEvents(page);
   await mockAuthenticatedDashboard(page, '1');
   await page.route('**/v1/dashboard/apps/metadata?*', async (route) => {
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: [{ bundleId: 'com.hammerandchisel.discord', displayName: 'Discord - Talk, Play, Hang Out', updatedAt: Date.now() }] }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: [{ bundleId: 'com.hammerandchisel.discord', displayName: 'Discord - Talk, Play, Hang Out', displayNameLanguage: 'en', updatedAt: Date.now() }] }) });
   });
   await page.route('**/v1/dashboard/artifacts**', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ artifacts: [{ id: 'sidebar-artifact', bundleId: 'com.hammerandchisel.discord', channel: 'testflight', versionLabel: '351.0', buildNumber: '116422', fileSizeBytes: 110900000, createdAt: new Date().toISOString(), pinnedAt: Date.now(), fileUrl: '/download/sidebar-artifact' }], total: 1, totalBytes: 110900000, maxBytes: 1_000_000_000 }) });
@@ -767,7 +767,7 @@ test('job history groups version and status while keeping actions beside the app
   await mockStableDashboardEvents(page);
   await mockAuthenticatedDashboard(page, '1');
   await page.route('**/v1/dashboard/apps/metadata?*', async (route) => {
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: [{ bundleId: 'com.hammerandchisel.discord', displayName: 'Discord - Talk, Play, Hang Out', updatedAt: Date.now() }] }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: [{ bundleId: 'com.hammerandchisel.discord', displayName: 'Discord - Talk, Play, Hang Out', displayNameLanguage: 'en', updatedAt: Date.now() }] }) });
   });
   await page.route('**/v1/dashboard/jobs?*', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ history: [{ id: 'job-sidebar-layout', bundleId: 'com.hammerandchisel.discord', status: 'done', source: 'scheduler', testflight: true, versionLabel: '351.0_116422', sizeBytes: 110900000, createdAt: Date.now() - 60_000, finishedAt: Date.now() - 30_000, fileAvailable: true, artifactId: 'sidebar-artifact', downloadUrl: '/download/sidebar-artifact' }], total: 1 }) });
@@ -1321,7 +1321,7 @@ test('IPA Library archive and restore keep archive state separate from eviction 
   await expectAccessible(page);
 });
 
-test('IPA Library keeps loaded artifacts visible while scrolling its rows', async ({ page }) => {
+test('IPA Library scrolls within a compact viewport so jobs stay nearby', async ({ page }) => {
   await mockStableDashboardEvents(page);
   await mockAuthenticatedDashboard(page, '1');
   let artifactListRequestCount = 0;
@@ -1353,23 +1353,28 @@ test('IPA Library keeps loaded artifacts visible while scrolling its rows', asyn
   });
 
   await page.goto('/?tab=home');
-  const list = page.getByRole('region', { name: 'IPA library artifacts list region' });
+  const list = page.getByRole('region', { name: 'IPA library artifacts scroll area' });
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
-    const scrollRange = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
     const artifactScrollRange = await list.evaluate((element) => element.scrollHeight - element.clientHeight);
-    expect(scrollRange).toBeGreaterThan(0);
-    expect(artifactScrollRange).toBe(0);
+    const artifactViewportHeight = await list.evaluate((element) => element.clientHeight);
+    expect(artifactScrollRange).toBeGreaterThan(0);
+    expect(artifactViewportHeight).toBeLessThanOrEqual(viewport.height * 0.35 + 2);
     await expect(list.locator('[data-artifact-id="scroll-artifact-0"]')).toBeVisible();
-    await list.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      window.scrollTo({ top: window.scrollY + bounds.top + bounds.height - window.innerHeight, behavior: 'instant' });
-    });
+    const activeJobsTop = await page.getByRole('heading', { name: 'Active jobs' }).evaluate((element) => element.getBoundingClientRect().top);
+    expect(activeJobsTop).toBeLessThan(viewport.height + (viewport.width < 640 ? 120 : 0));
     const finalArtifact = list.locator('[data-artifact-id="scroll-artifact-39"]');
+    await list.focus();
+    await list.press('End');
     await expect(finalArtifact).toBeAttached();
-    await finalArtifact.scrollIntoViewIfNeeded();
-    await expect(finalArtifact).toBeInViewport();
-    await list.evaluate((element) => window.scrollTo({ top: window.scrollY + element.getBoundingClientRect().top - 80, behavior: 'instant' }));
+    await expect.poll(() => finalArtifact.evaluate((element) => {
+      const container = element.closest('[aria-label="IPA library artifacts scroll area"]');
+      if (!container) return false;
+      const row = element.getBoundingClientRect();
+      const viewport = container.getBoundingClientRect();
+      return row.bottom > viewport.top && row.top < viewport.bottom;
+    })).toBe(true);
+    await list.evaluate((element) => { element.scrollTop = 0; });
     await expect(list.locator('[data-artifact-id="scroll-artifact-0"]')).toBeInViewport();
   }
   await expect.poll(() => artifactListRequestCount).toBe(1);
@@ -1422,7 +1427,7 @@ test('IPA Library stays populated and does not refetch loaded results during inc
   await page.goto('/?tab=home');
   await artifactResponse;
   expect(runtimeErrors.filter((message) => message.includes('effect_update_depth_exceeded'))).toEqual([]);
-  const viewport = page.getByRole('region', { name: 'IPA library artifacts list region' });
+  const viewport = page.getByRole('region', { name: 'IPA library artifacts scroll area' });
   const viewportHandle = await viewport.elementHandle();
   if (!viewportHandle) throw new Error('IPA Library artifacts viewport did not mount');
   const firstArtifact = viewport.locator('[data-artifact-id="wheel-scroll-artifact-0"]');
@@ -1458,10 +1463,12 @@ test('IPA Library stays populated and does not refetch loaded results during inc
   const firstArtifactBounds = await firstArtifact.boundingBox();
   if (!firstArtifactBounds) throw new Error('First IPA Library artifact is not visible');
   await page.mouse.move(firstArtifactBounds.x + firstArtifactBounds.width / 2, firstArtifactBounds.y + firstArtifactBounds.height / 2);
+  const scrollTopBeforeWheel = await viewport.evaluate((element) => element.scrollTop);
   const scrollYBeforeWheel = await page.evaluate(() => window.scrollY);
   await page.mouse.wheel(0, 360);
   await page.waitForTimeout(32);
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollYBeforeWheel);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(scrollTopBeforeWheel);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollYBeforeWheel);
   for (const direction of [1, -1]) {
     let enteredLibrary = false;
     let checkedPositions = 0;
@@ -1480,7 +1487,7 @@ test('IPA Library stays populated and does not refetch loaded results during inc
         });
         return { attached: element.isConnected, label: element.getAttribute('aria-label'), regionVisible, hasVisibleRow };
       });
-      if (!sample.attached || sample.label !== 'IPA library artifacts list region') {
+      if (!sample.attached || sample.label !== 'IPA library artifacts scroll area') {
         const pageState = await page.locator('body').evaluate((element) => ({
           regions: Array.from(element.querySelectorAll<HTMLElement>('[role="region"]')).map((region) => ({
             label: region.getAttribute('aria-label'),
@@ -1855,6 +1862,17 @@ test('batch TestFlight queue selects an eligible device independently for each a
     });
   });
   const verifiedAt = Date.now();
+  await page.route('**/v1/dashboard/apps/metadata?*', async (route) => {
+    const bundleIds = new URL(route.request().url()).searchParams.get('bundleIds')?.split(',') ?? [];
+    const names: Record<string, string> = {
+      'com.example.testflight': 'Example Beta',
+      'com.example.other': 'Other Beta',
+    };
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ entries: bundleIds.filter((bundleId) => names[bundleId]).map((bundleId) => ({ bundleId, displayName: names[bundleId], displayNameLanguage: 'en', metadataFetchedAt: Date.now(), updatedAt: Date.now() })) }),
+    });
+  });
   await page.route('**/v1/dashboard/testflight/catalog*', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -3599,6 +3617,12 @@ test('bulk retry queues only failures, continues after an error, and exports per
 test('TestFlight shortcuts reappear from the account cache while a reload refresh is pending', async ({ page }) => {
   await mockAuthenticatedDashboard(page, '17179869186');
 
+  await page.route('**/v1/dashboard/apps/metadata?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ entries: [{ bundleId: 'com.example.testflight', displayName: 'Example TestFlight App', displayNameLanguage: 'en', metadataFetchedAt: Date.now(), updatedAt: Date.now() }] }),
+    });
+  });
   let catalogCalls = 0;
   let holdCatalogResponse = false;
   let refreshingEmptyCatalogDelivered = false;
@@ -4083,6 +4107,7 @@ test('release comparisons show build numbers, release notes, metadata freshness,
         entries: [{
           bundleId,
           displayName: 'Release comparison app',
+          displayNameLanguage: 'en',
           releaseNotes: 'Latest App Store notes',
           metadataFetchedAt: Date.now(),
           updatedAt: Date.now(),

@@ -85,6 +85,9 @@
     }
     return [...groups.values()];
   });
+  const artifactDisplayGroups = $derived.by(() => artifactLibraryPreferencesState.groupByApp
+    ? artifactGroups.map((group) => ({ ...group, key: group.bundleId, grouped: true }))
+    : artifacts.map((artifact) => ({ bundleId: artifact.bundleId, artifacts: [artifact], key: artifact.id, grouped: false })));
   const selectedArtifactBytes = $derived(artifacts.filter((artifact) => selectedArtifactIds.has(artifact.id)).reduce((sum, artifact) => sum + artifact.fileSizeBytes, 0));
 
   function createArtifactQuery(cursorOrOffset?: string | number) {
@@ -210,6 +213,11 @@
     const width = typeof window === 'undefined' ? 1024 : window.innerWidth;
     const compact = width < 640;
     return compact ? 164 : width < 1024 ? 142 : 116;
+  }
+
+  function estimateArtifactGroupHeight(group: typeof artifactDisplayGroups[number]): number {
+    if (group.grouped && collapsedArtifactGroups.has(group.bundleId)) return 60;
+    return group.artifacts.reduce((total, artifact) => total + estimateArtifactRowHeight(artifact), group.grouped ? 60 : 0);
   }
 
   const interfaceLanguage = $derived(resolveInterfaceLanguage(interfaceLanguageState.value, systemLocalesState.value));
@@ -601,10 +609,10 @@
             <EmptyState message={query.trim() || channelFilter !== 'all' || archiveFilter === 'archived' ? 'No artifacts match these filters.' : 'No IPA artifacts have been saved yet.'} />
           {/if}
         {:else}
-          {#if artifactLibraryPreferencesState.groupByApp}
-            <div class="space-y-2">
-              {#each artifactGroups as group (group.bundleId)}
-                <details class="overflow-hidden rounded-xl border border-border/70" open={!collapsedArtifactGroups.has(group.bundleId)} ontoggle={(event) => {
+          <VirtualizedList items={artifactDisplayGroups} itemKey={(group) => group.key} estimateSize={estimateArtifactGroupHeight} overscan={4} scrollMode="element" label="IPA library artifacts" class="artifact-results-viewport">
+            {#snippet children(group: typeof artifactDisplayGroups[number])}
+              {#if group.grouped}
+                <details class="mb-2 overflow-hidden rounded-xl border border-border/70" open={!collapsedArtifactGroups.has(group.bundleId)} ontoggle={(event) => {
                   const next = new Set(collapsedArtifactGroups);
                   if (event.currentTarget.open) next.delete(group.bundleId);
                   else next.add(group.bundleId);
@@ -618,21 +626,20 @@
                     </span>
                     <Badge variant="secondary">{group.artifacts.length} {group.artifacts.length === 1 ? 'version' : 'versions'}</Badge>
                   </summary>
-                  <VirtualizedList items={group.artifacts} itemKey={(artifact) => artifact.id} estimateSize={estimateArtifactRowHeight} overscan={4} scrollMode="window" label="Versions for {appDisplayName(group.bundleId)}" class={homeViewModesState.value.artifacts === 'list' ? 'divide-y divide-border' : 'space-y-2 p-2'}>
-                    {#snippet children(artifact: ArtifactRecord)}
+                  <div class={homeViewModesState.value.artifacts === 'list' ? 'divide-y divide-border' : 'space-y-2 p-2'}>
+                    {#each group.artifacts as artifact (artifact.id)}
                       <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
-                    {/snippet}
-                  </VirtualizedList>
+                    {/each}
+                  </div>
                 </details>
-              {/each}
-            </div>
-          {:else}
-            <VirtualizedList items={artifacts} itemKey={(artifact) => artifact.id} estimateSize={estimateArtifactRowHeight} overscan={4} scrollMode="window" label="IPA library artifacts" class={homeViewModesState.value.artifacts === 'list' ? 'rounded-xl border border-border/70 divide-y divide-border' : 'space-y-2'}>
-              {#snippet children(artifact: ArtifactRecord)}
-                <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
-              {/snippet}
-            </VirtualizedList>
-          {/if}
+              {:else}
+                {@const artifact = group.artifacts[0]}
+                {#if artifact}
+                  <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
+                {/if}
+              {/if}
+            {/snippet}
+          </VirtualizedList>
           {#if nextCursor}
             <div class="mt-3 flex justify-center">
               <Button variant="secondary" size="sm" loading={loadingMore} onclick={() => void loadMore()}>Load more ({Math.max(0, total - artifacts.length)} older)</Button>
@@ -644,3 +651,18 @@
 </Card>
 {/if}
 <ArtifactCompareDialog bind:open={comparisonOpen} ids={comparisonIds} />
+
+<style>
+  :global(.artifact-results-viewport) {
+    max-height: min(30vh, 20rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  @media (max-width: 639px) {
+    :global(.artifact-results-viewport) {
+      max-height: min(24vh, 16rem);
+    }
+  }
+</style>
