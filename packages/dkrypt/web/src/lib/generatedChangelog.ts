@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "feat: expand action and dashboard workflows",
+    "description": "Released in 14d0a57."
+  },
+  {
+    "date": "2026-10-26",
     "title": "test(web): align library snapshots and scrolling checks",
     "description": "Released in 6a55fc4."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "fix(ui): keep the IPA library compact and scrollable",
     "description": "Released in b287d08."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "feat(github-action): verify and download TestFlight artifacts",
-    "description": "Released in f82b920."
   }
 ] as const;
