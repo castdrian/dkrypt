@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateVAPIDKeys, type VapidKeys } from 'web-push';
@@ -31,6 +31,7 @@ import { createBillingRepository } from '#store/billingRepository.js';
 import { createApiKeyRepository, isApiKeyRecordShape } from '#store/apiKeyRepository.js';
 import { createBackupRepository } from '#store/backupRepository.js';
 import { createBackupScheduleRepository } from '#store/backupScheduleRepository.js';
+import { cleanupBackupSnapshotDirectories } from '#store/backupSnapshotCleanup.js';
 import { categorizeFailure, type JobFailureClass } from '#util/failureCategory.js';
 import { combineBits, hasPermission, parseBits, PermissionFlag, serializeBits } from '#permissions.js';
 import { createDeviceRepository } from '#store/deviceRepository.js';
@@ -1655,7 +1656,10 @@ if (JSON.stringify(state.activeSessions) !== JSON.stringify(reconciledSessions))
   state.activeSessions = reconciledSessions;
   dirty = true;
 }
-cleanupBackupSnapshotDirectories(state.backupHistory);
+const backupSnapshotCleanupFailures = cleanupBackupSnapshotDirectories(backupsDir, new Set(state.backupHistory.map((entry) => backupSnapshotDirectory(entry.filename)).filter((value): value is string => Boolean(value))));
+for (const failure of backupSnapshotCleanupFailures) {
+  log.warn('could not remove an orphaned backup snapshot directory', { directory: failure.directory, error: String(failure.error) });
+}
 const unavailableLegacyMirrors = new Set<string>();
 
 function fsyncPath(filePath: string): void {
@@ -4217,17 +4221,6 @@ function removeBackupSnapshotFiles(entry: BackupHistoryEntry): void {
   }
   const directory = backupSnapshotDirectory(entry.filename);
   if (directory) rmSync(path.join(backupsDir, directory), { recursive: true, force: true });
-}
-
-function cleanupBackupSnapshotDirectories(history: BackupHistoryEntry[]): void {
-  if (!existsSync(backupsDir)) return;
-  const referencedDirectories = new Set(history.map((entry) => backupSnapshotDirectory(entry.filename)).filter((value): value is string => Boolean(value)));
-  for (const entry of readdirSync(backupsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.staging-') || (/^snapshot-[0-9a-f-]{36}$/.test(entry.name) && !referencedDirectories.has(entry.name))) {
-      rmSync(path.join(backupsDir, entry.name), { recursive: true, force: true });
-    }
-  }
 }
 
 export function verifyLatestDatabaseBackup(): { ok: boolean; detail: string } {
