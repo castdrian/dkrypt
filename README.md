@@ -190,10 +190,10 @@ Dashboard-generated API keys use `Authorization: Bearer <generated-key>` and cov
 
 Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility policy](packages/dkrypt/docs/api/compatibility.md) describes response stability and deprecation windows. Find [curl, Python, TypeScript, CLI, and local mock examples](packages/dkrypt/docs/api/examples.md). The local simulator listens only on `127.0.0.1`, accepts the fixed `mock-dkrypt-key`, and never contacts Apple or a payment provider.
 
-GitHub workflows can use the [dkrypt decrypt action](.github/actions/dkrypt-decrypt/action.yml) to submit a decrypt, wait for its result, and download the IPA. Pin a released version:
+GitHub workflows can use the [dkrypt decrypt action](action.yml) to submit a decrypt, wait for its result, and download the IPA. Pin a released version:
 
 ```yaml
-- uses: castdrian/dkrypt/.github/actions/dkrypt-decrypt@v1.1.0
+- uses: castdrian/dkrypt@v1.1.1
   id: decrypt
   with:
     api-key: ${{ secrets.DKRYPT_API_KEY }}

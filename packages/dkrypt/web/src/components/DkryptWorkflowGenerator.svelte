@@ -6,7 +6,7 @@
   import { sessionState } from '#lib/session.svelte';
 
   const bundleIdPattern = /^[A-Za-z0-9.-]{3,200}$/;
-  const actionVersion = 'v1.1.0';
+  const actionVersion = 'v1.1.1';
   let bundleIdsText = $state('com.example.app');
   let channel = $state<'appstore' | 'testflight'>('appstore');
   let version = $state('');
@@ -29,7 +29,7 @@
       '  dkrypt:',
       '    runs-on: ubuntu-latest',
       '    steps:',
-      `      - uses: castdrian/dkrypt/.github/actions/dkrypt-decrypt@${actionVersion}`,
+      `      - uses: castdrian/dkrypt@${actionVersion}`,
       '        id: dkrypt',
       '        with:',
       `          api-url: \${{ vars.DKRYPT_API_URL || '${baseUrl}' }}`,

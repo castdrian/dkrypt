@@ -2741,13 +2741,13 @@ test('GitHub Action workflow generator creates multi-app resolve-only YAML', asy
 
   await page.goto('/?tab=docs');
   await expect(page.getByRole('heading', { name: 'GitHub Actions workflow' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Action v1.1.0' })).toHaveAttribute('href', 'https://github.com/castdrian/dkrypt/releases/tag/v1.1.0');
+  await expect(page.getByRole('link', { name: 'Action v1.1.1' })).toHaveAttribute('href', 'https://github.com/castdrian/dkrypt/releases/tag/v1.1.1');
   await page.locator('textarea').first().fill('com.example.first\ncom.example.second');
   await page.getByLabel('Channel').selectOption('testflight');
   await page.getByLabel('Resolve metadata only; do not queue or download').check();
 
   const workflow = page.locator('pre code');
-  await expect(workflow).toContainText('castdrian/dkrypt/.github/actions/dkrypt-decrypt@v1.1.0');
+  await expect(workflow).toContainText('castdrian/dkrypt@v1.1.1');
   await expect(workflow).toContainText("bundle-ids: '[\"com.example.first\",\"com.example.second\"]'");
   await expect(workflow).toContainText("resolve-only: 'true'");
   await page.getByRole('button', { name: 'Copy YAML' }).click();
