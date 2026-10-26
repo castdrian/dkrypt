@@ -847,6 +847,16 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS worker_instances_by_heartbeat ON worker_instances(heartbeat_at);
     `,
   },
+  {
+    version: 34,
+    sql: `
+      CREATE TABLE IF NOT EXISTS mcp_records (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS mcp_records_type_updated ON mcp_records(json_extract(payload, '$.type'), updated_at DESC);
+      CREATE TABLE IF NOT EXISTS decrypt_credit_records (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS decrypt_credit_records_owner_type ON decrypt_credit_records(json_extract(payload, '$.ownerId'), json_extract(payload, '$.type'), updated_at DESC);
+      CREATE TABLE IF NOT EXISTS service_monitor_state (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
@@ -906,6 +916,9 @@ const collectionTables = new Set([
   'appstore_offline_account',
   'appstore_offline_credential_operations',
   'appstore_offline_authentication_operations',
+  'mcp_records',
+  'decrypt_credit_records',
+  'service_monitor_state',
 ]);
 
 function assertCollectionTable(table: string): void {

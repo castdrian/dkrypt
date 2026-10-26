@@ -492,7 +492,7 @@ const oauthProviders: Record<OAuthProvider, OAuthProviderConfig> = {
   },
 };
 
-const oauthConnections = new Map<string, { provider: OAuthProvider; userId?: string; codeVerifier: string; expiresAt: number }>();
+const oauthConnections = new Map<string, { provider: OAuthProvider; userId?: string; codeVerifier: string; returnTo?: string; expiresAt: number }>();
 
 interface OAuthTokenResponse {
   access_token?: string;
@@ -524,18 +524,31 @@ function oauthUserId(provider: OAuthProvider, providerId: string, username: stri
   return legacy?.username ?? stableId;
 }
 
-function createOauthState(provider: OAuthProvider, userId?: string): { state: string; codeVerifier: string } {
+function oauthReturnPath(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 2048) return undefined;
+  try {
+    const target = new URL(value, config.publicBaseUrl);
+    const origin = new URL(config.publicBaseUrl).origin;
+    if (target.origin !== origin || target.username || target.password || target.hash) return undefined;
+    if (target.pathname !== '/oauth/authorize' && !/^\/mcp\/approval\/[A-Za-z0-9_-]{20,128}$/.test(target.pathname)) return undefined;
+    return `${target.pathname}${target.search}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function createOauthState(provider: OAuthProvider, userId?: string, returnTo?: string): { state: string; codeVerifier: string } {
   const state = randomBytes(16).toString('hex');
   const codeVerifier = randomBytes(32).toString('base64url');
-  oauthConnections.set(state, { provider, userId, codeVerifier, expiresAt: Date.now() + 600_000 });
+  oauthConnections.set(state, { provider, userId, codeVerifier, returnTo, expiresAt: Date.now() + 600_000 });
   return { state, codeVerifier };
 }
 
-function consumeOauthConnection(provider: OAuthProvider, state: string): { userId?: string; codeVerifier: string } | undefined {
+function consumeOauthConnection(provider: OAuthProvider, state: string): { userId?: string; codeVerifier: string; returnTo?: string } | undefined {
   const connection = oauthConnections.get(state);
   oauthConnections.delete(state);
   if (!connection || connection.provider !== provider || connection.expiresAt < Date.now()) return undefined;
-  return { userId: connection.userId, codeVerifier: connection.codeVerifier };
+  return { userId: connection.userId, codeVerifier: connection.codeVerifier, returnTo: connection.returnTo };
 }
 
 setInterval(() => {
@@ -551,7 +564,8 @@ function startOAuthLogin(request: FastifyRequest, reply: FastifyReply, provider:
     sendValidationError(request, reply, 404, `${provider === 'github' ? 'GitHub' : 'Discord'} OAuth is not configured`);
     return;
   }
-  const { state, codeVerifier } = createOauthState(provider, userId);
+  const query = request.query as Record<string, unknown>;
+  const { state, codeVerifier } = createOauthState(provider, userId, oauthReturnPath(query.return_to));
   reply.header('Set-Cookie', oauthCookie(providerConfig.stateCookieName, state, 600));
   const url = new URL(providerConfig.authorizationUrl);
   url.searchParams.set('client_id', providerConfig.clientId());
@@ -607,8 +621,8 @@ async function exchangeDiscordCode(code: string, redirectUri: string, codeVerifi
 }
 
 function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): void {
-  server.get('/v1/auth/github/login', { schema: getRouteContract('GET', '/v1/auth/github/login') }, async (_request, reply) => {
-    startOAuthLogin(_request, reply, 'github');
+  server.get('/v1/auth/github/login', { schema: getRouteContract('GET', '/v1/auth/github/login') }, async (request, reply) => {
+    startOAuthLogin(request, reply, 'github');
   });
 
   server.get('/v1/auth/github/connect', {
@@ -677,15 +691,15 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
       const permissions = getUserEffectivePermissions(userId) ?? 0n;
       setFastifySessionCookie(reply, { sub: userId, permissions, mfaVerified: !mfaStatus(userId).enabled, reauthenticatedAt: Date.now() }, fastifySessionOptsFromRequest(request));
       log.info('github oauth login succeeded', { login: user.login, permissions: serializeBits(permissions) });
-      return reply.redirect('/');
+      return reply.redirect(oauthConnection?.returnTo ?? '/');
     } catch (error) {
       log.error('github oauth callback failed', { error: String(error) });
       return reply.redirect('/?auth_error=failed');
     }
   });
 
-  server.get('/v1/auth/discord/login', { schema: getRouteContract('GET', '/v1/auth/discord/login') }, async (_request, reply) => {
-    startOAuthLogin(_request, reply, 'discord');
+  server.get('/v1/auth/discord/login', { schema: getRouteContract('GET', '/v1/auth/discord/login') }, async (request, reply) => {
+    startOAuthLogin(request, reply, 'discord');
   });
 
   server.get('/v1/auth/discord/connect', {
@@ -750,7 +764,7 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
       const permissions = getUserEffectivePermissions(userId) ?? 0n;
       setFastifySessionCookie(reply, { sub: userId, permissions, mfaVerified: !mfaStatus(userId).enabled, reauthenticatedAt: Date.now() }, fastifySessionOptsFromRequest(request));
       log.info('discord oauth login succeeded', { username: user.username, permissions: serializeBits(permissions) });
-      return reply.redirect('/');
+      return reply.redirect(oauthConnection?.returnTo ?? '/');
     } catch (error) {
       log.error('discord oauth callback failed', { error: String(error) });
       return reply.redirect('/?auth_error=discord_failed');

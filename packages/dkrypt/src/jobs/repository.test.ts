@@ -172,6 +172,58 @@ test('quota receipt is available only to its owning account and reflects reserva
   }
 });
 
+test('burst credits reserve atomically, return after failed jobs, expire, and revoke on Stripe refunds', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-credit-ledger-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const ownerId = 'member@example.test';
+    const now = 1_800_000_000_000;
+    const paymentIntentId = 'pi_credit_test';
+    const grant = repository.grantCredits(ownerId, 2, 'stripe', paymentIntentId, now + 60_000, now);
+    expect(grant.granted).toBeTrue();
+    expect(repository.grantCredits(ownerId, 2, 'stripe', paymentIntentId, now + 60_000, now).granted).toBeFalse();
+    expect(repository.creditBalance(ownerId, now).available).toBe(2);
+
+    const failed = createJob({ id: 'credit-failed-job', createdAt: now });
+    expect(repository.admit(failed, ownerId, 0)).toBe(failed.id);
+    expect(repository.creditBalance(ownerId, now).available).toBe(1);
+    repository.replace([{ ...failed, status: 'failed', progress: 'failed' }]);
+    repository.settleQuota(failed.id, false);
+    expect(repository.creditBalance(ownerId, now).available).toBe(2);
+
+    const succeeded = createJob({ id: 'credit-success-job', createdAt: now + 1 });
+    expect(repository.admit(succeeded, ownerId, 0)).toBe(succeeded.id);
+    repository.settleQuota(succeeded.id, true);
+    expect(repository.creditBalance(ownerId, now + 1).available).toBe(1);
+
+    const revoked = repository.revokeStripeCreditGrant(ownerId, paymentIntentId, 2, now + 2);
+    expect(revoked.revoked).toBeTrue();
+    expect(repository.revokeStripeCreditGrant(ownerId, paymentIntentId, 2, now + 3).revoked).toBeFalse();
+    expect(repository.creditBalance(ownerId, now + 3).available).toBe(0);
+
+    const refundedFirst = repository.revokeStripeCreditGrant(ownerId, 'pi_refunded_first', 4, now + 4);
+    expect(refundedFirst.revoked).toBeTrue();
+    expect(repository.grantCredits(ownerId, 4, 'stripe', 'pi_refunded_first', undefined, now + 5).granted).toBeFalse();
+    expect(repository.creditBalance(ownerId, now + 5).available).toBe(0);
+
+    repository.grantCredits(ownerId, 1, 'stripe', 'pi_active_reservation', undefined, now + 6);
+    const refundedReservation = createJob({ id: 'credit-refunded-reservation', bundleId: 'com.example.refunded', createdAt: now + 6 });
+    expect(repository.admit(refundedReservation, ownerId, 0)).toBe(refundedReservation.id);
+    expect(repository.revokeStripeCreditGrant(ownerId, 'pi_active_reservation', 1, now + 7).revoked).toBeTrue();
+    repository.replace([{ ...refundedReservation, status: 'failed', progress: 'failed' }]);
+    repository.settleQuota(refundedReservation.id, false);
+    expect(repository.creditBalance(ownerId, now + 8).available).toBe(0);
+
+    repository.grantCredits(ownerId, 3, 'manual', 'expired-credit', now + 10, now);
+    expect(repository.creditBalance(ownerId, now + 10).available).toBe(0);
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('worker drains preserve active leases and stop new job claims', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-worker-drain-'));
   let repository: ReturnType<typeof createJobRepository> | undefined;

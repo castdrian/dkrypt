@@ -49,11 +49,14 @@ function rewindToSchemaVersion16(database: ReturnType<typeof openStateDatabase>)
     DROP TABLE job_worker_leases;
     DROP TABLE job_worker_generations;
     DROP TABLE appstore_offline_account;
+    DROP TABLE mcp_records;
+    DROP TABLE decrypt_credit_records;
+    DROP TABLE service_monitor_state;
     ALTER TABLE billing_events DROP COLUMN provider;
     ALTER TABLE billing_events DROP COLUMN event_id;
     ALTER TABLE billing_events DROP COLUMN occurred_at;
     ALTER TABLE billing_events DROP COLUMN processed_at;
-    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33);
+    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34);
   `);
 }
 
@@ -566,7 +569,7 @@ test('SQLite backup verification accepts an older schema when its applied migrat
     const databasePath = path.join(stateDir, 'state.sqlite');
     const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
     database.writeState({ version: 29, settings: {} });
-    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33);');
+    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DROP TABLE mcp_records; DROP TABLE decrypt_credit_records; DROP TABLE service_monitor_state; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34);');
     database.close();
 
     expect(verifyDatabaseBackup(databasePath)).toEqual({ schemaVersion: 28, integrity: 'ok', hasStateSnapshot: true });

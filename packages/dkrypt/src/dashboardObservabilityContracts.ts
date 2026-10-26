@@ -68,6 +68,12 @@ const auditActionSchema = Type.Union([
   Type.Literal('integration.billing-owner-accept'),
   Type.Literal('auth.account.link'),
   Type.Literal('auth.account.merge'),
+  Type.Literal('mcp.agent.connect'),
+  Type.Literal('mcp.agent.revoke'),
+  Type.Literal('mcp.decrypt.approve'),
+  Type.Literal('mcp.decrypt.deny'),
+  Type.Literal('billing.decrypt-credit.grant'),
+  Type.Literal('billing.decrypt-credit.refund'),
 ]);
 
 export const dashboardLogsQuerySchema = Type.Object({

@@ -3,6 +3,7 @@ packages/dkrypt/node_modules/
 packages/dkrypt/dist/
 packages/dkrypt/public/
 packages/dkrypt/web/node_modules/
+packages/dkrypt-cli/node_modules/
 packages/dkrypt/web/dist/
 packages/device-bridge/target/
 **/target/

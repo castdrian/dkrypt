@@ -2921,7 +2921,7 @@ test('personalization search, artifact column order, and touch targets sync to t
 
   await page.goto('/?tab=settings');
   await page.getByRole('textbox', { name: 'Search settings' }).fill('timezone');
-  const personalizationResult = page.getByRole('button', { name: 'Personalization', exact: true });
+  const personalizationResult = page.locator('[aria-live="polite"]').getByRole('button', { name: 'Personalization', exact: true });
   await expect(personalizationResult).toBeVisible();
   await personalizationResult.click();
 

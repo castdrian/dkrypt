@@ -59,7 +59,7 @@ import {
   verifyNowPaymentsEvent,
 } from '#cryptoBilling.js';
 import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpayments.js';
-import { getDecryptQuotaJournal, getDecryptQuotaUsage } from '#jobs/repository.js';
+import { findStripeDecryptCreditOwner, getDecryptCreditBalance, getDecryptQuotaJournal, getDecryptQuotaUsage, grantDecryptCredits, revokeStripeDecryptCredits } from '#jobs/repository.js';
 import { getAccountApiRateUsage } from '#auth.js';
 import { getAuthProfile, resolveAuthUserId } from '#identity.js';
 import { log } from '#logger.js';
@@ -179,6 +179,7 @@ async function processStripeRefund(event: Stripe.Event, stripeClient?: Stripe): 
   recordAudit(actor, 'billing.refund', charge.id, `${refundSummary}; Stripe event ${event.id}`);
 
   if (!charge.refunded) return;
+  if (await processStripeCreditRefund(charge, stripeClient)) return;
   const subscriptionId = await subscriptionIdForRefundedCharge(charge, stripeClient);
   if (!subscriptionId) {
     const customerHasActiveSubscription = customerId && listBillingSubscriptions().some((subscription) =>
@@ -319,6 +320,10 @@ export async function processStripeEvent(event: Stripe.Event, stripeClient?: Str
   switch (event.type) {
     case 'checkout.session.completed':
     case 'checkout.session.async_payment_succeeded':
+      if ((event.data.object as Stripe.Checkout.Session).metadata?.purpose === 'decrypt_credit_pack') {
+        fulfillDecryptCreditCheckout(event.data.object as Stripe.Checkout.Session);
+        return;
+      }
       await reconcileSuccessfulCheckoutSession(event, stripeClient);
       return;
     case 'checkout.session.async_payment_failed':
@@ -341,6 +346,36 @@ export async function processStripeEvent(event: Stripe.Event, stripeClient?: Str
       await processInvoice(event, stripeClient);
       return;
   }
+}
+
+function fulfillDecryptCreditCheckout(session: Stripe.Checkout.Session): void {
+  if (session.mode !== 'payment' || session.payment_status !== 'paid') return;
+  if (!config.stripeDecryptCreditPriceId || !Number.isInteger(config.stripeDecryptCreditQuantity)) throw new Error('decrypt credit checkout is not configured');
+  const userId = metadataUserId(session.metadata);
+  if (!userId || session.metadata?.credit_quantity !== String(config.stripeDecryptCreditQuantity)) throw new Error('decrypt credit checkout metadata is invalid');
+  const paymentIntentId = stripeObjectId(session.payment_intent) ?? session.id;
+  const result = grantDecryptCredits(userId, config.stripeDecryptCreditQuantity, 'stripe', paymentIntentId);
+  if (result.granted) recordAudit(userId, 'billing.decrypt-credit.grant', result.id, `${config.stripeDecryptCreditQuantity} credits from Stripe checkout ${session.id}`);
+}
+
+async function processStripeCreditRefund(charge: Stripe.Charge, stripeClient?: Stripe): Promise<boolean> {
+  const paymentIntentId = stripeObjectId(charge.payment_intent);
+  if (!paymentIntentId) return false;
+  const storedOwnerId = findStripeDecryptCreditOwner(paymentIntentId);
+  if (storedOwnerId) {
+    const result = revokeStripeDecryptCredits(storedOwnerId, paymentIntentId);
+    if (result.revoked) recordAudit(storedOwnerId, 'billing.decrypt-credit.refund', result.id, `full refund of ${charge.id} revoked unused decrypt credits`);
+    return true;
+  }
+  if (stripeClient && typeof stripeClient.paymentIntents?.retrieve !== 'function') return false;
+  const paymentIntent = await stripeOperation(stripeClient, (client) => client.paymentIntents.retrieve(paymentIntentId));
+  if (paymentIntent.metadata.purpose !== 'decrypt_credit_pack') return false;
+  const userId = metadataUserId(paymentIntent.metadata);
+  const quantity = Number(paymentIntent.metadata.credit_quantity);
+  if (!userId || !Number.isInteger(quantity) || quantity < 1 || quantity > 100_000) throw new Error(`refunded decrypt credit payment ${charge.id} has invalid metadata`);
+  const result = revokeStripeDecryptCredits(userId, paymentIntentId, quantity);
+  if (result.revoked) recordAudit(userId, 'billing.decrypt-credit.refund', result.id, `full refund of ${charge.id} revoked unused decrypt credits`);
+  return true;
 }
 
 type WebhookDeliveryResult =
@@ -495,6 +530,59 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     return { entries };
   });
 
+  server.get('/v1/billing/credits', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request) => {
+    const userId = getFastifySession(request)!.sub;
+    const balance = getDecryptCreditBalance(userId);
+    return {
+      balance: balance.available,
+      grants: balance.grants,
+      purchase: {
+        enabled: stripeEnabled && Boolean(config.stripeDecryptCreditPriceId),
+        quantity: config.stripeDecryptCreditQuantity,
+        provider: 'stripe',
+      },
+    };
+  });
+
+  server.post('/v1/billing/credits/checkout', {
+    schema: { hide: true },
+    preHandler: [fastifyRequireSession, fastifyRequirePermission(PermissionFlag.requestDecrypt)],
+  }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const idempotencyKey = request.headers['idempotency-key'];
+    if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9._:-]{8,200}$/.test(idempotencyKey)) {
+      return sendBillingError(request, reply, 400, 'provide an Idempotency-Key with 8 to 200 URL-safe characters', 'idempotency_key_required');
+    }
+    if (!stripeEnabled || !config.stripeDecryptCreditPriceId) return sendBillingError(request, reply, 503, 'one-time decrypt credits are not configured', 'decrypt_credit_checkout_unavailable');
+    if (!getBillingEntitlements(userId).decrypt) return sendBillingError(request, reply, 403, 'an active decrypt plan is required to purchase burst credits');
+    if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another billing checkout is already being created', 'checkout_in_progress');
+    try {
+      const profile = getAuthProfile(userId);
+      const parameters = {
+        mode: 'payment',
+        line_items: [{ price: config.stripeDecryptCreditPriceId, quantity: 1 }],
+        customer: getBillingCustomerId(userId),
+        customer_email: getBillingCustomerId(userId) ? undefined : profile?.email,
+        client_reference_id: userId,
+        metadata: { purpose: 'decrypt_credit_pack', dkrypt_user_id: userId, credit_quantity: String(config.stripeDecryptCreditQuantity), dkrypt_idempotency_key: idempotencyKey },
+        payment_intent_data: { metadata: { purpose: 'decrypt_credit_pack', dkrypt_user_id: userId, credit_quantity: String(config.stripeDecryptCreditQuantity) } },
+        success_url: `${config.publicBaseUrl}/?tab=billing&credits=success`,
+        cancel_url: `${config.publicBaseUrl}/?tab=billing&credits=cancelled`,
+        managed_payments: { enabled: true },
+        integration_identifier: createIntegrationIdentifier(idempotencyKey),
+      } satisfies Stripe.Checkout.SessionCreateParams;
+      const providerIdempotencyKey = `decrypt-credit-${createHash('sha256').update(`${userId}:${idempotencyKey}`).digest('hex')}`;
+      const session = await callStripe((client) => client.checkout.sessions.create(parameters, { idempotencyKey: providerIdempotencyKey }));
+      if (!session.url) return sendBillingError(request, reply, 502, 'Stripe did not return an active checkout URL');
+      return reply.code(201).send({ url: session.url, quantity: config.stripeDecryptCreditQuantity });
+    } catch (error) {
+      log.error('decrypt credit checkout failed', { userId, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not start the credit checkout');
+    } finally {
+      releaseBillingCheckoutLock(userId);
+    }
+  });
+
   server.get('/v1/billing/invoices', { schema: { hide: true }, preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const invoices: Array<{ id: string; provider: 'stripe' | 'nowpayments'; planId: string; status: string; createdAt: string; amountMinor: number; currency: string; invoiceUrl?: string; paymentId?: string }> = [];
@@ -542,6 +630,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const profile = getAuthProfile(userId);
     const entitlement = getBillingEntitlements(userId);
     const quota = getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
+    const credits = getDecryptCreditBalance(userId);
     const sampleDays = 7;
     const recentQuotaAdmissions = getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
     const averagePerDay = recentQuotaAdmissions.length / sampleDays;
@@ -567,6 +656,12 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       legacyBilling: hasLegacyBillingRecord(userId),
       entitlement,
       quota,
+      decryptCredits: {
+        available: credits.available,
+        grants: credits.grants,
+        purchaseEnabled: stripeEnabled && Boolean(config.stripeDecryptCreditPriceId),
+        purchaseQuantity: config.stripeDecryptCreditQuantity,
+      },
       apiRateUsage: getAccountApiRateUsage(userId),
       usageForecast: {
         sampleDays,

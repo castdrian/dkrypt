@@ -13,6 +13,11 @@ export interface DecryptQuotaUsage {
   nextAvailableAt?: number;
 }
 
+export interface DecryptCreditBalance {
+  available: number;
+  grants: Array<{ id: string; remaining: number; expiresAt?: number; source: string }>;
+}
+
 export class DailyDecryptLimitError extends Error {
   readonly statusCode = 429;
   readonly code = 'daily_decrypt_limit';
@@ -103,6 +108,10 @@ export interface JobRepository {
   reconcileQuota(): void;
   mergeQuotaOwner(targetUserId: string, sourceUserId: string): void;
   quotaSnapshot(): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed' }>;
+  creditBalance(ownerId: string, now?: number): DecryptCreditBalance;
+  grantCredits(ownerId: string, quantity: number, source: 'stripe' | 'outage' | 'manual', reference: string, expiresAt?: number, now?: number): { id: string; granted: boolean };
+  findStripeCreditOwner(paymentIntentId: string): string | undefined;
+  revokeStripeCreditGrant(ownerId: string, paymentIntentId: string, quantity?: number, now?: number): { id: string; revoked: boolean };
   close(): void;
 }
 
@@ -248,7 +257,22 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
     }
     if (normalizedOwnerId) {
       const usage = quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
-      if (limit !== undefined && usage.used >= limit) throw new DailyDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
+      if (limit !== undefined && usage.used >= limit) {
+        const credit = database.query(`
+          SELECT id, payload FROM decrypt_credit_records
+          WHERE json_extract(payload, '$.type') = 'grant'
+            AND json_extract(payload, '$.ownerId') = ?
+            AND json_extract(payload, '$.remaining') > 0
+            AND (json_type(payload, '$.expiresAt') IS NULL OR json_extract(payload, '$.expiresAt') > ?)
+          ORDER BY updated_at ASC, id ASC LIMIT 1;
+        `).get(normalizedOwnerId, job.createdAt) as { id: string; payload: string } | null;
+        if (!credit) throw new DailyDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
+        const grant = JSON.parse(credit.payload) as { remaining: number };
+        const updatedGrant = { ...JSON.parse(credit.payload), remaining: grant.remaining - 1 };
+        database.query('UPDATE decrypt_credit_records SET payload = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedGrant), job.createdAt, credit.id);
+        const usageId = `usage:${job.id}`;
+        database.query('INSERT INTO decrypt_credit_records (id, payload, updated_at) VALUES (?, ?, ?)').run(usageId, JSON.stringify({ id: usageId, type: 'usage', ownerId: normalizedOwnerId, jobId: job.id, grantId: credit.id, state: 'reserved', createdAt: job.createdAt }), job.createdAt);
+      }
     }
     database.query(`
       INSERT INTO jobs (
@@ -268,8 +292,32 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
 }
 
 function reconcileQuota(database: Database): void {
-  database.exec("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE state = 'reserved' AND job_id IN (SELECT id FROM jobs WHERE status = 'done')");
-  database.exec("DELETE FROM decrypt_quota_ledger WHERE state = 'reserved' AND job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
+  database.exec('BEGIN IMMEDIATE;');
+  try {
+    database.exec("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE state = 'reserved' AND job_id IN (SELECT id FROM jobs WHERE status = 'done')");
+    database.exec("UPDATE decrypt_credit_records SET payload = json_set(payload, '$.state', 'consumed') WHERE json_extract(payload, '$.type') = 'usage' AND json_extract(payload, '$.state') = 'reserved' AND json_extract(payload, '$.jobId') IN (SELECT id FROM jobs WHERE status = 'done')");
+    const reservations = database.query(`
+      SELECT id, payload FROM decrypt_credit_records
+      WHERE json_extract(payload, '$.type') = 'usage' AND json_extract(payload, '$.state') = 'reserved'
+        AND json_extract(payload, '$.jobId') NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))
+    `).all() as Array<{ id: string; payload: string }>;
+    for (const reservation of reservations) {
+      const usage = JSON.parse(reservation.payload) as { grantId: string };
+      const grantRow = database.query('SELECT payload FROM decrypt_credit_records WHERE id = ?').get(usage.grantId) as { payload: string } | null;
+      if (grantRow) {
+        const grant = JSON.parse(grantRow.payload) as { remaining: number };
+        if (!('refundedAt' in grant)) {
+          database.query('UPDATE decrypt_credit_records SET payload = ?, updated_at = ? WHERE id = ?').run(JSON.stringify({ ...grant, remaining: grant.remaining + 1 }), Date.now(), usage.grantId);
+        }
+      }
+      database.query('DELETE FROM decrypt_credit_records WHERE id = ?').run(reservation.id);
+    }
+    database.exec("DELETE FROM decrypt_quota_ledger WHERE state = 'reserved' AND job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
+    database.exec('COMMIT;');
+  } catch (error) {
+    database.exec('ROLLBACK;');
+    throw error;
+  }
 }
 
 export function createJobRepository(database: Database): JobRepository {
@@ -606,12 +654,88 @@ export function createJobRepository(database: Database): JobRepository {
       return admittedId;
     },
     settleQuota(jobId, success) {
-      if (success) database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
-      else database.query("DELETE FROM decrypt_quota_ledger WHERE job_id = ? AND state = 'reserved'").run(jobId);
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const usageRow = database.query("SELECT id, payload FROM decrypt_credit_records WHERE json_extract(payload, '$.type') = 'usage' AND json_extract(payload, '$.jobId') = ? AND json_extract(payload, '$.state') = 'reserved'").get(jobId) as { id: string; payload: string } | null;
+        if (success) {
+          database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
+          if (usageRow) database.query("UPDATE decrypt_credit_records SET payload = json_set(payload, '$.state', 'consumed'), updated_at = ? WHERE id = ?").run(Date.now(), usageRow.id);
+        } else {
+          database.query("DELETE FROM decrypt_quota_ledger WHERE job_id = ? AND state = 'reserved'").run(jobId);
+          if (usageRow) {
+            const usage = JSON.parse(usageRow.payload) as { grantId: string };
+            const grantRow = database.query('SELECT payload FROM decrypt_credit_records WHERE id = ?').get(usage.grantId) as { payload: string } | null;
+            if (grantRow) {
+              const grant = JSON.parse(grantRow.payload) as { remaining: number };
+              if (!('refundedAt' in grant)) {
+                database.query('UPDATE decrypt_credit_records SET payload = ?, updated_at = ? WHERE id = ?').run(JSON.stringify({ ...grant, remaining: grant.remaining + 1 }), Date.now(), usage.grantId);
+              }
+            }
+            database.query('DELETE FROM decrypt_credit_records WHERE id = ?').run(usageRow.id);
+          }
+        }
+        database.exec('COMMIT;');
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
     },
     reconcileQuota: () => reconcileQuota(database),
     mergeQuotaOwner: (targetUserId, sourceUserId) => { database.query('UPDATE decrypt_quota_ledger SET owner_id = ? WHERE owner_id = ?').run(targetUserId.trim().toLowerCase(), sourceUserId.trim().toLowerCase()); },
     quotaSnapshot: () => (database.query('SELECT job_id, owner_id, admitted_at, state FROM decrypt_quota_ledger').all() as Array<{ job_id: string; owner_id: string; admitted_at: number; state: 'reserved' | 'consumed' }>).map((row) => ({ jobId: row.job_id, ownerId: row.owner_id, admittedAt: row.admitted_at, state: row.state })),
+    creditBalance(ownerId, now = Date.now()) {
+      const normalizedOwnerId = ownerId.trim().toLowerCase();
+      const rows = database.query(`
+        SELECT id, payload FROM decrypt_credit_records
+        WHERE json_extract(payload, '$.type') = 'grant'
+          AND json_extract(payload, '$.ownerId') = ?
+          AND (json_type(payload, '$.expiresAt') IS NULL OR json_extract(payload, '$.expiresAt') > ?)
+        ORDER BY updated_at ASC, id ASC
+      `).all(normalizedOwnerId, now) as Array<{ id: string; payload: string }>;
+      const grants = rows.map(({ id, payload }) => {
+        const grant = JSON.parse(payload) as { remaining: number; expiresAt?: number; source: string };
+        return { id, remaining: grant.remaining, expiresAt: grant.expiresAt, source: grant.source };
+      }).filter((grant) => grant.remaining > 0);
+      return { available: grants.reduce((total, grant) => total + grant.remaining, 0), grants };
+    },
+    grantCredits(ownerId, quantity, source, reference, expiresAt, now = Date.now()) {
+      const normalizedOwnerId = ownerId.trim().toLowerCase();
+      if (!normalizedOwnerId || !Number.isInteger(quantity) || quantity < 1 || quantity > 100_000 || !reference || reference.length > 200) throw new Error('invalid decrypt credit grant');
+      const id = `grant:${source}:${reference}:${normalizedOwnerId}`;
+      const payload = { id, type: 'grant', ownerId: normalizedOwnerId, quantity, remaining: quantity, source, reference, createdAt: now, ...(expiresAt ? { expiresAt } : {}) };
+      const result = database.query('INSERT INTO decrypt_credit_records (id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING').run(id, JSON.stringify(payload), now);
+      return { id, granted: result.changes === 1 };
+    },
+    findStripeCreditOwner(paymentIntentId) {
+      const row = database.query("SELECT json_extract(payload, '$.ownerId') AS owner_id FROM decrypt_credit_records WHERE json_extract(payload, '$.type') = 'grant' AND json_extract(payload, '$.source') = 'stripe' AND json_extract(payload, '$.reference') = ? LIMIT 1").get(paymentIntentId) as { owner_id: string } | null;
+      return row?.owner_id;
+    },
+    revokeStripeCreditGrant(ownerId, paymentIntentId, quantity = 0, now = Date.now()) {
+      const normalizedOwnerId = ownerId.trim().toLowerCase();
+      const id = `grant:stripe:${paymentIntentId}:${normalizedOwnerId}`;
+      if (!normalizedOwnerId || !paymentIntentId || !Number.isInteger(quantity) || quantity < 0 || quantity > 100_000) throw new Error('invalid Stripe credit refund');
+      database.exec('BEGIN IMMEDIATE;');
+      try {
+        const row = database.query('SELECT payload FROM decrypt_credit_records WHERE id = ?').get(id) as { payload: string } | null;
+        if (!row) {
+          const tombstone = { id, type: 'grant', ownerId: normalizedOwnerId, quantity, remaining: 0, source: 'stripe', reference: paymentIntentId, createdAt: now, refundedAt: now };
+          database.query('INSERT INTO decrypt_credit_records (id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING').run(id, JSON.stringify(tombstone), now);
+          database.exec('COMMIT;');
+          return { id, revoked: true };
+        }
+        const grant = JSON.parse(row.payload) as { remaining: number; refundedAt?: number };
+        if (grant.refundedAt) {
+          database.exec('COMMIT;');
+          return { id, revoked: false };
+        }
+        database.query('UPDATE decrypt_credit_records SET payload = ?, updated_at = ? WHERE id = ?').run(JSON.stringify({ ...grant, remaining: 0, refundedAt: now }), now, id);
+        database.exec('COMMIT;');
+        return { id, revoked: true };
+      } catch (error) {
+        database.exec('ROLLBACK;');
+        throw error;
+      }
+    },
     close: () => database.close(),
   };
 }
@@ -739,6 +863,29 @@ export function reconcileDecryptQuota(): void {
 
 export function mergeDecryptQuotaOwner(targetUserId: string, sourceUserId: string): void {
   repository.mergeQuotaOwner(targetUserId, sourceUserId);
+}
+
+export function getDecryptCreditBalance(ownerId: string, now = Date.now()): DecryptCreditBalance {
+  return repository.creditBalance(ownerId, now);
+}
+
+export function grantDecryptCredits(
+  ownerId: string,
+  quantity: number,
+  source: 'stripe' | 'outage' | 'manual',
+  reference: string,
+  expiresAt?: number,
+  now = Date.now(),
+): { id: string; granted: boolean } {
+  return repository.grantCredits(ownerId, quantity, source, reference, expiresAt, now);
+}
+
+export function findStripeDecryptCreditOwner(paymentIntentId: string): string | undefined {
+  return repository.findStripeCreditOwner(paymentIntentId);
+}
+
+export function revokeStripeDecryptCredits(ownerId: string, paymentIntentId: string, quantity?: number, now?: number): { id: string; revoked: boolean } {
+  return repository.revokeStripeCreditGrant(ownerId, paymentIntentId, quantity, now);
 }
 
 export function exportDecryptQuotaLedger(): ReturnType<JobRepository['quotaSnapshot']> {

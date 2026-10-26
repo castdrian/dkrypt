@@ -646,7 +646,13 @@ export type AuditAction =
   | 'integration.billing-owner-request'
   | 'integration.billing-owner-accept'
   | 'auth.account.link'
-  | 'auth.account.merge';
+  | 'auth.account.merge'
+  | 'mcp.agent.connect'
+  | 'mcp.agent.revoke'
+  | 'mcp.decrypt.approve'
+  | 'mcp.decrypt.deny'
+  | 'billing.decrypt-credit.grant'
+  | 'billing.decrypt-credit.refund';
 
 export interface AuditLogEntry {
   id: string;
@@ -4012,7 +4018,7 @@ export function markNotificationsRead(userId: string, ids?: string[]): number {
   return changed;
 }
 
-const BACKUP_VERSION = 12;
+const BACKUP_VERSION = 14;
 
 type BackupDeviceRecord = Omit<DeviceRecord, 'transport' | 'host' | 'udid'>
   & { transport: DeviceTransport }
@@ -4048,6 +4054,8 @@ export interface BackupPayload {
   billing: BillingSnapshot;
   identities: IdentitySnapshot;
   decryptQuotaLedger: ReturnType<typeof exportDecryptQuotaLedger>;
+  decryptCreditRecords: Array<Record<string, unknown>>;
+  mcpRecords: Array<Record<string, unknown>>;
 }
 
 function normalizeBackupDevice(device: DeviceRecord): BackupDeviceRecord {
@@ -4101,6 +4109,8 @@ export function exportBackup(): BackupPayload {
     billing: exportBillingSnapshot(),
     identities: exportIdentitySnapshot(),
     decryptQuotaLedger: exportDecryptQuotaLedger(),
+    decryptCreditRecords: stateDatabase.readCollection('decrypt_credit_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type))),
+    mcpRecords: stateDatabase.readCollection('mcp_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type))),
   };
 }
 
@@ -4502,6 +4512,8 @@ interface ValidatedBackupPayload {
   billing: BillingSnapshot;
   identities: IdentitySnapshot;
   decryptQuotaLedger: ReturnType<typeof exportDecryptQuotaLedger>;
+  decryptCreditRecords: Array<Record<string, unknown>>;
+  mcpRecords: Array<Record<string, unknown>>;
 }
 
 function isArtifactProjectLinkShape(value: unknown): value is ArtifactProjectLink {
@@ -4517,14 +4529,20 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'not a valid backup file' };
   const b = raw as Record<string, unknown>;
 
-  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== BACKUP_VERSION) {
+  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== 12 && b.backupVersion !== 13 && b.backupVersion !== BACKUP_VERSION) {
     return { ok: false, error: `unsupported backup version (expected 3 through ${BACKUP_VERSION})` };
   }
   if (b.backupVersion >= 12 && (typeof b.apiKeyRequestHistory !== 'object' || b.apiKeyRequestHistory === null || Array.isArray(b.apiKeyRequestHistory) || Object.values(b.apiKeyRequestHistory).some((entries) => !Array.isArray(entries) || !entries.every((entry) => typeof entry === 'object' && entry !== null && Number.isFinite(entry.at) && typeof entry.method === 'string' && typeof entry.route === 'string' && Number.isFinite(entry.status))))) {
     return { ok: false, error: 'apiKeyRequestHistory is missing or malformed' };
   }
-  if (b.backupVersion === BACKUP_VERSION && (!Array.isArray(b.decryptQuotaLedger) || !b.decryptQuotaLedger.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.jobId === 'string' && typeof entry.ownerId === 'string' && Number.isFinite(entry.admittedAt) && ['reserved', 'consumed'].includes(entry.state)))) {
+  if (b.backupVersion >= 12 && (!Array.isArray(b.decryptQuotaLedger) || !b.decryptQuotaLedger.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.jobId === 'string' && typeof entry.ownerId === 'string' && Number.isFinite(entry.admittedAt) && ['reserved', 'consumed'].includes(entry.state)))) {
     return { ok: false, error: 'decrypt quota ledger is missing or malformed' };
+  }
+  if (b.backupVersion >= 13 && (!Array.isArray(b.decryptCreditRecords) || !b.decryptCreditRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && ['grant', 'usage', 'outage'].includes(entry.type)))) {
+    return { ok: false, error: 'decrypt credit records are missing or malformed' };
+  }
+  if (b.backupVersion === BACKUP_VERSION && (!Array.isArray(b.mcpRecords) || !b.mcpRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && ['client', 'access_token', 'refresh_token'].includes(String(entry.type))))) {
+    return { ok: false, error: 'connected agent records are missing or malformed' };
   }
   if (!Array.isArray(b.allowedUsers) || !b.allowedUsers.every(isAllowedUserRecord)) {
     return { ok: false, error: 'allowedUsers is missing or malformed' };
@@ -4646,6 +4664,8 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
         : { customers: [], subscriptions: [], cryptoCheckouts: [], cryptoCharges: [], processedEvents: [] },
       identities: isIdentitySnapshot(b.identities) ? b.identities : { profiles: [] },
       decryptQuotaLedger: Array.isArray(b.decryptQuotaLedger) ? b.decryptQuotaLedger as ReturnType<typeof exportDecryptQuotaLedger> : [],
+      decryptCreditRecords: Array.isArray(b.decryptCreditRecords) ? b.decryptCreditRecords as Array<Record<string, unknown>> : [],
+      mcpRecords: Array.isArray(b.mcpRecords) ? b.mcpRecords as Array<Record<string, unknown>> : [],
     },
   };
 }
@@ -4744,6 +4764,8 @@ function backupDatabaseCollections(
     ...accountRepository.collectionReplacements(accounts),
     projectCollectionReplacement([createDefaultProject()]),
     { table: 'decrypt_quota_ledger', rows: payload.decryptQuotaLedger.map((entry) => ({ id: entry.jobId, payload: entry, updatedAt: entry.admittedAt })) },
+    { table: 'decrypt_credit_records', rows: payload.decryptCreditRecords.flatMap((entry) => typeof entry === 'object' && entry !== null && typeof (entry as Record<string, unknown>).id === 'string' ? [{ id: (entry as Record<string, unknown>).id as string, payload: entry, updatedAt: typeof (entry as Record<string, unknown>).createdAt === 'number' ? (entry as Record<string, unknown>).createdAt as number : Date.now() }] : []) },
+    { table: 'mcp_records', rows: payload.mcpRecords.flatMap((entry) => typeof entry === 'object' && entry !== null && typeof (entry as Record<string, unknown>).id === 'string' && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)) ? [{ id: (entry as Record<string, unknown>).id as string, payload: entry, updatedAt: typeof (entry as Record<string, unknown>).createdAt === 'number' ? (entry as Record<string, unknown>).createdAt as number : Date.now() }] : []) },
   ];
 }
 
@@ -4890,6 +4912,12 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
         const expected = expectedQuotaByJobId.get(row.job_id);
         return !expected || row.owner_id !== expected.ownerId || row.admitted_at !== expected.admittedAt || row.state !== expected.state;
       })) return { label: 'Temporary SQLite restore', ok: false, detail: 'Decrypt quota ledger did not survive a database reopen' };
+      const expectedCreditRecords = payload.decryptCreditRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
+      const actualCreditRecords = readStateCollection(database.db, 'decrypt_credit_records').filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
+      if (!sameCollectionPayloads(expectedCreditRecords, actualCreditRecords)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Decrypt credit and service outage records did not survive a database reopen' };
+      const expectedMcpRecords = payload.mcpRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)));
+      const actualMcpRecords = readStateCollection(database.db, 'mcp_records').filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)));
+      if (!sameCollectionPayloads(expectedMcpRecords, actualMcpRecords)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Connected agent records did not survive a database reopen' };
       const normalizedEntitlementHistory = expectedBilling.entitlementHistory ?? [];
       if (
         !sameRecordsByKey(billingRepository.listCustomers(), expectedBilling.customers, (record) => `${record.provider}:${record.customerId}`) ||
@@ -4912,7 +4940,7 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
         return { label: 'Temporary SQLite restore', ok: false, detail: 'Identity records did not survive a database reopen' };
       }
 
-      return { label: 'Temporary SQLite restore', ok: true, detail: `SQLite schema ${database.schemaVersion} reopened with state, accounts, roles, billing, and identity records intact` };
+      return { label: 'Temporary SQLite restore', ok: true, detail: `SQLite schema ${database.schemaVersion} reopened with state, accounts, roles, billing, identities, credits, and agent records intact` };
     } finally {
       database.close();
     }

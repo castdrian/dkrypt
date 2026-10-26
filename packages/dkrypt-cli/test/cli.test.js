@@ -6,6 +6,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createPkcePair, validateMcpBaseUrl, validateOAuthMetadata } from '../src/mcp.js';
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/cli.js');
 
@@ -22,6 +23,42 @@ test('CLI prints shell completions without requiring API credentials', async () 
   assert.match(result.stdout, /complete -c dkrypt/);
   assert.match(result.stdout, /follow/);
   assert.match(result.stdout, /cursor/);
+});
+
+test('CLI help advertises OAuth MCP access and the terminal dashboard', async () => {
+  const child = spawn(process.execPath, [cliPath, '--help'], { env: { ...process.env, DKRYPT_CONFIG_PATH: '/tmp/dkrypt-cli-missing-config' } });
+  const result = await new Promise((resolve) => {
+    let stdout = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.on('close', (status) => resolve({ status, stdout }));
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /mcp <login\|logout\|stdio>/);
+  assert.match(result.stdout, /dkrypt tui/);
+});
+
+test('MCP CLI validates origins and creates a valid PKCE challenge', () => {
+  assert.equal(validateMcpBaseUrl('https://ipa.dylib.dev'), 'https://ipa.dylib.dev');
+  assert.equal(validateMcpBaseUrl('http://127.0.0.1:4173'), 'http://127.0.0.1:4173');
+  assert.throws(() => validateMcpBaseUrl('http://ipa.dylib.dev'), /HTTPS/);
+  assert.throws(() => validateMcpBaseUrl('https://ipa.dylib.dev/path'), /origin/);
+  const pair = createPkcePair();
+  assert.match(pair.verifier, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(pair.challenge, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(pair.verifier, pair.challenge);
+});
+
+test('MCP CLI rejects OAuth metadata endpoints outside dkrypt and unexpected resources', () => {
+  const metadata = {
+    authorization_endpoint: 'https://ipa.dylib.dev/oauth/authorize',
+    token_endpoint: 'https://ipa.dylib.dev/oauth/token',
+    registration_endpoint: 'https://ipa.dylib.dev/oauth/register',
+    revocation_endpoint: 'https://ipa.dylib.dev/oauth/revoke',
+    resource: 'https://ipa.dylib.dev/v1/mcp',
+  };
+  assert.equal(validateOAuthMetadata(metadata, 'https://ipa.dylib.dev'), metadata);
+  assert.throws(() => validateOAuthMetadata({ ...metadata, token_endpoint: 'https://attacker.example/token' }, 'https://ipa.dylib.dev'), /outside the configured origin/);
+  assert.throws(() => validateOAuthMetadata({ ...metadata, resource: 'https://ipa.dylib.dev/v1/jobs' }, 'https://ipa.dylib.dev'), /resource does not match/);
 });
 
 test('CLI generates proxy examples before API authentication is configured', async () => {

@@ -72,6 +72,7 @@
     legacyBilling: boolean;
     entitlement: Entitlement;
     quota: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number };
+    decryptCredits: { available: number; grants: Array<{ id: string; remaining: number; expiresAt?: number; source: string }>; purchaseEnabled: boolean; purchaseQuantity: number };
     apiRateUsage?: { limit: number; used: number; remaining: number; resetAt: number };
     usageForecast: { sampleDays: number; jobsInSample: number; averagePerDay: number; daysUntilAllowanceUsed: number | null };
     providers: {
@@ -104,11 +105,14 @@
   let checkoutIdempotencyPlan = $state<PlanId | undefined>();
   let checkoutIdempotencyProvider = $state<PaymentProvider | undefined>();
   let paymentProvider = $state<PaymentProvider>('stripe');
+  let buyingCredits = $state(false);
+  let creditCheckoutIdempotencyKey = $state<string | undefined>();
   let planChangeOpen = $state(false);
   let pendingPlanChange = $state<Plan | undefined>();
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
+  let creditCheckoutState = $state<CheckoutState>(checkoutParams.get('credits') as CheckoutState);
   const visibleInvoices = $derived.by(() => invoices.filter((invoice) => {
     const query = receiptQuery.trim().toLowerCase();
     return (receiptProvider === 'all' || invoice.provider === receiptProvider)
@@ -152,6 +156,29 @@
       showToast("Couldn't load billing right now", 'error');
     } finally {
       loading = false;
+    }
+  }
+
+  async function buyDecryptCredits(): Promise<void> {
+    if (!billing?.decryptCredits.purchaseEnabled || !billing.entitlement.decrypt) return;
+    buyingCredits = true;
+    creditCheckoutIdempotencyKey ??= crypto.randomUUID();
+    try {
+      const response = await fetch('/v1/billing/credits/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': creditCheckoutIdempotencyKey },
+        body: JSON.stringify({}),
+      });
+      const result = await response.json().catch(() => ({})) as { url?: string; error?: string; message?: string };
+      if (!response.ok || !result.url) {
+        showToast(result.message ?? result.error ?? "Couldn't start credit checkout", 'error');
+        return;
+      }
+      location.assign(result.url);
+    } catch {
+      showToast("Couldn't connect to checkout. Try again to safely reuse this request.", 'error');
+    } finally {
+      buyingCredits = false;
     }
   }
 
@@ -450,6 +477,15 @@
         {#if billing.quota.limit !== null}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-2 rounded-lg border border-border/70 px-3 py-2"><div class="flex items-center justify-between gap-3 text-xs"><span>API request limit</span><span class="tabular-nums">{billing.apiRateUsage?.used ?? 0} of {billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute} per minute</span></div><div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-muted"><div class="h-full rounded-full bg-accent transition-[width]" style={`width: ${Math.min(100, ((billing.apiRateUsage?.used ?? 0) / (billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute)) * 100)}%`}></div></div><div class="mt-1 text-[11px] text-muted">Shared across all your API keys. Resets continuously over a rolling minute.</div></div>{/if}
         {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
+        <div class="mt-4 rounded-lg border border-border/70 bg-panel-muted/20 p-3">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0"><div class="font-medium">Burst decrypt credits</div><div class="mt-1 text-xs text-muted">{billing.decryptCredits.available} available · {billing.decryptCredits.purchaseQuantity} more per one-time Stripe purchase</div></div>
+            <Button size="sm" variant="secondary" loading={buyingCredits} disabled={!billing.decryptCredits.purchaseEnabled || !billing.entitlement.decrypt} onclick={() => void buyDecryptCredits()}>Buy credits</Button>
+          </div>
+          {#if !billing.decryptCredits.purchaseEnabled}<p class="mt-2 text-xs text-muted">One-time credit checkout is not configured on this instance.</p>{:else if !billing.entitlement.decrypt}<p class="mt-2 text-xs text-muted">An active decrypt plan is required before you can buy burst credits.</p>{/if}
+          {#if billing.decryptCredits.grants.length}<ul class="mt-3 divide-y divide-border/70 border-t border-border/70">{#each billing.decryptCredits.grants as grant (grant.id)}<li class="flex flex-wrap justify-between gap-2 py-2 text-xs"><span>{grant.remaining} credits · {grant.source === 'outage' ? 'service recovery' : grant.source === 'stripe' ? 'Stripe purchase' : 'account credit'}</span><span class="text-muted">{grant.expiresAt ? `Expires ${formatDate(new Date(grant.expiresAt).toISOString())}` : 'No expiry'}</span></li>{/each}</ul>{/if}
+          {#if creditCheckoutState === 'success'}<p class="mt-2 text-xs text-muted" role="status">Checkout completed. Credits appear after Stripe confirms the payment.</p>{:else if creditCheckoutState === 'cancelled'}<p class="mt-2 text-xs text-muted" role="status">Credit checkout canceled. No payment was made.</p>{/if}
+        </div>
         <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a><Button size="sm" variant="secondary" onclick={() => void toggleQuotaHistory()}>{quotaHistoryOpen ? 'Hide allowance history' : 'View allowance history'}</Button></div>
         {#if quotaHistoryOpen}<div class="mt-3 border-t border-border pt-3">{#if quotaHistoryLoading}<div class="text-xs text-muted" role="status">Loading allowance history…</div>{:else if quotaHistory?.length}<ul class="divide-y divide-border/70">{#each quotaHistory as entry (`${entry.jobId}-${entry.at}`)}<li class="flex flex-wrap items-center justify-between gap-2 py-2 text-xs"><span class="min-w-0"><span class="font-medium">{entry.bundleId ?? 'Decrypt request'}</span>{#if entry.versionLabel}<span class="text-muted"> · {entry.versionLabel}</span>{/if}<span class="mt-0.5 block text-muted">{entry.status} · {entry.source ?? 'unknown source'}</span></span><span class="shrink-0 text-muted">{formatDate(new Date(entry.at).toISOString())} · {entry.state === 'consumed' ? 'used' : 'reserved'}</span></li>{/each}</ul>{:else}<div class="text-xs text-muted">No allowance activity is recorded yet.</div>{/if}</div>{/if}
         {#if planFit}<div class="mt-3 rounded-lg border border-border/70 bg-panel-muted/30 p-3 text-xs"><div class="font-medium">Plan fit for your recent usage</div>{#if planFit.legacy}<p class="mt-1 text-muted">Your current plan is grandfathered. Its benefits stay in place; dkrypt will not recommend a switch that could remove them.</p>{:else if planFit.plan}<p class="mt-1 text-muted">At about {planFit.expectedDaily.toFixed(1)} decrypts per day with a 25% buffer, {planFit.plan.name} is the lowest-priced tier that fits. This estimate uses your recent usage and preserves any API or priority access already on your plan.</p><Button class="mt-2" size="sm" variant="secondary" onclick={() => showPlan(planFit.plan!)}>Compare {planFit.plan.name}</Button>{:else}<p class="mt-1 text-muted">No new tier covers this usage while preserving your current API and priority benefits. Your existing plan remains unchanged.</p>{/if}</div>{/if}

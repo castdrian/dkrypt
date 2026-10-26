@@ -8,6 +8,10 @@ The CLI's `follow` command reconnects to the resumable job event stream. The Typ
 
 Run `dkrypt doctor` (or `dkrypt doctor --json`) to verify the API key and IPA Library using only the public API routes available to generated keys.
 
+Connect an MCP client to your dkrypt account with `dkrypt mcp login`. Sign-in uses a browser OAuth approval and stores short-lived tokens in the profile configuration. Run `dkrypt mcp stdio` as the MCP server command in a desktop agent. Disconnect with `dkrypt mcp logout`. Decrypt plans require an explicit approval in dkrypt before submission.
+
+Run `dkrypt tui` for a keyboard-driven view of the 20 most recent jobs. It refreshes automatically; use `j`/`k` or the arrow keys to select, Enter to show details, `f` to follow a job, `r` to refresh, and `q` to exit.
+
 ```sh
 cd packages/dkrypt-cli
 npm install --global .

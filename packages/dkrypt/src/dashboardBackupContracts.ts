@@ -218,10 +218,12 @@ const optionalVersionedProperties = {
   billing: Type.Optional(JsonObject),
   identities: Type.Optional(JsonObject),
   decryptQuotaLedger: Type.Optional(Type.Array(JsonObject)),
+  decryptCreditRecords: Type.Optional(Type.Array(JsonObject)),
+  mcpRecords: Type.Optional(Type.Array(JsonObject)),
   apiKeyRequestHistory: Type.Optional(Type.Record(Type.String(), Type.Array(JsonObject))),
 };
 
-function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
+function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
   return Type.Object({
     backupVersion: Type.Literal(version),
     ...commonBackupProperties,
@@ -240,11 +242,13 @@ const BackupV9 = backupVersionSchema(9, BackupV9Fields);
 const BackupV10 = backupVersionSchema(10, BackupV10Fields);
 const BackupV11 = backupVersionSchema(11, BackupV11Fields);
 const BackupV12 = backupVersionSchema(12, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)) });
+const BackupV13 = backupVersionSchema(13, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject) });
+const BackupV14 = backupVersionSchema(14, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject), mcpRecords: Type.Array(JsonObject) });
 
-export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11, BackupV12]);
+export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11, BackupV12, BackupV13, BackupV14]);
 
 export const backupExportResponseSchema = Type.Object({
-  ...BackupV12.properties,
+  ...BackupV14.properties,
   exportedAt: Type.Number(),
 }, { additionalProperties: true });
 

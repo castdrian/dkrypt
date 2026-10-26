@@ -83,6 +83,8 @@ export const config = {
   stripeDeveloperPriceId: optional('STRIPE_DEVELOPER_PRICE_ID', ''),
   stripeUnlimitedPriceId: optional('STRIPE_UNLIMITED_PRICE_ID', ''),
   stripeUnlimitedPriorityPriceId: optional('STRIPE_UNLIMITED_PRIORITY_PRICE_ID', ''),
+  stripeDecryptCreditPriceId: optional('STRIPE_DECRYPT_CREDIT_PRICE_ID', ''),
+  stripeDecryptCreditQuantity: Math.min(100_000, Math.max(1, optionalInt('STRIPE_DECRYPT_CREDIT_QUANTITY', 10))),
   billingCatalogRollout: optional('BILLING_CATALOG_ROLLOUT', 'off'),
   billingCatalogCanaryUserIds: optionalList('BILLING_CATALOG_CANARY_USER_IDS', ''),
 

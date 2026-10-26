@@ -18,15 +18,15 @@ const [command, ...args] = cliArgs;
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt doctor [--json]\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt mcp <login|logout|stdio> [--url <origin>] [--scope <scopes>]\ndkrypt doctor [--json]\ndkrypt tui\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
 if (command === 'completion') {
   const completions = {
-    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    profile) COMPREPLY=( $(compgen -W "list use delete" -- "$cur") ); return ;;\n    --profile) COMPREPLY=(); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout profile completion proxy-config doctor decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
-    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout profile completion proxy-config doctor decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    profile) _values "action" list use delete ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
-    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout profile completion proxy-config doctor decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from profile" -a "list use delete"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l profile -r\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
+    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    profile) COMPREPLY=( $(compgen -W "list use delete" -- "$cur") ); return ;;\n    mcp) COMPREPLY=( $(compgen -W "login logout stdio" -- "$cur") ); return ;;\n    --profile) COMPREPLY=(); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor|--url|--scope) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
+    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    profile) _values "action" list use delete ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
+    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from profile" -a "list use delete"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l profile -r\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
   };
   if (!args[0] || !(args[0] in completions)) throw new Error('Choose bash, zsh, or fish');
   process.stdout.write(completions[args[0]]);
@@ -60,7 +60,7 @@ async function readSavedConfig() {
   try {
     const value = JSON.parse(await readFile(configPath, 'utf8'));
     if (value && typeof value.profiles === 'object' && value.profiles !== null && !Array.isArray(value.profiles)) {
-      const profiles = Object.fromEntries(Object.entries(value.profiles).filter(([name, profile]) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(name) && profile && typeof profile.apiUrl === 'string' && typeof profile.apiKey === 'string'));
+      const profiles = Object.fromEntries(Object.entries(value.profiles).filter(([name, profile]) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(name) && profile && typeof profile.apiUrl === 'string' && (typeof profile.apiKey === 'string' || (profile.mcp && typeof profile.mcp.accessToken === 'string'))));
       const activeProfile = typeof value.activeProfile === 'string' && profiles[value.activeProfile] ? value.activeProfile : Object.keys(profiles)[0];
       return { profiles, activeProfile };
     }
@@ -135,7 +135,7 @@ async function login() {
   }
   const apiKey = await readHiddenInput('API key (input hidden): ');
   if (apiKey.length < 8) throw new Error('Enter a valid API key');
-  saved.profiles[profileName] = { apiUrl, apiKey };
+  saved.profiles[profileName] = { ...existingProfile, apiUrl, apiKey };
   saved.activeProfile = profileName;
   await writeSavedConfig(saved);
   process.stdout.write(`Signed in to profile "${profileName}". The local configuration is readable only by your account.\n`);
@@ -187,12 +187,18 @@ if (command === 'profile') {
   process.exit(0);
 }
 
+if (command === 'mcp') {
+  const { runMcpCommand } = await import('./mcp.js');
+  await runMcpCommand(args, { configPath, profileName: optionValue('--profile') ?? requestedProfile });
+  process.exit(0);
+}
+
 const savedConfig = await readSavedConfig();
 const profileName = selectedProfileName(savedConfig);
 const profile = savedConfig.profiles[profileName] ?? {};
 const baseUrl = process.env.DKRYPT_API_URL ?? profile.apiUrl;
 const apiKey = process.env.DKRYPT_API_KEY ?? profile.apiKey;
-if (!baseUrl || !apiKey) throw new Error('Set DKRYPT_API_URL and DKRYPT_API_KEY in the environment, or run dkrypt login');
+if (!baseUrl || (!apiKey && !(command === 'tui' && profile.mcp))) throw new Error('Set DKRYPT_API_URL and DKRYPT_API_KEY in the environment, or run dkrypt login');
 validateApiUrl(baseUrl);
 const origin = new URL(baseUrl).origin;
 
@@ -256,6 +262,96 @@ async function runDoctor() {
   if (args.includes('--json')) process.stdout.write(`${JSON.stringify({ checkedAt: new Date().toISOString(), checks }, null, 2)}\n`);
   else for (const check of checks) process.stdout.write(`[${check.status.toUpperCase()}] ${check.name}: ${check.detail}\n`);
   if (checks.some((check) => check.status === 'error')) process.exitCode = 1;
+}
+
+async function rememberJob(jobId) {
+  if (typeof jobId !== 'string' || !jobId) return;
+  const saved = await readSavedConfig();
+  const name = selectedProfileName(saved);
+  const current = saved.profiles[name] ?? { apiUrl: baseUrl, apiKey };
+  saved.profiles[name] = { ...current, recentJobIds: [jobId, ...(current.recentJobIds ?? []).filter((id) => id !== jobId)].slice(0, 20) };
+  saved.activeProfile = name;
+  await writeSavedConfig(saved);
+}
+
+async function runTui() {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || !process.stdout.isTTY) throw new Error('dkrypt tui needs an interactive terminal');
+  const jobIds = Array.isArray(profile.recentJobIds) ? profile.recentJobIds.filter((id) => typeof id === 'string').slice(0, 20) : [];
+  if (jobIds.length === 0 && !profile.mcp) throw new Error('No recent jobs are saved yet. Connect with dkrypt mcp login to view jobs submitted from anywhere.');
+  let jobs = [];
+  let selected = 0;
+  let detail = false;
+  let refreshing = false;
+  let stopped = false;
+  const refresh = async () => {
+    if (refreshing || stopped) return;
+    refreshing = true;
+    if (profile.mcp) {
+      try {
+        const { listMcpJobs } = await import('./mcp.js');
+        jobs = await listMcpJobs(configPath, profileName, profile, 20);
+      } catch (error) {
+        jobs = [{ id: '', status: 'unavailable', bundleId: 'Could not load recent jobs', error: error instanceof Error ? error.message : String(error) }];
+      }
+    } else {
+      jobs = await Promise.all(jobIds.map(async (id) => {
+        try {
+          const response = await send(`/v1/jobs/${encodeURIComponent(id)}`);
+          const value = await response.json();
+          return value.job ?? value;
+        } catch (error) {
+          return { id, status: 'unavailable', error: error instanceof Error ? error.message : String(error) };
+        }
+      }));
+    }
+    selected = Math.min(selected, jobs.length - 1);
+    render();
+    refreshing = false;
+  };
+  const render = () => {
+    process.stdout.write('\u001b[2J\u001b[H');
+    process.stdout.write(`dkrypt jobs · ${profileName} · j/k or ↑/↓ select · Enter details · f follow · r refresh · q quit\n\n`);
+    if (jobs.length === 0) process.stdout.write('No decrypt jobs yet.\n');
+    jobs.forEach((job, index) => {
+      const marker = index === selected ? '›' : ' ';
+      process.stdout.write(`${marker} ${String(job.status ?? 'unknown').padEnd(12)} ${job.bundleId ?? 'Decrypt job'}${job.versionLabel ? ` · ${job.versionLabel}` : ''}  ${job.id}\n`);
+      if (detail && index === selected) process.stdout.write(`  ${job.progress ?? ''}${job.error ? `\n  ${job.error}` : ''}${job.artifactId ? `\n  IPA artifact ${job.artifactId}` : ''}\n`);
+    });
+    process.stdout.write('\nUpdated ' + new Date().toLocaleTimeString() + '\n');
+  };
+  const onKeypress = async (value, key = {}) => {
+    if (key.ctrl && key.name === 'c' || value === 'q') {
+      stopped = true;
+      clearInterval(timer);
+      process.stdin.off('keypress', onKeypress);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdout.write('\u001b[?25h\n');
+      return;
+    }
+    if (value === 'j' || key.name === 'down') selected = Math.min(jobs.length - 1, selected + 1);
+    else if (value === 'k' || key.name === 'up') selected = Math.max(0, selected - 1);
+    else if (key.name === 'return') detail = !detail;
+    else if (value === 'r') await refresh();
+    else if (value === 'f' && jobs[selected]?.id) {
+      process.stdin.off('keypress', onKeypress);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      await followJob(jobs[selected].id);
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.on('keypress', onKeypress);
+    }
+    render();
+  };
+  const { emitKeypressEvents } = await import('node:readline');
+  emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdout.write('\u001b[?25l');
+  process.stdin.on('keypress', onKeypress);
+  const timer = setInterval(() => void refresh(), 10_000);
+  await refresh();
 }
 
 async function followJob(jobId) {
@@ -337,6 +433,8 @@ function optionValue(name) {
 
 if (command === 'doctor') {
   await runDoctor();
+} else if (command === 'tui') {
+  await runTui();
 } else if (command === 'decrypt') {
   const bundleId = args[0];
   if (!bundleId || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error('Provide a valid app bundle ID');
@@ -349,15 +447,23 @@ if (command === 'doctor') {
     const output = optionValue('--output') ?? `${bundleId}.ipa`;
     await downloadToFile(response, output);
     process.stdout.write(`Saved decrypted IPA to ${output}\n`);
-  } else await printJson(response);
+  } else {
+    const result = await response.json();
+    const jobId = result.job?.id ?? result.jobId ?? result.id;
+    if (typeof jobId === 'string') await rememberJob(jobId);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  }
 } else if (command === 'status') {
   if (!args[0]) throw new Error('Provide a job ID');
+  await rememberJob(args[0]);
   await printJson(await send(`/v1/jobs/${encodeURIComponent(args[0])}`));
 } else if (command === 'wait') {
   if (!args[0]) throw new Error('Provide a job ID');
+  await rememberJob(args[0]);
   await printJson(await send(`/v1/jobs/${encodeURIComponent(args[0])}/wait?timeoutSeconds=25`));
 } else if (command === 'follow') {
   if (!args[0]) throw new Error('Provide a job ID');
+  await rememberJob(args[0]);
   process.stdout.write(`${JSON.stringify(await followJob(args[0]), null, 2)}\n`);
 } else if (command === 'artifacts') {
   const limitText = optionValue('--limit') ?? '100';

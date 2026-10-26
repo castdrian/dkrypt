@@ -80,6 +80,8 @@ import { findPublicApiDeprecation, formatSunsetHeader, publicApiLifecycle } from
 import { closeIncidentRepository, reconcileOperationalIncidents } from '#store/incidentRepository.js';
 import { closeIntegrationRepository } from '#store/integrationRepository.js';
 import { closeOauthLinkReviewRepository } from '#store/oauthLinkReview.js';
+import { closeServiceCreditDatabase, startServiceOutageMonitor, stopServiceOutageMonitor } from '#serviceCredits.js';
+import { closeMcpDatabase, mcpRoutes } from '#routes/mcpRoutes.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const sharedApiRateLimiter = new FixedWindowRateLimiter(config.apiRateLimitPerMinute, 60_000);
@@ -349,6 +351,7 @@ export async function buildServer(options: {
   await server.register(artifactCatalogRoutes);
   await server.register(testFlightCatalogRoutes);
   await server.register(authRoutes);
+  await server.register(mcpRoutes);
   await server.register(dashboardApiKeyRoutes);
   await server.register(dashboardAccountRoutes);
   await server.register(dashboardBackupRoutes);
@@ -387,6 +390,7 @@ export async function buildServer(options: {
 }
 
 async function startBackgroundServices(): Promise<void> {
+  startServiceOutageMonitor();
   const retiredWatches = disableLegacyAppWatches();
   if (retiredWatches > 0) log.info('disabled legacy scheduled app watches', { count: retiredWatches });
   startTelemetry();
@@ -432,6 +436,7 @@ export function registerShutdownHandlers(
     }, 140_000);
     drainingServers.add(server);
     stopAcceptingJobs();
+    stopServiceOutageMonitor();
     stopBackupScheduler();
     void trackBackgroundWork('telemetry-shutdown', stopTelemetry)
       .catch((error: unknown) => log.warn('telemetry shutdown failed', { error: String(error) }));
@@ -481,6 +486,8 @@ export function registerShutdownHandlers(
         closeIncidentRepository();
         closeIntegrationRepository();
         closeOauthLinkReviewRepository();
+        closeMcpDatabase();
+        closeServiceCreditDatabase();
         closeStateDatabase();
         log.info('graceful shutdown completed', { signal });
         stopLogFlusher();
