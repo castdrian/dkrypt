@@ -490,6 +490,7 @@
   {#if planChangeOpen && pendingPlanChange && billing}
     {@const currentPlan = billing.currentPlan}
     {@const newRemaining = pendingPlanChange.dailyDecryptLimit === undefined ? null : Math.max(0, pendingPlanChange.dailyDecryptLimit - billing.quota.used)}
+    {@const priceChange = currentPlan?.currency === pendingPlanChange.currency ? pendingPlanChange.amount - currentPlan.amount : undefined}
     <Dialog open={planChangeOpen} onOpenChange={(open) => (planChangeOpen = open)} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
       <div class="flex items-start justify-between gap-3"><div><h2 class="text-base font-semibold">Review your plan change</h2><p class="mt-1 text-xs text-muted">Nothing changes until you confirm.</p></div><Button size="icon" variant="ghost" aria-label="Close plan review" onclick={() => (planChangeOpen = false)}><X class="h-4 w-4" /></Button></div>
       <div class="mt-4 grid gap-3 sm:grid-cols-2">
@@ -502,7 +503,7 @@
           <li>Usage carries over: {billing.quota.used} decrypts are already counted in the current rolling 24-hour window{newRemaining === null ? '; the new plan has no daily cap.' : `; about ${newRemaining} slots remain under the new allowance.`}</li>
           <li>{pendingPlanChange.api ? `API access stays available${pendingPlanChange.apiRatePerMinute ? ` at ${pendingPlanChange.apiRatePerMinute} requests per minute` : ''}.` : 'API access will be removed with this plan.'}</li>
           <li>{pendingPlanChange.priority > (currentPlan?.priority ?? 0) ? 'Queue priority increases.' : pendingPlanChange.priority < (currentPlan?.priority ?? 0) ? 'Queue priority decreases to standard.' : pendingPlanChange.priority > 0 ? 'Higher queue priority remains.' : 'Standard queue priority remains.'}</li>
-          <li>{billing.entitlement.nextBilledAt ? `Next billing date: ${formatDate(billing.entitlement.nextBilledAt)}.` : 'The plan price will apply through Stripe billing.'} {currentPlan && pendingPlanChange.amount > currentPlan.amount ? 'Stripe may invoice the prorated increase immediately.' : 'Stripe applies any price decrease as a billing proration.'} If payment cannot complete, the current plan remains unchanged.</li>
+          <li>{billing.entitlement.nextBilledAt ? `Next billing date: ${formatDate(billing.entitlement.nextBilledAt)}.` : 'The plan price will apply through Stripe billing.'} {priceChange === undefined ? 'Stripe will apply the selected price through your billing schedule.' : priceChange > 0 ? 'Stripe may invoice the prorated increase immediately.' : priceChange < 0 ? 'Stripe applies a prorated credit for the price decrease.' : 'The monthly price is unchanged; no price adjustment is expected.'} If payment cannot complete, the current plan remains unchanged.</li>
         </ul>
       </div>
       {#if billing.entitlement.legacy}

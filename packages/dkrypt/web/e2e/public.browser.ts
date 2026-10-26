@@ -212,7 +212,7 @@ test('inactive billing waits for selection and stays mounted after first visit',
 
 test('Stripe plan changes show their usage and access impact before confirmation', async ({ page }) => {
   await mockAuthenticatedDashboard(page, '2');
-  const currentPlan = { ...publicPricingPlans[0], priceId: 'price_access', legacy: false };
+  const currentPlan = { ...publicPricingPlans[0], id: 'regular', name: 'Regular', amount: 5, priceId: 'price_regular', dailyDecryptLimit: undefined, legacy: true };
   const plans = publicPricingPlans.map((plan) => ({ ...plan, priceId: `price_${plan.id}`, legacy: false }));
   let planChangeRequests = 0;
   await page.route('**/v1/billing', async (route) => {
@@ -226,8 +226,8 @@ test('Stripe plan changes show their usage and access impact before confirmation
       currentPlan,
       customerId: 'cus_test',
       legacyBilling: false,
-      entitlement: { planId: 'access', decrypt: true, api: false, priority: 0, provider: 'stripe', status: 'active', subscriptionId: 'sub_test', dailyDecryptLimit: 2 },
-      quota: { limit: 2, used: 1, remaining: 1 },
+      entitlement: { planId: 'regular', decrypt: true, api: false, priority: 0, provider: 'stripe', status: 'active', subscriptionId: 'sub_test', legacy: true },
+      quota: { limit: null, used: 1, remaining: null },
       usageForecast: { sampleDays: 30, jobsInSample: 8, averagePerDay: 0.3, daysUntilAllowanceUsed: 3 },
       providers: {
         stripe: { enabled: true, ready: true, environment: 'live' },
@@ -251,7 +251,8 @@ test('Stripe plan changes show their usage and access impact before confirmation
   await expect(review).toContainText('1 decrypts are already counted');
   await expect(review).toContainText('9 slots remain');
   await expect(review).toContainText('API access will be removed with this plan.');
-  await expect(review.getByRole('button', { name: 'Confirm switch to Standard' })).toBeVisible();
+  await expect(review).toContainText('The monthly price is unchanged; no price adjustment is expected.');
+  await expect(review.getByRole('button', { name: 'Switch and end legacy plan' })).toBeVisible();
   expect(planChangeRequests).toBe(0);
   await review.getByRole('button', { name: 'Keep current plan' }).click();
   await expect(review).toBeHidden();
