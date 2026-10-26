@@ -1,6 +1,16 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "fix(billing): clarify equal-price plan changes",
+    "description": "Released in 8ca95fe."
+  },
+  {
+    "date": "2026-10-26",
+    "title": "fix(github-action): keep failure summaries accurate",
+    "description": "Released in 220fae5."
+  },
+  {
+    "date": "2026-10-26",
     "title": "refactor(github-action): share workflow summary formatting",
     "description": "Released in 902a11e."
   },
@@ -28,15 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "test(github-action): keep timeout test alive on Node 22",
     "description": "Released in 5901bf6."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix(github-action): write job ID output once",
-    "description": "Released in 5e4fbab."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix(ops): persist worker and trace defaults in compose",
-    "description": "Released in 651570a."
   }
 ] as const;
