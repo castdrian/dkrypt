@@ -13,21 +13,21 @@
     "e2e": "playwright test"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tsconfig/svelte": "^5.0.4",
     "svelte": "^5.57.2",
-    "svelte-check": "^4.7.6",
+    "svelte-check": "^4.7.7",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.7.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^14.0.0",
-    "@tanstack/svelte-virtual": "3.13.45",
-    "bits-ui": "^2.19.5",
+    "@tanstack/svelte-virtual": "3.13.47",
+    "bits-ui": "^2.20.0",
     "clsx": "^2.1.1",
     "lucide-svelte": "^1.0.1",
     "svelte-sonner": "^1.2.1",
