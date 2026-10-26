@@ -130,7 +130,7 @@ test('adds failed single-app submissions to the workflow summary', async () => {
   }
 });
 
-test('keeps cached artifact channel and unknown cache status in failed download summaries', async () => {
+test('keeps cached artifact metadata in failed download summaries', async () => {
   const directory = await temporaryDirectory();
   const summaryPath = path.join(directory, 'summary');
   const fetchImpl = async (input) => {
@@ -155,7 +155,7 @@ test('keeps cached artifact channel and unknown cache status in failed download 
       githubSummary: summaryPath,
     }), { fetchImpl, maxAttempts: 1, sleep: async () => {}, log: () => {} }), /HTTP 503/);
     const summary = await readFile(summaryPath, 'utf8');
-    assert.match(summary, /\| testflight \| Unknown \|/);
+    assert.match(summary, /\| com\.example\.testflight \| 352\.0_118977 \| testflight \| Hit \|/);
     assert.doesNotMatch(summary, /\| appstore \| Miss \|/);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -368,6 +368,7 @@ test('downloads the newest cached artifact for a channel with retry and no decry
 test('downloads a specific artifact ID and removes a file whose size does not match', async () => {
   const directory = await temporaryDirectory();
   const output = path.join(directory, 'invalid.ipa');
+  const summaryPath = path.join(directory, 'summary');
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
     if (url.pathname === '/v1/artifacts/cached-2') {
@@ -386,7 +387,11 @@ test('downloads a specific artifact ID and removes a file whose size does not ma
   };
 
   try {
-    await assert.rejects(runAction(actionConfig(directory, { artifactId: 'cached-2', output }), { fetchImpl, log: () => {} }), /integrity check failed/);
+    await assert.rejects(runAction(actionConfig(directory, { artifactId: 'cached-2', output, githubSummary: summaryPath }), { fetchImpl, log: () => {} }), /integrity check failed/);
+    const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /com\.example\.app/);
+    assert.match(summary, /350\.0/);
+    assert.match(summary, /\| appstore \| Hit \|/);
     assert.equal((await readdir(directory)).some((entry) => entry.includes('partial')), false);
     await assert.rejects(readFile(output));
   } finally {

@@ -105,6 +105,13 @@ async function runSingleAction(config, dependencies = {}) {
   const latestCachedChannel = config.latestCachedChannel?.trim();
   const resolveOnly = isResolveOnly(config.resolveOnly);
   const artifactModeCount = Number(Boolean(artifactId)) + Number(Boolean(latestCachedChannel));
+  const summaryContext = dependencies.summaryContext;
+  if (summaryContext) {
+    summaryContext.bundleId = config.bundleId?.trim() || (artifactId ? `Unknown app (artifact ${artifactId})` : latestCachedChannel ? `latest cached ${latestCachedChannel}` : 'dkrypt operation');
+    summaryContext.version = config.version?.trim() ?? '';
+    if (latestCachedChannel) summaryContext.channel = latestCachedChannel;
+    else if (!artifactId) summaryContext.channel = config.channel ?? 'appstore';
+  }
   if (artifactModeCount > 1) throw new Error('Choose either artifact-id or latest-cached-channel');
   if (artifactModeCount > 0 && (config.bundleId?.trim() || config.version?.trim())) {
     throw new Error('artifact downloads cannot be combined with bundle-id or version');
@@ -132,12 +139,20 @@ async function runSingleAction(config, dependencies = {}) {
   let job;
   if (artifactId || latestCachedChannel) {
     artifact = await fetchExistingArtifact(client, { artifactId, latestCachedChannel, deadlineAt: Date.now() + timeoutSeconds * 1_000 });
+    if (summaryContext) Object.assign(summaryContext, {
+      bundleId: artifact.bundleId ?? summaryContext.bundleId,
+      version: artifact.versionLabel ?? summaryContext.version,
+      channel: artifact.channel ?? summaryContext.channel,
+      cacheHit: true,
+      sizeBytes: artifact.sizeBytes,
+    });
   } else {
     const bundleId = (config.bundleId ?? '').trim();
     if (!BUNDLE_ID_RE.test(bundleId)) throw new Error('Provide a valid app bundle ID');
     const channel = config.channel ?? 'appstore';
     const version = config.version?.trim();
     if (!['appstore', 'testflight'].includes(channel)) throw new Error('channel must be appstore or testflight');
+    if (summaryContext) Object.assign(summaryContext, { bundleId, channel, version: version ?? '' });
     if (channel === 'testflight' && version && !version.includes('_')) throw new Error('TestFlight versions must include a build number, or leave version empty to resolve the latest build');
     if (channel === 'appstore' && version?.includes('_')) throw new Error('App Store versions cannot include a TestFlight build number');
 
@@ -204,6 +219,13 @@ async function runSingleAction(config, dependencies = {}) {
 
     if (job.status === 'failed') throw new Error(`dkrypt job ${job.id} failed: ${String(job.error ?? 'unknown failure').slice(0, 500)}`);
     artifact = artifactFromJob(job, bundleId);
+    if (summaryContext) Object.assign(summaryContext, {
+      bundleId: artifact.bundleId,
+      version: artifact.versionLabel ?? '',
+      channel: artifact.channel,
+      cacheHit: artifact.cacheHit,
+      sizeBytes: artifact.sizeBytes,
+    });
   }
 
   if (typeof artifact.id !== 'string' || !artifact.id) throw new Error('dkrypt did not return an artifact ID');
@@ -213,6 +235,13 @@ async function runSingleAction(config, dependencies = {}) {
     artifact = { ...artifact, ...metadata };
   }
   if (!['appstore', 'testflight'].includes(artifact.channel)) throw new Error('dkrypt returned an invalid artifact channel');
+  if (summaryContext) Object.assign(summaryContext, {
+    bundleId: artifact.bundleId,
+    version: artifact.versionLabel ?? '',
+    channel: artifact.channel,
+    cacheHit: artifactModeCount > 0 || artifact.cacheHit === true,
+    sizeBytes: artifact.sizeBytes,
+  });
   const fileUrl = artifact.fileUrl ?? `/v1/artifacts/${encodeURIComponent(artifact.id)}/file`;
   const defaultOutputPath = artifactModeCount > 0
     ? `${safeFilePart(artifact.bundleId)}-${safeFilePart(artifact.versionLabel ?? artifact.buildNumber ?? artifact.id)}.ipa`
@@ -272,14 +301,17 @@ async function runSingleAction(config, dependencies = {}) {
 }
 
 export async function runAction(config, dependencies = {}) {
+  const summaryContext = {};
   try {
-    return await runSingleAction(config, dependencies);
+    return await runSingleAction(config, { ...dependencies, summaryContext });
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, ' ').slice(0, 500);
     await appendWorkflowSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, {
-      bundleId: config.bundleId?.trim() || (config.artifactId ? `artifact ${config.artifactId}` : config.latestCachedChannel ? `latest cached ${config.latestCachedChannel}` : 'dkrypt operation'),
-      version: config.version?.trim() ?? '',
-      channel: config.latestCachedChannel ?? (config.artifactId ? 'existing artifact' : config.channel ?? 'appstore'),
+      bundleId: summaryContext.bundleId ?? config.bundleId?.trim() ?? 'dkrypt operation',
+      version: summaryContext.version ?? config.version?.trim() ?? '',
+      channel: summaryContext.channel ?? 'Unknown',
+      cacheHit: summaryContext.cacheHit,
+      sizeBytes: summaryContext.sizeBytes,
       status: 'failure',
       error: message,
     });
