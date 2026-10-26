@@ -49,15 +49,20 @@ function summaryCell(value) {
     .trim();
 }
 
+function workflowSummaryRow(result) {
+  const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
+  const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
+  const outcome = result.error ?? (result.resolveOnly ? 'Resolved only' : result.status === 'failure' ? 'Failed' : 'Downloaded');
+  return `| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(outcome)} |`;
+}
+
 async function appendWorkflowSummary(summaryFile, result) {
   if (!summaryFile) return;
   const table = [
     '| App | Version | Channel | Cache | IPA path | Size | Result |',
     '| --- | --- | --- | --- | --- | ---: | --- |',
+    workflowSummaryRow(result),
   ];
-  const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
-  const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
-  table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(result.error ?? 'Ready')} |`);
   await appendFile(summaryFile, `## dkrypt\n\n${table.join('\n')}\n\n`);
 }
 
@@ -66,12 +71,8 @@ async function appendBatchSummary(summaryFile, results) {
   const table = [
     '| App | Version | Channel | Cache | IPA path | Size | Result |',
     '| --- | --- | --- | --- | --- | ---: | --- |',
+    ...results.map(workflowSummaryRow),
   ];
-  for (const result of results) {
-    const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
-    const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
-    table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(result.error ?? (result.resolveOnly ? 'Resolved only' : 'Downloaded'))} |`);
-  }
   await appendFile(summaryFile, `## dkrypt · ${results.length} apps\n\n${table.join('\n')}\n\n`);
 }
 
@@ -279,6 +280,7 @@ export async function runAction(config, dependencies = {}) {
       version: config.version?.trim() ?? '',
       channel: config.channel ?? config.latestCachedChannel ?? 'appstore',
       cacheHit: false,
+      status: 'failure',
       error: message,
     });
     throw error;
