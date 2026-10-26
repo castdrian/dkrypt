@@ -504,6 +504,35 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   const callStripe = <T>(request: (client: Stripe) => Promise<T>): Promise<T> => options.stripeClient
     ? request(options.stripeClient())
     : stripeRequest(request);
+  let decryptCreditPriceCache: { priceId: string; expiresAt: number; offer: { amountMinor: number; currency: string } | null } | undefined;
+  let decryptCreditPriceLookup: Promise<{ amountMinor: number; currency: string } | undefined> | undefined;
+  const getDecryptCreditPriceOffer = async (): Promise<{ amountMinor: number; currency: string } | undefined> => {
+    const priceId = config.stripeDecryptCreditPriceId;
+    if (!stripeEnabled || !priceId) return undefined;
+    if (decryptCreditPriceCache?.priceId === priceId && decryptCreditPriceCache.expiresAt > Date.now()) return decryptCreditPriceCache.offer ?? undefined;
+    if (decryptCreditPriceLookup) return decryptCreditPriceLookup;
+    const lookup = callStripe(async (client) => {
+      const price = await client.prices.retrieve(priceId);
+      if (!price.active || price.type !== 'one_time' || price.currency !== 'eur' || price.unit_amount === null || price.unit_amount < 1
+        || price.metadata.purpose !== 'decrypt_credit_pack'
+        || price.metadata.credit_quantity !== String(config.stripeDecryptCreditQuantity)) return undefined;
+      return { amountMinor: price.unit_amount, currency: price.currency.toUpperCase() };
+    }).catch((error) => {
+      log.warn('decrypt credit price lookup failed', { error: String(error) });
+      return undefined;
+    }).then((offer) => {
+      decryptCreditPriceCache = {
+        priceId,
+        expiresAt: Date.now() + (offer ? 5 * 60_000 : 30_000),
+        offer: offer ?? null,
+      };
+      return offer;
+    }).finally(() => {
+      decryptCreditPriceLookup = undefined;
+    });
+    decryptCreditPriceLookup = lookup;
+    return lookup;
+  };
   server.get('/v1/billing/usage.csv', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const rows = getDecryptQuotaJournal(userId);
@@ -530,16 +559,19 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     return { entries };
   });
 
-  server.get('/v1/billing/credits', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request) => {
+  server.get('/v1/billing/credits', { schema: { hide: true }, preHandler: fastifyRequireSession }, async (request) => {
     const userId = getFastifySession(request)!.sub;
     const balance = getDecryptCreditBalance(userId);
+    const entitlement = getBillingEntitlements(userId);
+    const price = entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
     return {
       balance: balance.available,
       grants: balance.grants,
       purchase: {
-        enabled: stripeEnabled && Boolean(config.stripeDecryptCreditPriceId),
+        enabled: Boolean(price),
         quantity: config.stripeDecryptCreditQuantity,
         provider: 'stripe',
+        ...(price ? { amountMinor: price.amountMinor, currency: price.currency } : {}),
       },
     };
   });
@@ -553,8 +585,11 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9._:-]{8,200}$/.test(idempotencyKey)) {
       return sendBillingError(request, reply, 400, 'provide an Idempotency-Key with 8 to 200 URL-safe characters', 'idempotency_key_required');
     }
-    if (!stripeEnabled || !config.stripeDecryptCreditPriceId) return sendBillingError(request, reply, 503, 'one-time decrypt credits are not configured', 'decrypt_credit_checkout_unavailable');
-    if (!getBillingEntitlements(userId).decrypt) return sendBillingError(request, reply, 403, 'an active decrypt plan is required to purchase burst credits');
+    const entitlement = getBillingEntitlements(userId);
+    if (!entitlement.decrypt) return sendBillingError(request, reply, 403, 'an active decrypt plan is required to purchase burst credits');
+    if (entitlement.dailyDecryptLimit === undefined) return sendBillingError(request, reply, 403, 'burst credits are only available with plans that have a daily decrypt allowance', 'decrypt_credit_purchase_not_applicable');
+    const creditPriceOffer = await getDecryptCreditPriceOffer();
+    if (!creditPriceOffer) return sendBillingError(request, reply, 503, 'one-time decrypt credits are not configured', 'decrypt_credit_checkout_unavailable');
     if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another billing checkout is already being created', 'checkout_in_progress');
     try {
       const profile = getAuthProfile(userId);
@@ -631,6 +666,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const entitlement = getBillingEntitlements(userId);
     const quota = getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
     const credits = getDecryptCreditBalance(userId);
+    const decryptCreditPriceOffer = entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
     const sampleDays = 7;
     const recentQuotaAdmissions = getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
     const averagePerDay = recentQuotaAdmissions.length / sampleDays;
@@ -659,8 +695,9 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       decryptCredits: {
         available: credits.available,
         grants: credits.grants,
-        purchaseEnabled: stripeEnabled && Boolean(config.stripeDecryptCreditPriceId),
+        purchaseEnabled: Boolean(decryptCreditPriceOffer),
         purchaseQuantity: config.stripeDecryptCreditQuantity,
+        ...(decryptCreditPriceOffer ? { purchasePriceMinor: decryptCreditPriceOffer.amountMinor, purchaseCurrency: decryptCreditPriceOffer.currency } : {}),
       },
       apiRateUsage: getAccountApiRateUsage(userId),
       usageForecast: {

@@ -389,6 +389,14 @@ const BillingResponse = object({
   legacyBilling: Type.Boolean(),
   entitlement: JsonObject,
   quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
+  decryptCredits: object({
+    available: Type.Integer({ minimum: 0 }),
+    grants: Type.Array(object({ id: Identifier, remaining: Type.Integer({ minimum: 0 }), expiresAt: Type.Optional(Type.Number()), source: Type.String() })),
+    purchaseEnabled: Type.Boolean(),
+    purchaseQuantity: Type.Integer({ minimum: 1 }),
+    purchasePriceMinor: Type.Optional(Type.Integer({ minimum: 1 })),
+    purchaseCurrency: Type.Optional(Type.String({ minLength: 3, maxLength: 3 })),
+  }),
   apiRateUsage: Type.Optional(object({ limit: Type.Integer({ minimum: 1 }), used: Type.Integer({ minimum: 0 }), remaining: Type.Integer({ minimum: 0 }), resetAt: Type.Number() })),
   usageForecast: object({ sampleDays: Type.Integer({ minimum: 1 }), jobsInSample: Type.Integer({ minimum: 0 }), averagePerDay: Type.Number({ minimum: 0 }), daysUntilAllowanceUsed: Type.Union([Type.Number(), Type.Null()]) }),
 });
