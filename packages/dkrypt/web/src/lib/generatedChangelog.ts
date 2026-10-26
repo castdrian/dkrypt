@@ -1,6 +1,16 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "fix(github-action): write job ID output once",
+    "description": "Released in 5e4fbab."
+  },
+  {
+    "date": "2026-10-26",
+    "title": "fix(ops): persist worker and trace defaults in compose",
+    "description": "Released in 651570a."
+  },
+  {
+    "date": "2026-10-26",
     "title": "fix(operations): clear capacity and device compatibility warnings",
     "description": "Released in 3492832."
   },
@@ -28,15 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "fix: harden App Store confirmation and SDK origins",
     "description": "Released in 61ac92a."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix(autoinstall): merge iOS 18 App Store support (#45)",
-    "description": "Released in 1280e18."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix: align web accessibility checks with select controls",
-    "description": "Released in 42400e7."
   }
 ] as const;
