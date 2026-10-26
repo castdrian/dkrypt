@@ -3217,7 +3217,7 @@ test('IPA Library virtualizes loaded rows and opens artifact provenance in the i
   await page.goto('/?tab=home&projectId=default&aq=provenance&asource=appstore');
   await artifactResponse;
   const list = page.getByRole('list', { name: 'IPA library artifacts' });
-  const viewport = page.getByRole('region', { name: 'IPA library artifacts list region' });
+  const viewport = page.getByRole('region', { name: 'IPA library artifacts scroll area' });
   const artifact = list.getByRole('listitem').filter({ hasText: 'com.example.provenance' }).first();
   await expect(artifact).toBeVisible();
   await expect.poll(() => list.getByRole('listitem').count()).toBeLessThan(100);
@@ -3251,13 +3251,10 @@ test('IPA Library virtualizes loaded rows and opens artifact provenance in the i
   await resizeHandle.focus();
   await resizeHandle.press('ArrowLeft');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('dkrypt-inspector-width:artifact'))).toBe('0.62');
-  await viewport.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    window.scrollTo({ top: window.scrollY + bounds.bottom - window.innerHeight, behavior: 'instant' });
-  });
+  await viewport.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: 'instant' }));
   await expect(list.locator('[aria-posinset="100"]')).toBeAttached();
   await expect(list.getByText('com.example.provenance.99', { exact: true }).first()).toBeVisible();
-  await viewport.evaluate((element) => window.scrollTo({ top: window.scrollY + element.getBoundingClientRect().top - 80, behavior: 'instant' }));
+  await viewport.evaluate((element) => element.scrollTo({ top: 0, behavior: 'instant' }));
   await expect(list.locator('[aria-posinset="1"]')).toBeAttached();
   await expect(page.getByText(sha256, { exact: true })).toBeVisible();
 
