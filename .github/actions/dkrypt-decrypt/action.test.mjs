@@ -43,6 +43,7 @@ function apiResponse(body, status = 200) {
 
 test('submits the latest TestFlight decrypt, waits for completion, and verifies the downloaded IPA', async () => {
   const directory = await temporaryDirectory();
+  const summaryPath = path.join(directory, 'summary');
   const calls = [];
   const fetchImpl = async (input, init) => {
     const url = new URL(String(input));
@@ -79,6 +80,7 @@ test('submits the latest TestFlight decrypt, waits for completion, and verifies 
       bundleId: 'com.example.app',
       channel: 'testflight',
       timeoutSeconds: 60,
+      githubSummary: summaryPath,
     }), { fetchImpl, sleep: async () => {}, log: (message) => logs.push(message), idempotencyKey: 'stable-testflight-key' });
     const outputs = await outputsAt(path.join(directory, 'github-output'));
 
@@ -97,6 +99,32 @@ test('submits the latest TestFlight decrypt, waits for completion, and verifies 
     assert.equal(calls[0].init.headers['Idempotency-Key'], 'stable-testflight-key');
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: running')));
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: done')));
+    const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /IPA path/);
+    assert.match(summary, new RegExp(result.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(summary, /\| artifact-1 \|/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('adds failed single-app submissions to the workflow summary', async () => {
+  const directory = await temporaryDirectory();
+  const summaryPath = path.join(directory, 'summary');
+
+  try {
+    await assert.rejects(runAction(actionConfig(directory, {
+      bundleId: 'com.example.unavailable',
+      githubSummary: summaryPath,
+    }), {
+      fetchImpl: async () => apiResponse({ message: 'release unavailable' }, 404),
+      maxAttempts: 1,
+      log: () => {},
+    }), /release unavailable/);
+    const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /com\.example\.unavailable/);
+    assert.match(summary, /release unavailable/);
+    assert.match(summary, /IPA path/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -183,6 +211,9 @@ test('processes bundle-ids independently and writes aggregate results when one a
     assert.match(await readFile(summaryPath, 'utf8'), /com.example.first/);
     assert.match(await readFile(summaryPath, 'utf8'), /com.example.missing/);
     const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /IPA path/);
+    assert.match(summary, /Size/);
+    assert.match(summary, /Resolve only/);
     assert.match(summary, /350\.0&#124;&#91;release&#93;\(https:\/\/example\.com\) &lt;unsafe&gt;/);
     assert.doesNotMatch(summary, /\| \[release\]\(https:\/\/example\.com\)/);
   } finally {

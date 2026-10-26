@@ -52,22 +52,25 @@ function summaryCell(value) {
 async function appendWorkflowSummary(summaryFile, result) {
   if (!summaryFile) return;
   const table = [
-    '| App | Version | Channel | Cache | IPA | Size | Result |',
+    '| App | Version | Channel | Cache | IPA path | Size | Result |',
     '| --- | --- | --- | --- | --- | ---: | --- |',
   ];
-  const artifact = result.artifactId ? summaryCell(result.artifactId) : '—';
-  table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${artifact} | ${result.sizeBytes ? `${result.sizeBytes} bytes` : 'Resolve only'} | ${summaryCell(result.error ?? 'Ready')} |`);
+  const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
+  const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
+  table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(result.error ?? 'Ready')} |`);
   await appendFile(summaryFile, `## dkrypt\n\n${table.join('\n')}\n\n`);
 }
 
 async function appendBatchSummary(summaryFile, results) {
   if (!summaryFile) return;
   const table = [
-    '| App | Version | Channel | Cache | IPA | Result |',
-    '| --- | --- | --- | --- | --- | --- |',
+    '| App | Version | Channel | Cache | IPA path | Size | Result |',
+    '| --- | --- | --- | --- | --- | ---: | --- |',
   ];
   for (const result of results) {
-    table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${result.artifactId ? summaryCell(result.artifactId) : '—'} | ${summaryCell(result.error ?? (result.resolveOnly ? 'Resolved only' : 'Downloaded'))} |`);
+    const ipaPath = result.path ? summaryCell(result.path) : result.resolveOnly ? 'Resolve only' : '—';
+    const size = Number.isSafeInteger(result.sizeBytes) ? `${result.sizeBytes} bytes` : '—';
+    table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${ipaPath} | ${size} | ${summaryCell(result.error ?? (result.resolveOnly ? 'Resolved only' : 'Downloaded'))} |`);
   }
   await appendFile(summaryFile, `## dkrypt · ${results.length} apps\n\n${table.join('\n')}\n\n`);
 }
@@ -87,7 +90,7 @@ async function fetchExistingArtifact(client, { artifactId, latestCachedChannel, 
   return artifact;
 }
 
-export async function runAction(config, dependencies = {}) {
+async function runSingleAction(config, dependencies = {}) {
   const log = dependencies.log ?? ((message) => process.stdout.write(`${message}\n`));
   const outputFile = config.githubOutput ?? process.env.GITHUB_OUTPUT;
   if (!outputFile) throw new Error('GITHUB_OUTPUT is unavailable');
@@ -261,8 +264,25 @@ export async function runAction(config, dependencies = {}) {
     cacheHit,
     artifactId: artifact.id,
     sizeBytes: download.sizeBytes,
+    path: download.outputPath,
   });
   return outputs;
+}
+
+export async function runAction(config, dependencies = {}) {
+  try {
+    return await runSingleAction(config, dependencies);
+  } catch (error) {
+    const message = String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, ' ').slice(0, 500);
+    await appendWorkflowSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, {
+      bundleId: config.bundleId?.trim() || (config.artifactId ? `artifact ${config.artifactId}` : config.latestCachedChannel ? `latest cached ${config.latestCachedChannel}` : 'dkrypt operation'),
+      version: config.version?.trim() ?? '',
+      channel: config.channel ?? config.latestCachedChannel ?? 'appstore',
+      cacheHit: false,
+      error: message,
+    });
+    throw error;
+  }
 }
 
 function parseBundleIds(value) {
@@ -307,7 +327,7 @@ export async function runBatchAction(config, dependencies = {}) {
     const resolveOnly = isResolveOnly(config.resolveOnly);
     const output = resolveOnly ? '' : path.join(directory, `${safeFilePart(bundleId)}.ipa`);
     try {
-      const result = await runAction({
+    const result = await runAction({
         ...config,
         bundleId,
         bundleIds: undefined,
