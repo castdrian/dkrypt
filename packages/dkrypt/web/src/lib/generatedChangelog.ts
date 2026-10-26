@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "fix(github-action): preserve artifact context on failures",
+    "description": "Released in 02b6c38."
+  },
+  {
+    "date": "2026-10-26",
     "title": "fix(billing): clarify equal-price plan changes",
     "description": "Released in 8ca95fe."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "ci: skip dependency apt installs for Playwright",
     "description": "Released in 642fe07."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "test(github-action): keep timeout test alive on Node 22",
-    "description": "Released in 5901bf6."
   }
 ] as const;
