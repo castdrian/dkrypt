@@ -1,6 +1,16 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "test(web): align library snapshots and scrolling checks",
+    "description": "Released in 6a55fc4."
+  },
+  {
+    "date": "2026-10-26",
+    "title": "ci: skip dependency apt installs for Playwright",
+    "description": "Released in 642fe07."
+  },
+  {
+    "date": "2026-10-26",
     "title": "test(github-action): keep timeout test alive on Node 22",
     "description": "Released in 5901bf6."
   },
@@ -28,15 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "feat(github-action): verify and download TestFlight artifacts",
     "description": "Released in f82b920."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "feat(testflight): resolve latest builds through decrypt API",
-    "description": "Released in 8a01d31."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix(app-catalog): keep dashboard app names in English",
-    "description": "Released in 7b04f69."
   }
 ] as const;
