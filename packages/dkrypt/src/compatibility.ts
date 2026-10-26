@@ -31,6 +31,23 @@ export function evaluateAutoinstallVersion(version: string | undefined): Compati
   return major === supportedCompatibility.autoinstallMajor && minor >= 4 ? 'supported' : 'unsupported';
 }
 
+export async function getAutoinstallCompatibilityRows(
+  devices: Array<{ id: string; name: string }>,
+  healthProvider: typeof getDeviceHealth = getDeviceHealth,
+): Promise<CompatibilityRow[]> {
+  const health = await Promise.all(devices.map((device) => healthProvider(device.id, true, AbortSignal.timeout(10000)).catch(() => undefined)));
+  return devices.map((device, index) => {
+    const version = health[index]?.bridgeHeartbeats?.springboard?.bridgeVersion;
+    return {
+      component: `${device.name} Autoinstall`,
+      observed: version ?? 'not reported',
+      supported: `>=${supportedCompatibility.autoinstallMinimum} <2.0.0`,
+      state: evaluateAutoinstallVersion(version),
+      detail: device.id,
+    };
+  });
+}
+
 export async function getCompatibilityMatrix(): Promise<{ policy: typeof supportedCompatibility; rows: CompatibilityRow[] }> {
   const deployment = getDeploymentMetadata();
   const database = getStateDatabaseStatus();
@@ -45,10 +62,6 @@ export async function getCompatibilityMatrix(): Promise<{ policy: typeof support
     rows.push({ component: 'Rust device bridge', observed: 'unavailable', supported: supportedCompatibility.rustBridge, state: 'unknown' });
   }
   const devices = getEffectiveDevices();
-  const health = await Promise.all(devices.map((device) => getDeviceHealth(device.id, false, AbortSignal.timeout(5000)).catch(() => undefined)));
-  devices.forEach((device, index) => {
-    const version = health[index]?.bridgeHeartbeats?.springboard?.bridgeVersion;
-    rows.push({ component: `${device.name} Autoinstall`, observed: version ?? 'not reported', supported: `>=${supportedCompatibility.autoinstallMinimum} <2.0.0`, state: evaluateAutoinstallVersion(version), detail: device.id });
-  });
+  rows.push(...await getAutoinstallCompatibilityRows(devices));
   return { policy: supportedCompatibility, rows };
 }

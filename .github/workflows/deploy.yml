@@ -46,6 +46,8 @@ jobs:
       - name: Verify CLI and n8n integrations
         run: |
           node --check .github/actions/dkrypt-decrypt/action.mjs
+          node --check .github/actions/dkrypt-decrypt/action-lib.mjs
+          node --test .github/actions/dkrypt-decrypt/action.test.mjs
           cd packages/dkrypt-cli
           npm test
           cd ../n8n-nodes-dkrypt
@@ -326,6 +328,9 @@ jobs:
               container_name: dkrypt
               restart: unless-stopped
               init: true
+              depends_on:
+                jaeger:
+                  condition: service_started
               stop_grace_period: 150s
               security_opt:
                 - no-new-privileges:true
@@ -352,13 +357,26 @@ jobs:
                 - 'c 189:* rwm'
               tmpfs:
                 - /run/dkrypt:mode=0710,size=16m
-                - /data/tmp:mode=1770,uid=10001,gid=10001,size=1g
+                - /data/tmp:mode=1770,uid=10001,gid=10001,size=2g
               deploy:
                 resources:
                   limits:
                     cpus: '4.0'
-                    memory: 4G
+                    memory: 6G
                     pids: 512
+            jaeger:
+              image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
+              container_name: dkrypt-jaeger
+              restart: unless-stopped
+              ports:
+                - 127.0.0.1:4318:4318
+                - 127.0.0.1:16686:16686
+              deploy:
+                resources:
+                  limits:
+                    cpus: '0.5'
+                    memory: 512M
+                    pids: 128
           volumes:
             ipa-storage:
               external: true
