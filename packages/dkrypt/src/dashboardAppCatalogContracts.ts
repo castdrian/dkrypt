@@ -70,6 +70,22 @@ export const dashboardAppVersionsResponseSchema = Type.Object({
     artifactId: Type.Optional(identifierSchema),
   }, additionalProperties)),
 }, additionalProperties);
+export const dashboardAppStorefrontsQuerySchema = Type.Object({
+  trackId: Type.String({ minLength: 1, maxLength: 20 }),
+  countries: Type.String({ minLength: 2, maxLength: 100 }),
+});
+export const dashboardAppStorefrontsResponseSchema = Type.Object({
+  trackId: Type.Integer({ minimum: 1 }),
+  checkedAt: Type.Number(),
+  storefronts: Type.Array(Type.Object({
+    countryCode: Type.String({ minLength: 2, maxLength: 2 }),
+    countryName: Type.String(),
+    status: Type.Union([Type.Literal('available'), Type.Literal('unavailable'), Type.Literal('unknown')]),
+    price: Type.Optional(Type.Number()),
+    formattedPrice: Type.Optional(Type.String()),
+    currency: Type.Optional(Type.String()),
+  }, additionalProperties), { maxItems: 25 }),
+}, additionalProperties);
 
 export type DashboardAppSearchQuery = Static<typeof dashboardAppSearchQuerySchema>;
 export type DashboardAppSearchResponse = Static<typeof dashboardAppSearchResponseSchema>;
@@ -78,6 +94,10 @@ export type DashboardAppMetadataResponse = Static<typeof dashboardAppMetadataRes
 export type DashboardAppCatalogStatsResponse = Static<typeof dashboardAppCatalogStatsResponseSchema>;
 export type DashboardAppMetadataRefreshBody = Static<typeof dashboardAppMetadataRefreshBodySchema>;
 export type DashboardAppVersionsResponse = Static<typeof dashboardAppVersionsResponseSchema>;
+export type DashboardAppStorefrontsRoute = {
+  Querystring: Static<typeof dashboardAppStorefrontsQuerySchema>;
+  Reply: { 200: Static<typeof dashboardAppStorefrontsResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 502: ApiErrorEnvelope };
+};
 
 type CommonRouteErrors = { 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 500: ApiErrorEnvelope };
 

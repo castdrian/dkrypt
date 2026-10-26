@@ -4,6 +4,7 @@
   import { buttonVariants } from '#lib/components/ui/variants';
   import Button from '#lib/components/ui/Button.svelte';
   import ApiChanges from '#components/ApiChanges.svelte';
+  import DkryptWorkflowGenerator from '#components/DkryptWorkflowGenerator.svelte';
   import { sessionState } from '#lib/session.svelte';
 
   let docsView = $state<'reference' | 'changes'>('reference');
@@ -69,6 +70,7 @@
       </dl>
     </details>
   </div>
+  <DkryptWorkflowGenerator />
   <div class="flex min-w-0 items-center justify-between gap-3">
     <div class="min-w-0">
       <h1 class="text-base font-semibold">API documentation</h1>

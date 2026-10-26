@@ -1632,6 +1632,20 @@ export interface AppCatalogStats {
   newestUpdatedAt?: number;
 }
 
+export interface AppStorefrontListing {
+  countryCode: string;
+  countryName: string;
+  status: 'available' | 'unavailable' | 'unknown';
+  price?: number;
+  formattedPrice?: string;
+  currency?: string;
+}
+
+export function fetchAppStorefronts(trackId: number, countries: string[]): Promise<{ trackId: number; checkedAt: number; storefronts: AppStorefrontListing[] }> {
+  const unique = [...new Set(countries.map((country) => country.trim().toUpperCase()).filter(Boolean))];
+  return apiJson(`/v1/dashboard/apps/storefronts?trackId=${encodeURIComponent(trackId)}&countries=${encodeURIComponent(unique.join(','))}`);
+}
+
 export function fetchAppCatalogStats(): Promise<AppCatalogStats> {
   return apiJson('/v1/dashboard/apps/cache');
 }
@@ -1715,6 +1729,19 @@ export interface DashboardDoctorReport {
   checkedAt: string;
   deployment: { id: string; ref: string };
   checks: DashboardDoctorCheck[];
+  runtimeConfiguration: {
+    appStoreOfflineDecryptEnabled: boolean;
+    appStoreOfflineMaxWorkers: number;
+    appStoreOfflineWorkerMemoryMb: number;
+    appStoreOfflineVaultConfigured: boolean;
+    backupManifestSecretConfigured: boolean;
+    otelBaseEndpointConfigured: boolean;
+    otelTracesEndpointConfigured: boolean;
+    otelMetricsEndpointConfigured: boolean;
+    otelBaseEndpointFingerprint?: string;
+    otelTracesEndpointFingerprint?: string;
+    otelMetricsEndpointFingerprint?: string;
+  };
 }
 
 export interface DashboardSyntheticProbe {

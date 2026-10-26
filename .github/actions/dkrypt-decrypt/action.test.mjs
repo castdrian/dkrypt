@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runAction } from './action.mjs';
+import { runAction, runBatchAction } from './action.mjs';
 import { downloadVerifiedArtifact } from './action-lib.mjs';
 
 const bytes = Buffer.from('verified ipa bytes');
@@ -97,6 +97,110 @@ test('submits the latest TestFlight decrypt, waits for completion, and verifies 
     assert.equal(calls[0].init.headers['Idempotency-Key'], 'stable-testflight-key');
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: running')));
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: done')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('resolves a release without creating a job or downloading an IPA', async () => {
+  const directory = await temporaryDirectory();
+  const calls = [];
+  const summaryPath = path.join(directory, 'summary');
+  const fetchImpl = async (input, init) => {
+    const url = new URL(String(input));
+    calls.push({ url, init });
+    assert.equal(url.pathname, '/v1/decrypts');
+    assert.equal(init.method, 'POST');
+    assert.deepEqual(JSON.parse(init.body), { bundleId: 'com.example.app', channel: 'testflight', resolveOnly: true });
+    assert.equal(init.headers['Idempotency-Key'], undefined);
+    return apiResponse({
+      resolveOnly: true,
+      bundleId: 'com.example.app',
+      channel: 'testflight',
+      resolvedVersion: '352.0_118977',
+      isTestFlight: true,
+      build: '118977',
+      cacheHit: false,
+    });
+  };
+
+  try {
+    const result = await runAction(actionConfig(directory, {
+      bundleId: 'com.example.app',
+      channel: 'testflight',
+      resolveOnly: true,
+      githubSummary: summaryPath,
+    }), { fetchImpl, log: () => {} });
+    const outputs = await outputsAt(path.join(directory, 'github-output'));
+    assert.equal(calls.length, 1);
+    assert.equal(result['resolved-version'], '352.0_118977');
+    assert.equal(outputs['job-id'], '');
+    assert.equal(outputs['artifact-id'], '');
+    assert.equal(outputs.version, '352.0_118977');
+    assert.equal(outputs.build, '118977');
+    assert.equal(outputs.channel, 'testflight');
+    assert.equal(outputs.is_testflight, 'true');
+    assert.equal(outputs.path, '');
+    assert.match(await readFile(summaryPath, 'utf8'), /Resolve only/);
+    await assert.rejects(readFile(path.join(directory, 'download.ipa')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('processes bundle-ids independently and writes aggregate results when one app fails', async () => {
+  const directory = await temporaryDirectory();
+  const summaryPath = path.join(directory, 'summary');
+  const calls = [];
+  const fetchImpl = async (input, init) => {
+    const url = new URL(String(input));
+    const body = JSON.parse(init.body);
+    calls.push(body.bundleId);
+    if (body.bundleId === 'com.example.missing') return apiResponse({ message: 'release not found' }, 404);
+    return apiResponse({
+      resolveOnly: true,
+      bundleId: body.bundleId,
+      channel: 'appstore',
+      resolvedVersion: body.bundleId === 'com.example.first' ? '350.0|[release](https://example.com) <unsafe>' : '350.0',
+      isTestFlight: false,
+      cacheHit: false,
+    });
+  };
+
+  try {
+    await assert.rejects(runBatchAction(actionConfig(directory, {
+      bundleId: '',
+      bundleIds: JSON.stringify(['com.example.first', 'com.example.missing']),
+      resolveOnly: 'true',
+      githubSummary: summaryPath,
+    }), { fetchImpl, log: () => {} }), /1 of 2 dkrypt app operations failed/);
+    const outputs = await outputsAt(path.join(directory, 'github-output'));
+    const results = JSON.parse(outputs['results-json']);
+    assert.deepEqual(calls, ['com.example.first', 'com.example.missing']);
+    assert.equal(outputs['success-count'], '1');
+    assert.equal(outputs['failure-count'], '1');
+    assert.deepEqual(results.map((result) => result.status), ['success', 'failure']);
+    assert.match(await readFile(summaryPath, 'utf8'), /com.example.first/);
+    assert.match(await readFile(summaryPath, 'utf8'), /com.example.missing/);
+    const summary = await readFile(summaryPath, 'utf8');
+    assert.match(summary, /350\.0&#124;&#91;release&#93;\(https:\/\/example\.com\) &lt;unsafe&gt;/);
+    assert.doesNotMatch(summary, /\| \[release\]\(https:\/\/example\.com\)/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects batch artifact downloads before making any API request', async () => {
+  const directory = await temporaryDirectory();
+  let requests = 0;
+
+  try {
+    await assert.rejects(runBatchAction(actionConfig(directory, {
+      bundleId: '',
+      bundleIds: JSON.stringify(['com.example.app']),
+      latestCachedChannel: 'testflight',
+    }), { fetchImpl: async () => { requests += 1; return apiResponse({}); } }), /bundle-ids cannot be combined with artifact download inputs/);
+    assert.equal(requests, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -214,7 +318,7 @@ test('downloads a specific artifact ID and removes a file whose size does not ma
         fileUrl: '/v1/artifacts/cached-2/file',
       });
     }
-    if (url.pathname === '/v1/artifacts/cached-2/file') return new Response(bytes);
+    if (url.pathname === '/v1/artifacts/cached-2/file') return new Response(bytes, { headers: { 'content-length': String(bytes.length) } });
     throw new Error(`unexpected URL ${url}`);
   };
 
@@ -272,6 +376,97 @@ test('applies one overall deadline across stalled download retries', async () =>
     await assert.rejects(readFile(output));
   } finally {
     clearTimeout(keepEventLoopAlive);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('resumes an interrupted IPA response from the saved byte offset', async () => {
+  const directory = await temporaryDirectory();
+  const output = path.join(directory, 'resumed.ipa');
+  const firstPart = bytes.subarray(0, 6);
+  let attempts = 0;
+  const fetchImpl = async (_input, init) => {
+    attempts += 1;
+    if (attempts === 1) {
+      assert.equal(init.headers.Range, undefined);
+      return new Response(new ReadableStream({
+        async pull(controller) {
+          if (!this.sent) {
+            this.sent = true;
+            controller.enqueue(firstPart);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            controller.error(new Error('connection dropped'));
+          }
+        },
+      }));
+    }
+    assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+    return new Response(bytes.subarray(firstPart.length), {
+      status: 206,
+      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}` },
+    });
+  };
+
+  try {
+    const result = await downloadVerifiedArtifact({
+      url: '/v1/artifacts/resumed/file',
+      origin: 'https://dkrypt.example',
+      apiKey: 'test-api-key',
+      outputPath: output,
+      expectedSha256: sha256,
+      expectedSizeBytes: bytes.length,
+      fetchImpl,
+      sleep: async () => {},
+      maxAttempts: 2,
+      timeoutMs: 5_000,
+      retryBaseMs: 0,
+      retryMaxMs: 0,
+      log: () => {},
+    });
+    assert.equal(attempts, 2);
+    assert.equal(await readFile(output, 'utf8'), bytes.toString());
+    assert.equal(result.sha256, sha256);
+    assert.equal((await readdir(directory)).some((entry) => entry.endsWith('.partial')), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('resumes a response that ends cleanly before the expected artifact size', async () => {
+  const directory = await temporaryDirectory();
+  const output = path.join(directory, 'clean-truncation.ipa');
+  const firstPart = bytes.subarray(0, 5);
+  let attempts = 0;
+  const fetchImpl = async (_input, init) => {
+    attempts += 1;
+    if (attempts === 1) return new Response(firstPart);
+    assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+    return new Response(bytes.subarray(firstPart.length), {
+      status: 206,
+      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}` },
+    });
+  };
+
+  try {
+    const result = await downloadVerifiedArtifact({
+      url: '/v1/artifacts/truncated/file',
+      origin: 'https://dkrypt.example',
+      apiKey: 'test-api-key',
+      outputPath: output,
+      expectedSha256: sha256,
+      expectedSizeBytes: bytes.length,
+      fetchImpl,
+      sleep: async () => {},
+      maxAttempts: 2,
+      timeoutMs: 5_000,
+      retryBaseMs: 0,
+      retryMaxMs: 0,
+      log: () => {},
+    });
+    assert.equal(attempts, 2);
+    assert.equal(await readFile(output, 'utf8'), bytes.toString());
+    assert.equal(result.sha256, sha256);
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

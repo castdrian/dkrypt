@@ -54,6 +54,8 @@ export interface ItunesAppMetadata {
   screenshots?: string[];
   releaseNotes?: string;
   price?: number;
+  formattedPrice?: string;
+  currency?: string;
 }
 
 interface ItunesLookupResponse {
@@ -74,6 +76,8 @@ interface ItunesLookupResponse {
     screenshotUrls?: string[];
     releaseNotes?: string;
     price?: number;
+    formattedPrice?: string;
+    currency?: string;
   }>;
 }
 
@@ -103,12 +107,16 @@ export async function lookupCurrentVersion(bundleId: string, signal?: AbortSigna
   };
 }
 
-async function lookupMetadata(params: Record<string, string>): Promise<ItunesAppMetadata> {
+async function lookupMetadata(params: Record<string, string>, signal?: AbortSignal): Promise<ItunesAppMetadata> {
+  throwIfAborted(signal);
   const url = await buildItunesUrl('lookup', params);
-  const res = await fetch(url);
+  throwIfAborted(signal);
+  const res = await fetch(url, { signal });
+  throwIfAborted(signal);
   if (!res.ok) throw new Error(describeHttpError('itunes lookup failed', res));
 
   const body = (await res.json()) as ItunesLookupResponse;
+  throwIfAborted(signal);
   const result = body.results[0];
   if (body.resultCount < 1 || !result || !result.trackName) {
     throw new Error(`itunes lookup returned no metadata for ${params.bundleId ?? params.id}`);
@@ -127,6 +135,8 @@ async function lookupMetadata(params: Record<string, string>): Promise<ItunesApp
     screenshots: result.screenshotUrls?.slice(0, 10),
     releaseNotes: result.releaseNotes,
     price: result.price,
+    formattedPrice: result.formattedPrice,
+    currency: result.currency,
   };
 }
 
@@ -134,10 +144,10 @@ export function lookupAppMetadata(bundleId: string): Promise<ItunesAppMetadata> 
   return lookupMetadata({ bundleId });
 }
 
-export function lookupAppMetadataByTrackId(trackId: number, country?: string): Promise<ItunesAppMetadata> {
+export function lookupAppMetadataByTrackId(trackId: number, country?: string, signal?: AbortSignal): Promise<ItunesAppMetadata> {
   if (!Number.isSafeInteger(trackId) || trackId < 1) throw new Error('trackId must be a positive integer');
   if (country !== undefined && !/^[A-Z]{2}$/.test(country)) throw new Error('country must be a two-letter uppercase storefront code');
-  return lookupMetadata({ id: String(trackId), entity: 'software', ...(country ? { country } : {}) });
+  return lookupMetadata({ id: String(trackId), entity: 'software', ...(country ? { country } : {}) }, signal);
 }
 
 export interface ItunesSearchResult {

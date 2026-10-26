@@ -193,16 +193,18 @@ Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility polic
 GitHub workflows can use the [dkrypt decrypt action](.github/actions/dkrypt-decrypt/action.yml) to submit a decrypt, wait for its result, and download the IPA. Pin a released version:
 
 ```yaml
-- uses: castdrian/dkrypt/.github/actions/dkrypt-decrypt@v1.0.0
+- uses: castdrian/dkrypt/.github/actions/dkrypt-decrypt@v1.1.0
   id: decrypt
   with:
     api-key: ${{ secrets.DKRYPT_API_KEY }}
     bundle-id: com.example.app
 ```
 
-The action verifies the downloaded IPA’s SHA-256 and byte count against dkrypt before placing it at `path`. It exposes `job-id`, `artifact-id`, `version`, `build`, `channel`, `is_testflight`, `cache_hit`, `sha256`, `size_bytes`, and `path`. Transient network errors, HTTP 429, and server errors retry with backoff; jobs can wait up to 30 minutes by default.
+The action verifies the downloaded IPA’s SHA-256 and byte count against dkrypt before placing it at `path`. Interrupted downloads resume from the last received byte and are checked against the full artifact hash before promotion. It exposes `job-id`, `artifact-id`, `version`, `build`, `channel`, `is_testflight`, `cache_hit`, `sha256`, `size_bytes`, and `path`. Transient network errors, HTTP 429, and server errors retry with backoff; jobs can wait up to 30 minutes by default.
 
 Set `channel: testflight` and omit `version` to resolve the latest available TestFlight build. Set `version` to an exact selector such as `352.0_118977` to request a specific build. To download an existing result without submitting a decrypt, pass `artifact-id` or `latest-cached-channel: testflight` (or `appstore`). These artifact modes are mutually exclusive with each other and with a new decrypt request. Use an API key with decrypt and artifact access, and TestFlight scope when requesting TestFlight builds.
+
+Set `resolve-only: 'true'` to return the matching release version, build, channel, and cache status without creating a job or downloading an IPA. To process several apps in one step, pass `bundle-ids` as a JSON array; the action records per-app outcomes in `results-json`, adds a workflow summary table, and fails the step if any app fails. The output `path` for each successful download is included in that app’s result.
 
 Dashboard, billing, account, session, health, and administration routes are internal to dkrypt and are not available to generated API keys. The public OpenAPI document is available at `/openapi.json` and the Scalar reference UI at `/reference`.
 

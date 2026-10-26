@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { config } from '#config.js';
-import { assessRuntimeCapacity, runConfigurationDoctor } from '#doctor.js';
+import { assessRuntimeCapacity, runConfigurationDoctor, runtimeConfigurationSnapshot } from '#doctor.js';
 
 test('configuration doctor reports runtime security and persistence checks', async () => {
   const result = await runConfigurationDoctor();
@@ -135,4 +136,28 @@ test('runtime capacity advice clears when the deployment meets the configured wo
 
   expect(check.status).toBe('ok');
   expect(check.detail).toContain('Recommended for 1 offline worker(s)');
+});
+
+test('runtime configuration fingerprints OTLP endpoint routes without exposing credentials or query values', () => {
+  const previous = {
+    base: config.otelExporterOtlpEndpoint,
+    traces: config.otelExporterOtlpTracesEndpoint,
+    metrics: config.otelExporterOtlpMetricsEndpoint,
+  };
+  config.otelExporterOtlpEndpoint = 'https://user:password@collector.example/v1?token=secret#trace';
+  config.otelExporterOtlpTracesEndpoint = 'https://collector.example/v1/traces?token=secret';
+  config.otelExporterOtlpMetricsEndpoint = 'https://collector.example/v1/metrics';
+
+  try {
+    const snapshot = runtimeConfigurationSnapshot();
+    expect(snapshot.otelBaseEndpointFingerprint).toBe(createHash('sha256').update('https://collector.example/v1').digest('hex'));
+    expect(snapshot.otelTracesEndpointFingerprint).toBe(createHash('sha256').update('https://collector.example/v1/traces').digest('hex'));
+    expect(snapshot.otelMetricsEndpointFingerprint).not.toBe(snapshot.otelTracesEndpointFingerprint);
+    expect(JSON.stringify(snapshot)).not.toContain('password');
+    expect(JSON.stringify(snapshot)).not.toContain('secret');
+  } finally {
+    config.otelExporterOtlpEndpoint = previous.base;
+    config.otelExporterOtlpTracesEndpoint = previous.traces;
+    config.otelExporterOtlpMetricsEndpoint = previous.metrics;
+  }
 });

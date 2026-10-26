@@ -73,6 +73,8 @@ import {
   dashboardAppMetadataQuerySchema,
   dashboardAppMetadataRefreshBodySchema,
   dashboardAppMetadataResponseSchema as AppMetadataResponse,
+  dashboardAppStorefrontsQuerySchema,
+  dashboardAppStorefrontsResponseSchema,
   dashboardAppSearchQuerySchema,
   dashboardAppSearchResponseSchema as SearchResponse,
   dashboardAppTrackLookupQuerySchema,
@@ -614,6 +616,17 @@ const DecryptJobResponse = object({
   resolvedVersion: Type.Optional(Type.String()),
   artifact: Type.Optional(ArtifactSummaryResponse),
 });
+const DecryptTargetResponse = object({
+  resolveOnly: Type.Literal(true),
+  bundleId: BundleId,
+  selector: Type.Optional(Type.String()),
+  channel: Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]),
+  resolvedVersion: Type.String(),
+  isTestFlight: Type.Boolean(),
+  build: Type.Optional(Type.String()),
+  cacheHit: Type.Boolean(),
+  artifact: Type.Optional(ArtifactSummaryResponse),
+});
 const UrlResponse = object({ url: Type.String() });
 const BillingCheckoutResponse = object({
   url: Type.String(),
@@ -1106,6 +1119,7 @@ const remainingContracts: Array<[ContractMethod, string]> = [
   ['GET', '/v1/dashboard/apps/metadata'],
   ['GET', '/v1/dashboard/apps/cache'],
   ['POST', '/v1/dashboard/apps/metadata/refresh'],
+  ['GET', '/v1/dashboard/apps/storefronts'],
   ['GET', '/v1/dashboard/versions/:bundleId'],
   ['GET', '/v1/dashboard/devices/discover'],
   ['GET', '/v1/dashboard/testflight/:appId/trains'],
@@ -1331,8 +1345,9 @@ register('POST', '/v1/decrypts', {
     bundleId: BundleId,
     version: Type.Optional(VersionSelector),
     channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])),
+    resolveOnly: Type.Optional(Type.Boolean()),
   }),
-  response: { 200: DecryptJobResponse, 202: DecryptJobResponse, 409: ErrorEnvelope, 410: ErrorEnvelope, 502: ErrorEnvelope },
+  response: { 200: Type.Union([DecryptJobResponse, DecryptTargetResponse]), 202: DecryptJobResponse, 400: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 410: ErrorEnvelope, 429: ErrorEnvelope, 502: ErrorEnvelope },
 });
 register('GET', '/v1/artifacts', {
   querystring: object({ ...PaginationQuery.properties, q: Type.Optional(Type.String({ maxLength: 200 })), channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])) }),
@@ -1540,6 +1555,10 @@ register('GET', '/v1/dashboard/apps/cache', {
 register('POST', '/v1/dashboard/apps/metadata/refresh', {
   body: dashboardAppMetadataRefreshBodySchema,
   response: { 200: AppMetadataResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope, 500: ErrorEnvelope },
+});
+register('GET', '/v1/dashboard/apps/storefronts', {
+  querystring: dashboardAppStorefrontsQuerySchema,
+  response: { 200: dashboardAppStorefrontsResponseSchema, 400: ErrorEnvelope, 401: ErrorEnvelope, 502: ErrorEnvelope },
 });
 register('GET', '/v1/dashboard/settings/job-history-retention/preview', {
   querystring: dashboardSettingsRetentionQuerySchema,

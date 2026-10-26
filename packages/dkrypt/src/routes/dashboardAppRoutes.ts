@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type {
   DashboardAppVersionsRoute,
+  DashboardAppStorefrontsRoute,
   DashboardAppCatalogStatsRoute,
   DashboardAppMetadataRefreshRoute,
   DashboardAppMetadataRoute,
@@ -57,6 +58,7 @@ const canViewAutomation = fastifyRequirePermission(PermissionFlag.viewAutomation
 const canManageAppCatalog = fastifyRequirePermission(PermissionFlag.manageAutomation);
 const bundleIdPattern = /^[A-Za-z0-9.-]{3,200}$/;
 const APP_CATALOG_REVALIDATION_MS = 24 * 60 * 60 * 1000;
+const STOREFRONT_LOOKUP_CONCURRENCY = 5;
 const log = scopedLogger('app-catalog');
 
 function catalogEntryFromMetadata(metadata: ItunesAppMetadata): Omit<AppCatalogEntry, 'updatedAt'> {
@@ -147,6 +149,43 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
         log.warn('dashboard App Store link lookup failed', { requestId: request.id, trackId, error: error instanceof Error ? error.message : String(error) });
         return reply.code(502).send(createHttpErrorEnvelope(request.id, 502, 'App Store link could not be resolved'));
       }
+    });
+
+    server.get<DashboardAppStorefrontsRoute>('/v1/dashboard/apps/storefronts', {
+      schema: getRouteContract('GET', '/v1/dashboard/apps/storefronts'),
+    }, async (request, reply) => {
+      const trackId = Number(request.query.trackId);
+      const countries = [...new Set(request.query.countries.split(',').map((value) => value.trim().toUpperCase()))];
+      if (!/^\d+$/.test(request.query.trackId) || !Number.isSafeInteger(trackId) || trackId < 1) {
+        return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'Invalid App Store app ID'));
+      }
+      if (countries.length < 1 || countries.length > 25 || countries.some((country) => !/^[A-Z]{2}$/.test(country))) {
+        return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'Choose 1 to 25 two-letter storefront country codes'));
+      }
+
+      const storefronts: Array<{ countryCode: string; countryName: string; status: 'available' | 'unavailable' | 'unknown'; price?: number; formattedPrice?: string; currency?: string }> = [];
+      for (let offset = 0; offset < countries.length; offset += STOREFRONT_LOOKUP_CONCURRENCY) {
+        const batch = countries.slice(offset, offset + STOREFRONT_LOOKUP_CONCURRENCY);
+        storefronts.push(...await Promise.all(batch.map(async (countryCode) => {
+          const countryName = new Intl.DisplayNames(['en'], { type: 'region' }).of(countryCode) ?? countryCode;
+          try {
+            const metadata = await services.lookupAppMetadataByTrackId(trackId, countryCode, AbortSignal.timeout(10_000));
+            if (metadata.trackId !== trackId) throw new Error('App Store returned a different app');
+            return {
+              countryCode,
+              countryName,
+              status: 'available' as const,
+              price: metadata.price,
+              formattedPrice: metadata.formattedPrice,
+              currency: metadata.currency,
+            };
+          } catch (error) {
+            const unavailable = error instanceof Error && error.message.startsWith('itunes lookup returned no metadata');
+            return { countryCode, countryName, status: unavailable ? 'unavailable' as const : 'unknown' as const };
+          }
+        })));
+      }
+      return { trackId, checkedAt: Date.now(), storefronts };
     });
 
     server.get<DashboardAppVersionsRoute>('/v1/dashboard/versions/:bundleId', {

@@ -4,6 +4,7 @@
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import Card from '#lib/components/ui/Card.svelte';
+  import Dialog from '#lib/components/ui/Dialog.svelte';
   import LegalLinks from '#components/LegalLinks.svelte';
   import { pushDecryptUsageAlertThresholds, refreshSession, sessionHasPermission } from '#lib/session.svelte';
   import { PermissionFlag } from '#lib/permissions';
@@ -103,6 +104,8 @@
   let checkoutIdempotencyPlan = $state<PlanId | undefined>();
   let checkoutIdempotencyProvider = $state<PaymentProvider | undefined>();
   let paymentProvider = $state<PaymentProvider>('stripe');
+  let planChangeOpen = $state(false);
+  let pendingPlanChange = $state<Plan | undefined>();
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
@@ -313,15 +316,6 @@
       showToast('Crypto plan changes require cancellation and a new checkout.', 'error');
       return;
     }
-    if (billing?.entitlement.legacy) {
-      const previousPlan = billing.currentPlan;
-      const previousAllowance = previousPlan?.dailyDecryptLimit === undefined ? 'unlimited new decrypts' : `${previousPlan.dailyDecryptLimit} new decrypts per rolling 24 hours`;
-      const newAllowance = plan.dailyDecryptLimit === undefined ? 'unlimited new decrypts' : `${plan.dailyDecryptLimit} new decrypts per rolling 24 hours`;
-      const currentSummary = `${previousPlan?.name ?? planLabel(billing.entitlement.planId)} · ${previousPlan ? fallbackPrice(previousPlan) : 'current price'}/month · ${previousAllowance}${previousPlan?.api ? ' · API access' : ''}${previousPlan && previousPlan.priority > 0 ? ' · higher priority' : ''}`;
-      const newSummary = `${plan.name} · ${fallbackPrice(plan)}/month · ${newAllowance}${plan.api ? ' · API access' : ''}${plan.priority > 0 ? ' · higher priority' : ''}`;
-      const confirmed = await confirmDialog(`Compare plans before switching:\nCurrent: ${currentSummary}\nNew: ${newSummary}\nThis permanently ends your grandfathered plan. Its price and benefits cannot be reclaimed. Continue?`, { confirmLabel: `Switch to ${plan.name}` });
-      if (!confirmed) return;
-    }
     openingPlan = plan.id;
     try {
       const response = await fetch('/v1/billing/subscription', {
@@ -344,10 +338,22 @@
   function choosePlan(plan: Plan): void {
     if (openingPlan) return;
     if (billing?.entitlement.subscriptionId) {
-      void changePlan(plan);
+      if (billing.entitlement.provider === 'nowpayments') {
+        void changePlan(plan);
+        return;
+      }
+      pendingPlanChange = plan;
+      planChangeOpen = true;
       return;
     }
     void startCheckout(plan);
+  }
+
+  async function confirmPlanChange(): Promise<void> {
+    const plan = pendingPlanChange;
+    planChangeOpen = false;
+    pendingPlanChange = undefined;
+    if (plan) await changePlan(plan);
   }
 
   function fallbackPrice(plan: Plan): string {
@@ -479,6 +485,31 @@
 
   {#if billing?.legacyBilling}
     <Card class="border-accent/40 bg-accent/5"><div class="text-sm"><div class="font-medium">Previous billing record needs review</div><div class="mt-1 text-muted">Your previous payment-provider record was kept for reconciliation. Contact support before starting a new subscription so the account is not charged twice.</div></div></Card>
+  {/if}
+
+  {#if planChangeOpen && pendingPlanChange && billing}
+    {@const currentPlan = billing.currentPlan}
+    {@const newRemaining = pendingPlanChange.dailyDecryptLimit === undefined ? null : Math.max(0, pendingPlanChange.dailyDecryptLimit - billing.quota.used)}
+    <Dialog open={planChangeOpen} onOpenChange={(open) => (planChangeOpen = open)} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
+      <div class="flex items-start justify-between gap-3"><div><h2 class="text-base font-semibold">Review your plan change</h2><p class="mt-1 text-xs text-muted">Nothing changes until you confirm.</p></div><Button size="icon" variant="ghost" aria-label="Close plan review" onclick={() => (planChangeOpen = false)}><X class="h-4 w-4" /></Button></div>
+      <div class="mt-4 grid gap-3 sm:grid-cols-2">
+        <div class="rounded-lg border border-border p-3"><div class="text-[11px] text-muted">Current</div><div class="mt-1 font-medium">{currentPlan?.name ?? planLabel(billing.entitlement.planId)}</div><div class="mt-1 text-sm">{currentPlan ? fallbackPrice(currentPlan) : 'Current price'}<span class="text-xs text-muted"> / month</span></div><div class="mt-2 text-xs text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.limit} new decrypts per rolling 24 hours`}</div></div>
+        <div class="rounded-lg border border-accent/50 bg-accent/5 p-3"><div class="text-[11px] text-muted">After switching</div><div class="mt-1 font-medium">{pendingPlanChange.name}</div><div class="mt-1 text-sm">{fallbackPrice(pendingPlanChange)}<span class="text-xs text-muted"> / month</span></div><div class="mt-2 text-xs text-muted">{pendingPlanChange.dailyDecryptLimit === undefined ? 'Unlimited new decrypts' : `${pendingPlanChange.dailyDecryptLimit} new decrypts per rolling 24 hours`}</div></div>
+      </div>
+      <div class="mt-3 rounded-lg border border-border/70 bg-panel-muted/20 p-3 text-xs">
+        <div class="font-medium">What changes</div>
+        <ul class="mt-2 space-y-1.5 text-muted">
+          <li>Usage carries over: {billing.quota.used} decrypts are already counted in the current rolling 24-hour window{newRemaining === null ? '; the new plan has no daily cap.' : `; about ${newRemaining} slots remain under the new allowance.`}</li>
+          <li>{pendingPlanChange.api ? `API access stays available${pendingPlanChange.apiRatePerMinute ? ` at ${pendingPlanChange.apiRatePerMinute} requests per minute` : ''}.` : 'API access will be removed with this plan.'}</li>
+          <li>{pendingPlanChange.priority > (currentPlan?.priority ?? 0) ? 'Queue priority increases.' : pendingPlanChange.priority < (currentPlan?.priority ?? 0) ? 'Queue priority decreases to standard.' : pendingPlanChange.priority > 0 ? 'Higher queue priority remains.' : 'Standard queue priority remains.'}</li>
+          <li>{billing.entitlement.nextBilledAt ? `Next billing date: ${formatDate(billing.entitlement.nextBilledAt)}.` : 'The plan price will apply through Stripe billing.'} {currentPlan && pendingPlanChange.amount > currentPlan.amount ? 'Stripe may invoice the prorated increase immediately.' : 'Stripe applies any price decrease as a billing proration.'} If payment cannot complete, the current plan remains unchanged.</li>
+        </ul>
+      </div>
+      {#if billing.entitlement.legacy}
+        <div class="mt-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs"><div class="font-medium">Grandfathered benefits will end</div><p class="mt-1 text-muted">This switch permanently ends your current legacy plan. Its price and benefits cannot be restored later.</p></div>
+      {/if}
+      <div class="mt-4 flex flex-wrap justify-end gap-2"><Button variant="secondary" onclick={() => (planChangeOpen = false)}>Keep current plan</Button><Button loading={openingPlan === pendingPlanChange.id} onclick={() => void confirmPlanChange()}>{billing.entitlement.legacy ? 'Switch and end legacy plan' : `Confirm switch to ${pendingPlanChange.name}`}</Button></div>
+    </Dialog>
   {/if}
 
   {#if loading}

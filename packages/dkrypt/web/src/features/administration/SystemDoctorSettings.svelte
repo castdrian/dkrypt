@@ -15,6 +15,7 @@
   import AppStoreOfflineSettings from '#features/administration/AppStoreOfflineSettings.svelte';
   import BridgeDiagnostics from '#features/devices/BridgeDiagnostics.svelte';
   import WorkerOperations from '#features/administration/WorkerOperations.svelte';
+  import ConfigurationDriftReport from '#features/administration/ConfigurationDriftReport.svelte';
 
   const checkTitles: Record<string, string> = {
     'session-secret': 'Session signing secret',
@@ -282,6 +283,7 @@
       </ul>
     {/if}
   </section>
+  {#if report}<section class="mt-5 border-t border-border/70 pt-4"><ConfigurationDriftReport runtimeConfiguration={report.runtimeConfiguration} /></section>{/if}
   </AdvancedSection>
 </Card>
 <WorkerOperations />

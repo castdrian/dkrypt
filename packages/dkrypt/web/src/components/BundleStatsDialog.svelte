@@ -4,7 +4,9 @@
 		fetchJobDiff,
 		fetchJobHistory,
 		fetchArtifacts,
+		fetchAppStorefronts,
 		type BundleStats,
+		type AppStorefrontListing,
 		type ArtifactRecord,
 		type JobDiffResult,
 		type JobHistoryEntry,
@@ -38,6 +40,32 @@
 	} = $props();
 
 	const VERSIONS_PAGE_SIZE = 20;
+	const STOREFRONT_OPTIONS = [
+		{ code: 'US', name: 'United States' },
+		{ code: 'GB', name: 'United Kingdom' },
+		{ code: 'DE', name: 'Germany' },
+		{ code: 'FR', name: 'France' },
+		{ code: 'CA', name: 'Canada' },
+		{ code: 'AU', name: 'Australia' },
+		{ code: 'JP', name: 'Japan' },
+		{ code: 'IN', name: 'India' },
+		{ code: 'IT', name: 'Italy' },
+		{ code: 'ES', name: 'Spain' },
+		{ code: 'NL', name: 'Netherlands' },
+		{ code: 'SE', name: 'Sweden' },
+		{ code: 'CH', name: 'Switzerland' },
+		{ code: 'AT', name: 'Austria' },
+		{ code: 'PL', name: 'Poland' },
+		{ code: 'MX', name: 'Mexico' },
+		{ code: 'BR', name: 'Brazil' },
+		{ code: 'SG', name: 'Singapore' },
+		{ code: 'KR', name: 'South Korea' },
+		{ code: 'HK', name: 'Hong Kong' },
+		{ code: 'NZ', name: 'New Zealand' },
+		{ code: 'CN', name: 'China' },
+		{ code: 'TR', name: 'Türkiye' },
+		{ code: 'AE', name: 'United Arab Emirates' },
+	];
 
 	let stats = $state<BundleStats | null>(null);
 	let versions = $state<JobHistoryEntry[] | null>(null);
@@ -50,6 +78,15 @@
 	let relatedArtifacts = $state<ArtifactRecord[]>([]);
 	let artifactsLoading = $state(false);
 	let artifactsFailed = $state(false);
+	let storefronts = $state<AppStorefrontListing[]>([]);
+	let storefrontCountries = $state(['US', 'GB', 'DE', 'CA', 'AU']);
+	let storefrontLoading = $state(false);
+	let storefrontError = $state('');
+	let storefrontCheckedAt = $state<number | undefined>();
+	let storefrontsExpanded = $state(false);
+	let customStorefrontCode = $state('');
+	let storefrontCountryError = $state('');
+	let storefrontRequestId = 0;
 	let detailRequestId = 0;
 	let currentAppMetadata = $derived(appCatalogEntry(bundleId));
 
@@ -150,6 +187,60 @@
 			diffing = false;
 		}
 	}
+
+	function toggleStorefront(countryCode: string, checked: boolean): void {
+		resetStorefrontResults();
+		storefrontCountries = checked
+			? [...new Set([...storefrontCountries, countryCode])]
+			: storefrontCountries.filter((country) => country !== countryCode);
+	}
+
+	function addStorefrontCountry(): void {
+		const countryCode = customStorefrontCode.trim().toUpperCase();
+		if (!/^[A-Z]{2}$/.test(countryCode)) {
+			storefrontCountryError = 'Enter a two-letter country code.';
+			return;
+		}
+		if (storefrontCountries.includes(countryCode)) {
+			storefrontCountryError = `${countryCode} is already selected.`;
+			return;
+		}
+		if (storefrontCountries.length >= 25) {
+			storefrontCountryError = 'Select up to 25 storefronts.';
+			return;
+		}
+		resetStorefrontResults();
+		storefrontCountries = [...storefrontCountries, countryCode];
+		customStorefrontCode = '';
+		storefrontCountryError = '';
+	}
+
+	function resetStorefrontResults(): void {
+		storefrontRequestId += 1;
+		storefronts = [];
+		storefrontCheckedAt = undefined;
+		storefrontError = '';
+		storefrontLoading = false;
+	}
+
+	async function checkStorefronts(): Promise<void> {
+		const trackId = currentAppMetadata?.trackId;
+		if (!trackId || storefrontCountries.length === 0) return;
+		const requestId = ++storefrontRequestId;
+		storefrontLoading = true;
+		storefrontError = '';
+		try {
+			const result = await fetchAppStorefronts(trackId, storefrontCountries);
+			if (requestId === storefrontRequestId) {
+				storefronts = result.storefronts;
+				storefrontCheckedAt = result.checkedAt;
+			}
+		} catch (error) {
+			if (requestId === storefrontRequestId) storefrontError = error instanceof Error ? error.message : 'Could not check App Store availability.';
+		} finally {
+			if (requestId === storefrontRequestId) storefrontLoading = false;
+		}
+	}
 </script>
 
 <Dialog {open} {onOpenChange} class="max-h-[85vh] max-w-xl overflow-y-auto">
@@ -178,6 +269,35 @@
 			{#if currentAppMetadata.releaseNotes}<details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">Latest release notes</summary><p class="text-muted mt-1 whitespace-pre-wrap">{currentAppMetadata.releaseNotes}</p></details>{/if}
 		</section>
 	{/if}
+	<section class="border-border mb-3 rounded-lg border p-3" aria-label="App Store storefront availability">
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<div><h3 class="text-xs font-semibold">Storefront availability</h3><p class="mt-1 text-[11px] text-muted">Check listed price and availability in selected countries.</p></div>
+			<Button size="sm" variant="secondary" disabled={!currentAppMetadata?.trackId || storefrontCountries.length === 0} loading={storefrontLoading} onclick={() => void checkStorefronts()}>Check storefronts</Button>
+		</div>
+		{#if !currentAppMetadata?.trackId}
+			<p class="mt-2 text-xs text-muted">App Store metadata is not available for this app yet.</p>
+		{:else}
+			<button type="button" class="mt-2 text-[11px] text-accent hover:underline" aria-expanded={storefrontsExpanded} onclick={() => (storefrontsExpanded = !storefrontsExpanded)}>{storefrontsExpanded ? 'Hide countries' : `${storefrontCountries.length} countries selected · Edit`}</button>
+			{#if storefrontsExpanded}
+				<div class="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
+					{#each STOREFRONT_OPTIONS as country (country.code)}
+						<label class="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] hover:bg-muted/30"><input type="checkbox" checked={storefrontCountries.includes(country.code)} onchange={(event) => toggleStorefront(country.code, event.currentTarget.checked)} />{country.code}</label>
+					{/each}
+				</div>
+				<div class="mt-2 flex flex-wrap items-center gap-2"><input class="h-8 w-20 rounded-md border border-border bg-background px-2 text-xs uppercase" bind:value={customStorefrontCode} maxlength="2" placeholder="Code" aria-label="Add storefront country code" /><Button size="sm" variant="ghost" disabled={storefrontCountries.length >= 25} onclick={addStorefrontCountry}>Add country</Button></div>
+			{/if}
+		{/if}
+		{#if storefrontCountryError}<p class="mt-1 text-[11px] text-err" role="alert">{storefrontCountryError}</p>{/if}
+		{#if storefrontError}<p class="mt-2 text-xs text-err" role="alert">{storefrontError}</p>{/if}
+		{#if storefronts.length > 0}
+			<ul class="mt-2 divide-y divide-border/60">
+				{#each storefronts as storefront (storefront.countryCode)}
+					<li class="flex items-center justify-between gap-3 py-1.5 text-xs"><span>{storefront.countryName}</span><span class="text-right text-muted">{#if storefront.status === 'available'}{storefront.formattedPrice ?? (storefront.price === undefined ? 'Available' : `${storefront.price} ${storefront.currency ?? ''}`)}{:else if storefront.status === 'unavailable'}Not listed{:else}Could not verify{/if}</span></li>
+				{/each}
+			</ul>
+			{#if storefrontCheckedAt}<p class="mt-1 text-[10px] text-muted">Checked {new Date(storefrontCheckedAt).toLocaleString()}</p>{/if}
+		{/if}
+	</section>
 	<section class="border-border mb-3 rounded-lg border p-3" aria-label="App IPA library items">
 		<div class="mb-2 flex items-center justify-between gap-2">
 			<h3 class="text-xs font-semibold">IPA Library</h3>

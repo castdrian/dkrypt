@@ -1,7 +1,9 @@
 import { appendActionOutput, createApiClient, downloadVerifiedArtifact, validateOrigin } from './action-lib.mjs';
 import { randomUUID } from 'node:crypto';
+import { appendFile, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 
 const BUNDLE_ID_RE = /^[A-Za-z0-9.-]{3,200}$/;
 
@@ -13,6 +15,10 @@ function validatePositiveInteger(value, label, maximum) {
 
 function safeFilePart(value) {
   return String(value ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function isResolveOnly(value) {
+  return value === true || String(value).toLowerCase() === 'true';
 }
 
 function jobLogLine(job) {
@@ -34,6 +40,40 @@ function artifactFromJob(job, fallbackBundleId) {
     fileUrl: job.artifact?.fileUrl ?? job.artifactUrl,
     cacheHit: job.cacheHit === true,
   };
+}
+
+function summaryCell(value) {
+  return String(value ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[&<>|`[\]\\]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '|': '&#124;', '`': '&#96;', '[': '&#91;', ']': '&#93;', '\\': '&#92;' })[character])
+    .trim();
+}
+
+async function appendWorkflowSummary(summaryFile, result) {
+  if (!summaryFile) return;
+  const table = [
+    '| App | Version | Channel | Cache | IPA | Size | Result |',
+    '| --- | --- | --- | --- | --- | ---: | --- |',
+  ];
+  const artifact = result.artifactId ? summaryCell(result.artifactId) : '—';
+  table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${artifact} | ${result.sizeBytes ? `${result.sizeBytes} bytes` : 'Resolve only'} | ${summaryCell(result.error ?? 'Ready')} |`);
+  await appendFile(summaryFile, `## dkrypt\n\n${table.join('\n')}\n\n`);
+}
+
+async function appendBatchSummary(summaryFile, results) {
+  if (!summaryFile) return;
+  const table = [
+    '| App | Version | Channel | Cache | IPA | Result |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const result of results) {
+    table.push(`| ${summaryCell(result.bundleId)} | ${summaryCell(result.version)} | ${summaryCell(result.channel)} | ${result.cacheHit ? 'Hit' : 'Miss'} | ${result.artifactId ? summaryCell(result.artifactId) : '—'} | ${summaryCell(result.error ?? (result.resolveOnly ? 'Resolved only' : 'Downloaded'))} |`);
+  }
+  await appendFile(summaryFile, `## dkrypt · ${results.length} apps\n\n${table.join('\n')}\n\n`);
+}
+
+async function writeOutputs(outputFile, outputs) {
+  for (const [name, value] of Object.entries(outputs)) await appendActionOutput(outputFile, name, value);
 }
 
 async function fetchExistingArtifact(client, { artifactId, latestCachedChannel, deadlineAt }) {
@@ -58,11 +98,13 @@ export async function runAction(config, dependencies = {}) {
   const downloadTimeoutSeconds = validatePositiveInteger(config.downloadTimeoutSeconds ?? 600, 'Download timeout', 3_600);
   const artifactId = config.artifactId?.trim();
   const latestCachedChannel = config.latestCachedChannel?.trim();
+  const resolveOnly = isResolveOnly(config.resolveOnly);
   const artifactModeCount = Number(Boolean(artifactId)) + Number(Boolean(latestCachedChannel));
   if (artifactModeCount > 1) throw new Error('Choose either artifact-id or latest-cached-channel');
   if (artifactModeCount > 0 && (config.bundleId?.trim() || config.version?.trim())) {
     throw new Error('artifact downloads cannot be combined with bundle-id or version');
   }
+  if (resolveOnly && artifactModeCount > 0) throw new Error('resolve-only cannot be combined with artifact download inputs');
   if (latestCachedChannel && !['appstore', 'testflight'].includes(latestCachedChannel)) {
     throw new Error('latest-cached-channel must be appstore or testflight');
   }
@@ -95,14 +137,50 @@ export async function runAction(config, dependencies = {}) {
     if (channel === 'appstore' && version?.includes('_')) throw new Error('App Store versions cannot include a TestFlight build number');
 
     const deadlineAt = Date.now() + timeoutSeconds * 1_000;
-    log(`Submitting ${channel === 'testflight' && !version ? 'latest TestFlight' : channel} decrypt for ${bundleId}`);
+    log(`${resolveOnly ? 'Resolving' : 'Submitting'} ${channel === 'testflight' && !version ? 'latest TestFlight' : channel}${resolveOnly ? ' release' : ' decrypt'} for ${bundleId}`);
     job = await client.requestJson('/v1/decrypts', {
       method: 'POST',
-      headers: { 'Idempotency-Key': dependencies.idempotencyKey ?? randomUUID() },
-      body: JSON.stringify({ bundleId, ...(version ? { version } : {}), ...(channel === 'testflight' ? { channel } : {}) }),
+      ...(!resolveOnly ? { headers: { 'Idempotency-Key': dependencies.idempotencyKey ?? randomUUID() } } : {}),
+      body: JSON.stringify({ bundleId, ...(version ? { version } : {}), ...(channel === 'testflight' ? { channel } : {}), ...(resolveOnly ? { resolveOnly: true } : {}) }),
       deadlineAt,
-      label: 'decrypt submission',
+      label: resolveOnly ? 'release resolution' : 'decrypt submission',
     });
+    if (resolveOnly) {
+      if (job.resolveOnly !== true || typeof job.resolvedVersion !== 'string' || !['appstore', 'testflight'].includes(job.channel)) {
+        throw new Error('dkrypt did not return valid resolved release metadata');
+      }
+      const build = job.build ?? '';
+      const outputs = {
+        'job-id': '',
+        'artifact-id': job.artifact?.id ?? '',
+        version: job.resolvedVersion,
+        'resolved-version': job.resolvedVersion,
+        resolved_version: job.resolvedVersion,
+        build,
+        channel: job.channel,
+        is_testflight: String(job.isTestFlight === true),
+        'is-testflight': String(job.isTestFlight === true),
+        cache_hit: String(job.cacheHit === true),
+        'cache-hit': String(job.cacheHit === true),
+        sha256: '',
+        size_bytes: '',
+        'size-bytes': '',
+        path: '',
+        output: '',
+      };
+      await writeOutputs(outputFile, outputs);
+      log(`Resolved ${job.channel} ${job.resolvedVersion}${job.cacheHit ? ' · cached IPA available' : ''}; no IPA downloaded`);
+      await appendWorkflowSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, {
+        bundleId,
+        version: job.resolvedVersion,
+        channel: job.channel,
+        cacheHit: job.cacheHit === true,
+        artifactId: job.artifact?.id,
+        sizeBytes: job.artifact?.sizeBytes,
+        resolveOnly: true,
+      });
+      return outputs;
+    }
     if (typeof job.id !== 'string' || !job.id) throw new Error('dkrypt did not return a job ID');
     jobId = job.id;
     await appendActionOutput(outputFile, 'job-id', jobId);
@@ -174,28 +252,146 @@ export async function runAction(config, dependencies = {}) {
     path: download.outputPath,
     output: download.outputPath,
   };
-  for (const [name, value] of Object.entries(outputs)) {
-    if (name === 'job-id' && jobId) continue;
-    await appendActionOutput(outputFile, name, value);
-  }
+  await writeOutputs(outputFile, Object.fromEntries(Object.entries(outputs).filter(([name]) => name !== 'job-id' || !jobId)));
   log(`Downloaded and verified ${artifact.channel} IPA (${download.sizeBytes} bytes, SHA-256 ${download.sha256}) at ${download.outputPath}`);
+  await appendWorkflowSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, {
+    bundleId: artifact.bundleId,
+    version: resolvedVersion,
+    channel: artifact.channel,
+    cacheHit,
+    artifactId: artifact.id,
+    sizeBytes: download.sizeBytes,
+  });
   return outputs;
 }
 
+function parseBundleIds(value) {
+  let values = value;
+  if (typeof values === 'string') {
+    try {
+      values = JSON.parse(values);
+    } catch {
+      throw new Error('bundle-ids must be a JSON array of bundle identifiers');
+    }
+  }
+  if (!Array.isArray(values) || values.length < 1 || values.length > 20 || values.some((bundleId) => typeof bundleId !== 'string' || !BUNDLE_ID_RE.test(bundleId.trim()))) {
+    throw new Error('bundle-ids must contain 1 to 20 valid bundle identifiers');
+  }
+  const unique = [...new Set(values.map((bundleId) => bundleId.trim()))];
+  if (unique.length !== values.length) throw new Error('bundle-ids cannot contain duplicates');
+  return unique;
+}
+
+function readOutputs(contents) {
+  return Object.fromEntries(contents.split(/\r?\n/).filter(Boolean).map((line) => {
+    const separator = line.indexOf('=');
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
+}
+
+export async function runBatchAction(config, dependencies = {}) {
+  const bundleIds = parseBundleIds(config.bundleIds);
+  if (config.bundleId?.trim()) throw new Error('choose either bundle-id or bundle-ids');
+  if (config.artifactId?.trim() || config.latestCachedChannel?.trim()) {
+    throw new Error('bundle-ids cannot be combined with artifact download inputs');
+  }
+  const outputFile = config.githubOutput ?? process.env.GITHUB_OUTPUT;
+  if (!outputFile) throw new Error('GITHUB_OUTPUT is unavailable');
+  const directory = config.output?.trim() ? path.resolve(config.output.trim()) : process.cwd();
+  await mkdir(directory, { recursive: true });
+  const results = [];
+
+  for (const bundleId of bundleIds) {
+    const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'dkrypt-action-app-'));
+    const temporaryOutput = path.join(temporaryDirectory, 'outputs');
+    const resolveOnly = isResolveOnly(config.resolveOnly);
+    const output = resolveOnly ? '' : path.join(directory, `${safeFilePart(bundleId)}.ipa`);
+    try {
+      const result = await runAction({
+        ...config,
+        bundleId,
+        bundleIds: undefined,
+        output,
+        githubOutput: temporaryOutput,
+        githubSummary: '',
+      }, {
+        ...dependencies,
+        ...(dependencies.idempotencyKey ? { idempotencyKey: `${dependencies.idempotencyKey}:${bundleId}` } : {}),
+      });
+      const outputs = readOutputs(await readFile(temporaryOutput, 'utf8'));
+      results.push({
+        bundleId,
+        status: 'success',
+        jobId: outputs['job-id'] || undefined,
+        artifactId: outputs['artifact-id'] || undefined,
+        version: outputs.version,
+        build: outputs.build || undefined,
+        channel: outputs.channel,
+        isTestFlight: outputs.is_testflight === 'true',
+        cacheHit: outputs.cache_hit === 'true',
+        sha256: outputs.sha256 || undefined,
+        sizeBytes: outputs.size_bytes ? Number(outputs.size_bytes) : undefined,
+        path: outputs.path || undefined,
+        resolveOnly,
+      });
+      if (result.path) process.stdout.write(`Completed ${bundleId}: ${result.path}\n`);
+    } catch (error) {
+      results.push({
+        bundleId,
+        status: 'failure',
+        channel: config.channel ?? 'appstore',
+        resolveOnly,
+        error: String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, ' ').slice(0, 500),
+      });
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
+  const successCount = results.filter((result) => result.status === 'success').length;
+  const failureCount = results.length - successCount;
+  await writeOutputs(outputFile, {
+    'job-id': '',
+    'artifact-id': '',
+    version: '',
+    'resolved-version': '',
+    'resolved_version': '',
+    build: '',
+    channel: '',
+    is_testflight: '',
+    'is-testflight': '',
+    cache_hit: '',
+    'cache-hit': '',
+    sha256: '',
+    size_bytes: '',
+    'size-bytes': '',
+    path: '',
+    output: '',
+    'results-json': JSON.stringify(results),
+    'success-count': String(successCount),
+    'failure-count': String(failureCount),
+  });
+  await appendBatchSummary(config.githubSummary ?? process.env.GITHUB_STEP_SUMMARY, results);
+  if (failureCount > 0) throw new Error(`${failureCount} of ${results.length} dkrypt app operations failed`);
+  return { results, successCount, failureCount };
+}
+
 async function main() {
-  const outputs = await runAction({
+  const config = {
     apiUrl: process.env.DKRYPT_API_URL ?? '',
     apiKey: process.env.DKRYPT_API_KEY ?? '',
     bundleId: process.env.DKRYPT_BUNDLE_ID ?? '',
+    bundleIds: process.env.DKRYPT_BUNDLE_IDS ?? '',
     version: process.env.DKRYPT_VERSION ?? '',
     channel: process.env.DKRYPT_CHANNEL ?? 'appstore',
     output: process.env.DKRYPT_OUTPUT ?? '',
     artifactId: process.env.DKRYPT_ARTIFACT_ID ?? '',
     latestCachedChannel: process.env.DKRYPT_LATEST_CACHED_CHANNEL ?? '',
+    resolveOnly: process.env.DKRYPT_RESOLVE_ONLY ?? '',
     timeoutSeconds: process.env.DKRYPT_TIMEOUT_SECONDS ?? '1800',
     downloadTimeoutSeconds: process.env.DKRYPT_DOWNLOAD_TIMEOUT_SECONDS ?? '600',
-  });
-  return outputs;
+  };
+  return config.bundleIds.trim() ? runBatchAction(config) : runAction(config);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

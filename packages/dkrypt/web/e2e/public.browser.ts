@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
@@ -207,6 +208,54 @@ test('inactive billing waits for selection and stays mounted after first visit',
   await expect(billingHeading).toBeVisible();
   await waitForBrowserFrames(page);
   expect(billingRequests).toBe(billingRequestsAfterFirstVisit);
+});
+
+test('Stripe plan changes show their usage and access impact before confirmation', async ({ page }) => {
+  await mockAuthenticatedDashboard(page, '2');
+  const currentPlan = { ...publicPricingPlans[0], priceId: 'price_access', legacy: false };
+  const plans = publicPricingPlans.map((plan) => ({ ...plan, priceId: `price_${plan.id}`, legacy: false }));
+  let planChangeRequests = 0;
+  await page.route('**/v1/billing', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      enabled: true,
+      provider: 'stripe',
+      environment: 'live',
+      managedPayments: true,
+      missingConfiguration: [],
+      plans,
+      currentPlan,
+      customerId: 'cus_test',
+      legacyBilling: false,
+      entitlement: { planId: 'access', decrypt: true, api: false, priority: 0, provider: 'stripe', status: 'active', subscriptionId: 'sub_test', dailyDecryptLimit: 2 },
+      quota: { limit: 2, used: 1, remaining: 1 },
+      usageForecast: { sampleDays: 30, jobsInSample: 8, averagePerDay: 0.3, daysUntilAllowanceUsed: 3 },
+      providers: {
+        stripe: { enabled: true, ready: true, environment: 'live' },
+        crypto: { enabled: false, ready: false, environment: 'live', provider: 'nowpayments', assets: [] },
+      },
+    }) });
+  });
+  await page.route('**/v1/billing/invoices*', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ invoices: [], warnings: [] }) });
+  });
+  await page.route('**/v1/billing/subscription', async (route) => {
+    planChangeRequests += 1;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/?tab=home');
+  await page.getByRole('button', { name: 'Plans', exact: true }).click();
+  await page.getByRole('button', { name: 'Switch to Standard', exact: true }).click();
+
+  const review = page.getByRole('dialog', { name: 'Review plan change' });
+  await expect(review).toContainText('1 decrypts are already counted');
+  await expect(review).toContainText('9 slots remain');
+  await expect(review).toContainText('API access will be removed with this plan.');
+  await expect(review.getByRole('button', { name: 'Confirm switch to Standard' })).toBeVisible();
+  expect(planChangeRequests).toBe(0);
+  await review.getByRole('button', { name: 'Keep current plan' }).click();
+  await expect(review).toBeHidden();
+  expect(planChangeRequests).toBe(0);
 });
 
 test('billing revenue provider breakdown stays readable at wide and narrow desktop widths', async ({ page }) => {
@@ -2351,6 +2400,17 @@ test('self-hosters can review configuration doctor checks from Settings', async 
           { id: 'device-bridge', status: 'error', detail: 'Rust device bridge socket is not available yet' },
         ],
         deployment: { id: 'run-doctor-1', ref: 'abcdef0123456789' },
+        runtimeConfiguration: {
+          appStoreOfflineDecryptEnabled: true,
+          appStoreOfflineMaxWorkers: 1,
+          appStoreOfflineWorkerMemoryMb: 8192,
+          appStoreOfflineVaultConfigured: true,
+          backupManifestSecretConfigured: true,
+          otelBaseEndpointConfigured: false,
+          otelTracesEndpointConfigured: true,
+          otelMetricsEndpointConfigured: false,
+          otelTracesEndpointFingerprint: createHash('sha256').update('https://collector.example/v1/traces').digest('hex'),
+        },
       }),
     });
   });
@@ -2365,6 +2425,20 @@ test('self-hosters can review configuration doctor checks from Settings', async 
   await expect(page.getByText('Rust device bridge socket is not available yet')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh checks' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Download support bundle' })).toHaveAttribute('href', '/v1/dashboard/support-bundle');
+  await page.locator('summary').filter({ hasText: 'Service health checks' }).click();
+  await expect(page.getByRole('heading', { name: 'Self-host configuration drift' })).toBeVisible();
+  const configuration = page.getByLabel('Paste the relevant environment or Compose settings');
+  await configuration.fill('APPSTORE_OFFLINE_MAX_WORKERS=2\nAPPSTORE_OFFLINE_VAULT_KEY=sensitive-value\nBACKUP_MANIFEST_SECRET=another-sensitive-value\nOTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://user:password@collector.example/v1/traces?token=secret');
+  await expect(configuration).toHaveValue('APPSTORE_OFFLINE_MAX_WORKERS=2\nAPPSTORE_OFFLINE_VAULT_KEY=[configured]\nBACKUP_MANIFEST_SECRET=[configured]\nOTEL_EXPORTER_OTLP_TRACES_ENDPOINT=[configured]');
+  await page.getByRole('button', { name: 'Compare with running config' }).click();
+  const driftResults = page.getByRole('list', { name: 'Configuration drift results' });
+  await expect(driftResults).toContainText('2 worker(s)');
+  await expect(driftResults).toContainText('1 worker(s)');
+  await expect(driftResults).toContainText('Drift');
+  await expect(driftResults).toContainText('OTLP traces endpoint');
+  await expect(driftResults).toContainText('Match');
+  expect(await configuration.inputValue()).not.toContain('collector.example');
+  expect(await configuration.inputValue()).not.toContain('secret');
   expect(doctorRequests).toBe(1);
   await page.getByRole('button', { name: 'Refresh checks' }).click();
   await expect(page.getByText('All checks passed')).toBeVisible();
@@ -2658,6 +2732,29 @@ test('API documentation embeds Scalar in the Docs tab with a new-tab fallback', 
   await expect(referenceLink).toHaveAttribute('href', '/reference/');
   await expect(referenceLink).toHaveAttribute('target', '_blank');
   await expect(reference.getByRole('heading', { name: 'API reference is ready' })).toBeVisible();
+});
+
+test('GitHub Action workflow generator creates multi-app resolve-only YAML', async ({ page, context }) => {
+  await mockAuthenticatedDashboard(page, '1');
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+
+  await page.goto('/?tab=docs');
+  await expect(page.getByRole('heading', { name: 'GitHub Actions workflow' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Action v1.1.0' })).toHaveAttribute('href', 'https://github.com/castdrian/dkrypt/releases/tag/v1.1.0');
+  await page.locator('textarea').first().fill('com.example.first\ncom.example.second');
+  await page.getByLabel('Channel').selectOption('testflight');
+  await page.getByLabel('Resolve metadata only; do not queue or download').check();
+
+  const workflow = page.locator('pre code');
+  await expect(workflow).toContainText('castdrian/dkrypt/.github/actions/dkrypt-decrypt@v1.1.0');
+  await expect(workflow).toContainText("bundle-ids: '[\"com.example.first\",\"com.example.second\"]'");
+  await expect(workflow).toContainText("resolve-only: 'true'");
+  await page.getByRole('button', { name: 'Copy YAML' }).click();
+  await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
+  await expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('resolve-only:');
+  await page.locator('textarea').first().fill(Array.from({ length: 21 }, (_, index) => `com.example.app${index}`).join('\n'));
+  await expect(page.getByRole('alert')).toContainText('Choose no more than 20 apps per action.');
+  await expect(page.getByRole('button', { name: 'Copy YAML' })).toBeDisabled();
 });
 
 test('interface language localizes the account menu and persists to the account', async ({ page }) => {

@@ -1,9 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { appendFile, mkdir, rename, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { Readable, Transform } from 'node:stream';
+import { Readable } from 'node:stream';
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -26,6 +26,25 @@ export class ArtifactIntegrityError extends Error {
     super(message);
     this.name = 'ArtifactIntegrityError';
   }
+}
+
+async function partialSize(filePath) {
+  try {
+    return (await stat(filePath)).size;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 0;
+    throw error;
+  }
+}
+
+async function digestFile(filePath) {
+  const hash = createHash('sha256');
+  let sizeBytes = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    sizeBytes += chunk.length;
+    hash.update(chunk);
+  }
+  return { sha256: hash.digest('hex'), sizeBytes };
 }
 
 function retryableStatus(status) {
@@ -176,14 +195,32 @@ export async function downloadVerifiedArtifact({
 
   let lastError;
   const deadlineAt = Date.now() + timeoutMs;
+  const temporaryPath = `${absoluteOutputPath}.partial`;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const temporaryPath = `${absoluteOutputPath}.${process.pid}.${randomUUID()}.partial`;
+    let offset = await partialSize(temporaryPath);
+    if (offset > expectedSizeBytes) {
+      await rm(temporaryPath, { force: true });
+      offset = 0;
+    }
+    if (offset === expectedSizeBytes && expectedSizeBytes > 0) {
+      const existing = await digestFile(temporaryPath);
+      if (existing.sha256 === normalizedSha256) {
+        await rename(temporaryPath, absoluteOutputPath);
+        return { outputPath: absoluteOutputPath, ...existing };
+      }
+      await rm(temporaryPath, { force: true });
+      offset = 0;
+    }
     try {
       const signal = requestSignal(deadlineAt, timeoutMs, 'IPA download');
       const response = await fetchImpl(downloadUrl, {
         redirect: 'error',
         signal,
-        headers: { Accept: 'application/octet-stream', Authorization: `Bearer ${apiKey}` },
+        headers: {
+          Accept: 'application/octet-stream',
+          Authorization: `Bearer ${apiKey}`,
+          ...(offset > 0 ? { Range: `bytes=${offset}-` } : {}),
+        },
       });
       if (retryableStatus(response.status)) {
         lastError = new ApiRequestError(`dkrypt artifact download returned HTTP ${response.status}`, {
@@ -195,33 +232,63 @@ export async function downloadVerifiedArtifact({
         await pauseBeforeRetry({ attempt, retryAfterMs: lastError.retryAfterMs, label: 'IPA download', log, sleep, baseMs: retryBaseMs, maxMs: retryMaxMs, random, deadlineAt });
         continue;
       }
+      if (response.status === 416) {
+        const total = response.headers.get('content-range')?.match(/^bytes \*\/(\d+)$/)?.[1];
+        if (offset === expectedSizeBytes && total === String(expectedSizeBytes)) {
+          const existing = await digestFile(temporaryPath);
+          if (existing.sha256 === normalizedSha256) {
+            await rename(temporaryPath, absoluteOutputPath);
+            return { outputPath: absoluteOutputPath, ...existing };
+          }
+        }
+        await rm(temporaryPath, { force: true });
+        lastError = new Error('dkrypt rejected the resumed IPA byte range');
+        if (attempt === maxAttempts) throw lastError;
+        continue;
+      }
       if (!response.ok) throw new ApiRequestError(await apiErrorMessage(response), { status: response.status });
       if (!response.body) throw new Error('dkrypt returned an empty IPA response');
-
-      const hash = createHash('sha256');
-      let sizeBytes = 0;
-      const verifier = new Transform({
-        transform(chunk, _encoding, callback) {
-          sizeBytes += chunk.length;
-          hash.update(chunk);
-          callback(null, chunk);
-        },
-      });
+      if (offset > 0 && response.status === 200) {
+        await rm(temporaryPath, { force: true });
+        offset = 0;
+      }
+      if (response.status === 206) {
+        const contentRange = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+        if (!contentRange || Number(contentRange[1]) !== offset || Number(contentRange[2]) < offset || Number(contentRange[3]) !== expectedSizeBytes) {
+          await rm(temporaryPath, { force: true });
+          throw new ApiRequestError('dkrypt returned an invalid resumed IPA byte range', { retryable: true });
+        }
+      }
       await pipeline(
         Readable.fromWeb(response.body),
-        verifier,
-        createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }),
+        createWriteStream(temporaryPath, { flags: offset > 0 ? 'a' : 'w', mode: 0o600 }),
         { signal },
       );
-      const sha256 = hash.digest('hex');
-      if (sizeBytes !== expectedSizeBytes || sha256 !== normalizedSha256) {
-        throw new ArtifactIntegrityError(`downloaded IPA integrity check failed (expected ${expectedSizeBytes} bytes and ${normalizedSha256}; received ${sizeBytes} bytes and ${sha256})`);
+      const digest = await digestFile(temporaryPath);
+      if (digest.sizeBytes < expectedSizeBytes) {
+        const responseContentLength = Number(response.headers.get('content-length'));
+        if (Number.isSafeInteger(responseContentLength) && responseContentLength === digest.sizeBytes - offset) {
+          throw new ArtifactIntegrityError(`downloaded IPA integrity check failed (expected ${expectedSizeBytes} bytes; received ${digest.sizeBytes})`);
+        }
+        throw new ApiRequestError(`dkrypt IPA response ended early (expected ${expectedSizeBytes} bytes; received ${digest.sizeBytes})`, { retryable: true });
+      }
+      if (digest.sizeBytes !== expectedSizeBytes || digest.sha256 !== normalizedSha256) {
+        if (offset > 0 && digest.sizeBytes === expectedSizeBytes) {
+          await rm(temporaryPath, { force: true });
+          lastError = new Error('the saved partial IPA did not match the current artifact; restarting from byte zero');
+          if (attempt === maxAttempts) throw new ArtifactIntegrityError(`downloaded IPA integrity check failed (expected ${expectedSizeBytes} bytes and ${normalizedSha256}; received ${digest.sizeBytes} bytes and ${digest.sha256})`);
+          continue;
+        }
+        throw new ArtifactIntegrityError(`downloaded IPA integrity check failed (expected ${expectedSizeBytes} bytes and ${normalizedSha256}; received ${digest.sizeBytes} bytes and ${digest.sha256})`);
       }
       await rename(temporaryPath, absoluteOutputPath);
-      return { outputPath: absoluteOutputPath, sha256, sizeBytes };
+      return { outputPath: absoluteOutputPath, ...digest };
     } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => {});
-      if (error instanceof ArtifactIntegrityError || (error instanceof ApiRequestError && !error.retryable)) throw error;
+      if (error instanceof ArtifactIntegrityError || (error instanceof ApiRequestError && !error.retryable)) {
+        await rm(temporaryPath, { force: true }).catch(() => {});
+        throw error;
+      }
+      if (await partialSize(temporaryPath).catch(() => 0) === 0) await rm(temporaryPath, { force: true }).catch(() => {});
       lastError = error;
       if (attempt === maxAttempts) throw new Error(`IPA download failed after ${maxAttempts} attempts: ${error instanceof Error ? error.message : String(error)}`);
       const retryAfterMs = error instanceof ApiRequestError ? error.retryAfterMs : undefined;

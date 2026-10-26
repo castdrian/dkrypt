@@ -49,6 +49,49 @@ test('App Store links resolve track IDs only for dashboard sessions', async () =
   }
 });
 
+test('storefront lookup reports availability, localized price, and unknown upstream failures separately', async () => {
+  const lookups: Array<[number, string | undefined]> = [];
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardAppRoutes({
+    lookupAppMetadataByTrackId: async (trackId, country, signal) => {
+      lookups.push([trackId, country]);
+      expect(signal).toBeInstanceOf(AbortSignal);
+      if (country === 'DE') throw new Error('itunes lookup returned no metadata for 12345');
+      if (country === 'CA') throw new Error('upstream timeout');
+      return { bundleId: 'com.example.app', trackId, trackName: 'Example app', version: '1.0', sellerName: 'Seller', artworkUrl: '', price: 2.99, formattedPrice: '$2.99', currency: 'USD' };
+    },
+  }));
+
+  try {
+    const anonymous = await server.inject({ method: 'GET', url: '/v1/dashboard/apps/storefronts?trackId=12345&countries=US' });
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/dashboard/apps/storefronts?trackId=12345&countries=US,DE,CA,US',
+      headers: { cookie: sessionCookie(0n) },
+    });
+    const invalid = await server.inject({
+      method: 'GET',
+      url: `/v1/dashboard/apps/storefronts?trackId=12345&countries=${Array.from({ length: 26 }, (_, index) => `A${String.fromCharCode(65 + index)}`).join(',')}`,
+      headers: { cookie: sessionCookie(0n) },
+    });
+
+    expect(anonymous.statusCode).toBe(401);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      trackId: 12345,
+      storefronts: [
+        { countryCode: 'US', countryName: 'United States', status: 'available', price: 2.99, formattedPrice: '$2.99', currency: 'USD' },
+        { countryCode: 'DE', countryName: 'Germany', status: 'unavailable' },
+        { countryCode: 'CA', countryName: 'Canada', status: 'unknown' },
+      ],
+    });
+    expect(lookups).toEqual([[12345, 'US'], [12345, 'DE'], [12345, 'CA']]);
+    expect(invalid.statusCode).toBe(400);
+  } finally {
+    await server.close();
+  }
+});
+
 test('App Store versions include matching artifact IDs and preserve force semantics', async () => {
   const versions: AppVersionEntry[] = [
     { externalVersionId: 'version-3', isLatest: true, displayVersion: '3.0' },

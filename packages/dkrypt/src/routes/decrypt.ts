@@ -11,7 +11,7 @@ import { DEFAULT_PROJECT_ID, recordApiKeyBundleUsage } from '#store/state.js';
 import { isBundleIdAllowed } from '#apiKeyAccess.js';
 import { listBuilds, listTrains, type TFBuild } from '#testflight.js';
 import { apiIdempotencyRegistry } from '#idempotency.js';
-import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, touchArtifact } from '#artifacts.js';
+import { artifactDownloadName, artifactFileAvailable, getArtifactById, getArtifactByKey, listArtifacts, touchArtifact } from '#artifacts.js';
 import { normalizeVersionSelector, resolveDecryptTarget, resolveLatestTestFlightTarget, VERSION_SELECTOR_RE, type ResolvedDecryptTarget } from '#decryptTarget.js';
 import { getRouteContract } from '#contracts.js';
 import { scopedLogger } from '#logger.js';
@@ -35,6 +35,7 @@ interface DecryptSubmissionServices {
   getJob: typeof getJob;
   waitForJob: typeof waitForJob;
   getArtifactById: typeof getArtifactById;
+  getArtifactByKey: typeof getArtifactByKey;
   recordApiKeyBundleUsage: typeof recordApiKeyBundleUsage;
 }
 
@@ -200,6 +201,7 @@ export function createDecryptRoutes(
     getJob,
     waitForJob,
     getArtifactById,
+    getArtifactByKey,
     recordApiKeyBundleUsage,
     ...overrides,
   };
@@ -433,6 +435,7 @@ export function createDecryptRoutes(
         const bundleId = typeof body?.bundleId === 'string' ? body.bundleId.trim() : '';
         const selector = typeof body?.version === 'string' ? body.version.trim() : undefined;
         const requestedChannel = body?.channel;
+        const resolveOnly = body?.resolveOnly === true;
         const apiKey = getFastifyApiKeyContext(request);
 
         if (!BUNDLE_ID_RE.test(bundleId)) {
@@ -470,6 +473,35 @@ export function createDecryptRoutes(
         }
 
         try {
+          if (resolveOnly) {
+            let target: ResolvedDecryptTarget;
+            try {
+              target = requestedChannel === 'testflight' && !selector
+                ? await services.resolveLatestTestFlightTarget(bundleId)
+                : await services.resolveDecryptTarget(bundleId, selector);
+            } catch (error) {
+              throw new DecryptTargetRequestError(error instanceof Error ? error.message : String(error));
+            }
+            if (requestedChannel && target.channel !== requestedChannel) {
+              throw new DecryptTargetRequestError(`no ${requestedChannel} release matched the request`);
+            }
+            if (target.channel === 'testflight' && apiKey.allowTestFlight === false) {
+              throw new IdempotencyRequestError(403, 'this API key is not scoped for TestFlight');
+            }
+            const cachedArtifact = services.getArtifactByKey(target.artifactKey);
+            return reply.code(200).send({
+              resolveOnly: true,
+              bundleId,
+              selector: target.selector,
+              channel: target.channel,
+              resolvedVersion: target.versionLabel,
+              isTestFlight: target.channel === 'testflight',
+              build: target.testflight?.build.cfBundleVersion,
+              cacheHit: Boolean(cachedArtifact),
+              artifact: cachedArtifact ? artifactSummary(cachedArtifact) : undefined,
+            });
+          }
+
           const fingerprint = requestFingerprint('/v1/decrypts', {
             bundleId,
             version: normalizeVersionSelector(selector) ?? null,

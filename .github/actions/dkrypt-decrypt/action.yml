@@ -11,6 +11,9 @@ inputs:
   bundle-id:
     description: App bundle identifier for a new decrypt
     required: false
+  bundle-ids:
+    description: JSON array of app bundle identifiers to process independently in one action run
+    required: false
   channel:
     description: Decrypt source channel
     required: false
@@ -18,6 +21,10 @@ inputs:
   version:
     description: Optional exact App Store version or TestFlight version_build selector; leave empty for the latest release on the selected channel
     required: false
+  resolve-only:
+    description: Resolve the selected App Store or TestFlight release without queueing or downloading it
+    required: false
+    default: 'false'
   artifact-id:
     description: Download and verify an existing artifact by its ID instead of submitting a decrypt
     required: false
@@ -25,7 +32,7 @@ inputs:
     description: Download the newest cached artifact from appstore or testflight instead of submitting a decrypt
     required: false
   output:
-    description: Destination IPA path
+    description: Destination IPA path for one app, or destination directory with bundle-ids
     required: false
   timeout-seconds:
     description: Maximum total time to submit and wait for a decrypt job
@@ -40,7 +47,7 @@ outputs:
     description: Created or reused dkrypt job ID; empty when downloading an existing artifact
     value: ${{ steps.dkrypt.outputs.job-id }}
   artifact-id:
-    description: Downloaded IPA artifact ID
+    description: Resolved cached or downloaded artifact ID; batch results include an ID per app
     value: ${{ steps.dkrypt.outputs.artifact-id }}
   version:
     description: Resolved release version, including the TestFlight build number when applicable
@@ -67,20 +74,29 @@ outputs:
     description: Whether dkrypt reused a cached artifact or the action downloaded an existing artifact
     value: ${{ steps.dkrypt.outputs.cache-hit }}
   sha256:
-    description: SHA-256 verified against dkrypt metadata
+    description: Downloaded IPA SHA-256 verified against dkrypt metadata; empty in resolve-only mode
     value: ${{ steps.dkrypt.outputs.sha256 }}
   size_bytes:
-    description: Downloaded byte count verified against dkrypt metadata
+    description: Downloaded IPA byte count verified against dkrypt metadata; empty in resolve-only mode
     value: ${{ steps.dkrypt.outputs.size_bytes }}
   size-bytes:
-    description: Downloaded byte count verified against dkrypt metadata
+    description: Downloaded IPA byte count verified against dkrypt metadata; empty in resolve-only mode
     value: ${{ steps.dkrypt.outputs.size-bytes }}
   path:
-    description: Absolute path to the verified IPA
+    description: Absolute path to the verified IPA; empty in resolve-only mode
     value: ${{ steps.dkrypt.outputs.path }}
   output:
-    description: Absolute path to the verified IPA
+    description: Absolute IPA path for a single app; batch paths are included per app in results-json and resolve-only is empty
     value: ${{ steps.dkrypt.outputs.output }}
+  results-json:
+    description: Per-app results for bundle-ids runs
+    value: ${{ steps.dkrypt.outputs.results-json }}
+  success-count:
+    description: Number of successful apps in a bundle-ids run
+    value: ${{ steps.dkrypt.outputs.success-count }}
+  failure-count:
+    description: Number of failed apps in a bundle-ids run
+    value: ${{ steps.dkrypt.outputs.failure-count }}
 runs:
   using: composite
   steps:
@@ -90,8 +106,10 @@ runs:
         DKRYPT_API_URL: ${{ inputs.api-url }}
         DKRYPT_API_KEY: ${{ inputs.api-key }}
         DKRYPT_BUNDLE_ID: ${{ inputs.bundle-id }}
+        DKRYPT_BUNDLE_IDS: ${{ inputs.bundle-ids }}
         DKRYPT_CHANNEL: ${{ inputs.channel }}
         DKRYPT_VERSION: ${{ inputs.version }}
+        DKRYPT_RESOLVE_ONLY: ${{ inputs.resolve-only }}
         DKRYPT_ARTIFACT_ID: ${{ inputs.artifact-id }}
         DKRYPT_LATEST_CACHED_CHANNEL: ${{ inputs.latest-cached-channel }}
         DKRYPT_OUTPUT: ${{ inputs.output }}

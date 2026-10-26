@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
 import { cpus, freemem, totalmem } from 'node:os';
 import { config, cryptoBillingEnabled, isValidStripeSecretKeyRotation, nowpaymentsConfigured, stripeEnabled, stripeEnvironment } from '#config.js';
@@ -11,6 +12,35 @@ export interface DoctorCheck {
   id: string;
   status: 'ok' | 'warn' | 'error';
   detail: string;
+}
+
+function endpointFingerprint(value: string): string | undefined {
+  try {
+    const endpoint = new URL(value);
+    endpoint.username = '';
+    endpoint.password = '';
+    endpoint.search = '';
+    endpoint.hash = '';
+    return createHash('sha256').update(endpoint.toString()).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+export function runtimeConfigurationSnapshot() {
+  return {
+    appStoreOfflineDecryptEnabled: config.appStoreOfflineDecryptEnabled,
+    appStoreOfflineMaxWorkers: config.appStoreOfflineMaxWorkers,
+    appStoreOfflineWorkerMemoryMb: config.appStoreOfflineWorkerMemoryMb,
+    appStoreOfflineVaultConfigured: Boolean(config.appStoreOfflineVaultKey),
+    backupManifestSecretConfigured: config.backupManifestSecret.length >= 32,
+    otelBaseEndpointConfigured: Boolean(config.otelExporterOtlpEndpoint),
+    otelTracesEndpointConfigured: Boolean(config.otelExporterOtlpTracesEndpoint),
+    otelMetricsEndpointConfigured: Boolean(config.otelExporterOtlpMetricsEndpoint),
+    otelBaseEndpointFingerprint: endpointFingerprint(config.otelExporterOtlpEndpoint),
+    otelTracesEndpointFingerprint: endpointFingerprint(config.otelExporterOtlpTracesEndpoint),
+    otelMetricsEndpointFingerprint: endpointFingerprint(config.otelExporterOtlpMetricsEndpoint),
+  };
 }
 
 function rotationCheck(id: string, current: string, previous: string, minimumLength: number): DoctorCheck {
@@ -89,7 +119,7 @@ function runtimeCapacityCheck(): DoctorCheck {
   });
 }
 
-export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt: string; checks: DoctorCheck[] }> {
+export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt: string; checks: DoctorCheck[]; runtimeConfiguration: ReturnType<typeof runtimeConfigurationSnapshot> }> {
   const checks: DoctorCheck[] = [];
   const secretStatus = config.sessionSigningSecret.length >= 32 ? 'ok' : 'error';
   checks.push({ id: 'session-secret', status: secretStatus, detail: secretStatus === 'ok' ? 'Session signing secret has sufficient entropy' : 'Session signing secret must be at least 32 characters' });
@@ -159,5 +189,5 @@ export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt
     const crypto = await getNowPaymentsProviderStatus();
     checks.push({ id: 'crypto', status: crypto.ready ? 'ok' : crypto.enabled ? 'error' : 'warn', detail: crypto.ready ? 'NOWPayments crypto billing is ready' : crypto.issues.join(', ') || 'Crypto billing is disabled' });
   } else checks.push({ id: 'crypto', status: 'warn', detail: 'Crypto billing is disabled' });
-  return { ok: checks.every((check) => check.status !== 'error'), checkedAt: new Date().toISOString(), checks };
+  return { ok: checks.every((check) => check.status !== 'error'), checkedAt: new Date().toISOString(), checks, runtimeConfiguration: runtimeConfigurationSnapshot() };
 }

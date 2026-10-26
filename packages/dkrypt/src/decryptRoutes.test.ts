@@ -755,3 +755,70 @@ test('API keys can queue the latest TestFlight build through decrypt submission'
     await server.close();
   }
 });
+
+test('API keys can resolve the latest TestFlight release without enqueueing or consuming decrypt usage', async () => {
+  const apiKey = createApiKey('Resolve-only action test', 'root');
+  const bundleId = 'com.example.resolve-only';
+  const build = { id: 1200, cfBundleShortVersion: '4.2', cfBundleVersion: '42017', bundleId };
+  const cachedArtifact: ArtifactRecord = {
+    id: 'resolve-only-cached-artifact',
+    key: 'testflight-1200',
+    projectIds: ['default'],
+    bundleId,
+    channel: 'testflight',
+    versionLabel: '4.2_42017',
+    buildNumber: '42017',
+    filePath: '/unused/resolve-only.ipa',
+    fileSizeBytes: 42,
+    sha256: 'c'.repeat(64),
+    createdAt: 1_700_000_000_000,
+    lastAccessedAt: 1_700_000_000_000,
+    accessCount: 1,
+  };
+  let enqueued = 0;
+  let usageRecorded = 0;
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+
+  try {
+    await server.register(createDecryptRoutes({
+      resolveDecryptTarget: async () => { throw new Error('exact resolver should not run'); },
+      resolveLatestTestFlightTarget: async () => ({
+        bundleId,
+        selector: '4.2_42017',
+        channel: 'testflight',
+        testflight: { appId: 321, build },
+        versionLabel: '4.2_42017',
+        artifactKey: 'testflight-1200',
+      }),
+      enqueueDecryptJob: () => { enqueued += 1; throw new Error('resolve-only must not enqueue'); },
+      getArtifactById: () => undefined,
+      getArtifactByKey: (key) => key === cachedArtifact.key ? cachedArtifact : undefined,
+      recordApiKeyBundleUsage: () => { usageRecorded += 1; },
+    }));
+    await server.ready();
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/decrypts',
+      headers: { authorization: `Bearer ${apiKey.key}` },
+      payload: { bundleId, channel: 'testflight', resolveOnly: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      resolveOnly: true,
+      bundleId,
+      channel: 'testflight',
+      resolvedVersion: '4.2_42017',
+      isTestFlight: true,
+      build: '42017',
+      cacheHit: true,
+      artifact: { id: cachedArtifact.id, sha256: cachedArtifact.sha256, sizeBytes: cachedArtifact.fileSizeBytes },
+    });
+    expect(enqueued).toBe(0);
+    expect(usageRecorded).toBe(0);
+  } finally {
+    revokeApiKey(apiKey.id, 'root', true);
+    await server.close();
+  }
+});

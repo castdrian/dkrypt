@@ -220,7 +220,7 @@ test('core operational responses publish their required fields', async () => {
       ['/v1/dashboard/notifications', 'get', ['notifications', 'unread', 'total', 'nextCursor']],
       ['/v1/dashboard/devices/discover', 'get', ['devices', 'scannedNetworks', 'warnings']],
       ['/v1/dashboard/jobs/slo', 'get', ['targetMs', 'historicalP95Ms', 'jobs']],
-      ['/v1/decrypts', 'post', ['id', 'bundleId', 'channel', 'status', 'statusUrl', 'selector', 'resolvedVersion', 'artifact']],
+      ['/v1/decrypts', 'post', ['id', 'bundleId', 'channel', 'status', 'statusUrl', 'selector', 'resolvedVersion', 'artifact', 'resolveOnly', 'isTestFlight', 'cacheHit']],
       ['/v1/artifacts', 'get', ['artifacts', 'total', 'totalBytes', 'maxBytes', 'nextCursor']],
       ['/v1/artifacts/{id}', 'get', ['id', 'bundleId', 'channel', 'sizeBytes', 'sha256', 'fileUrl']],
       ['/v1/jobs/{id}', 'get', ['id', 'bundleId', 'channel', 'status', 'statusUrl']],
@@ -238,10 +238,19 @@ test('core operational responses publish their required fields', async () => {
       ['/v1/dashboard/backup/schedule', 'get', ['enabled', 'cron', 'retentionCount']],
       ['/v1/dashboard/backup/history', 'get', ['id', 'createdAt', 'filename', 'trigger']],
     ];
+    const schemaProperties = (schema: { properties?: Record<string, unknown>; items?: { properties?: Record<string, unknown> }; anyOf?: unknown[]; oneOf?: unknown[] } | undefined): Record<string, unknown> => {
+      if (!schema) return {};
+      if (schema.properties) return schema.properties;
+      if (schema.items?.properties) return schema.items.properties;
+      return [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].reduce<Record<string, unknown>>((properties, variant) => {
+        Object.assign(properties, schemaProperties(variant as typeof schema));
+        return properties;
+      }, {});
+    };
     for (const [path, method, fields] of assertions) {
       const schema = document.paths?.[path]?.[method]?.responses?.['200']?.content?.['application/json']?.schema;
       expect(schema).toBeDefined();
-      const properties = schema?.properties ?? schema?.items?.properties ?? {};
+      const properties = schemaProperties(schema);
       for (const field of fields) expect(Object.keys(properties)).toContain(field);
     }
     const billingStatus = document.paths?.['/v1/billing/provider-status']?.get?.responses?.['200']?.content?.['application/json']?.schema;
@@ -606,10 +615,11 @@ test('dashboard diagnostics document their session and permission errors', async
 
 test('successful route responses never fall back to generic JSON', () => {
   const exportRoutes = new Set(['GET /v1/dashboard/jobs/export', 'GET /v1/dashboard/audit-log/export']);
+  const intentionallyUnionedResponses = new Set(['POST /v1/decrypts']);
   for (const [route, schema] of getRouteContracts()) {
     const responses = schema.response as Record<string, { anyOf?: unknown }> | undefined;
     for (const [status, response] of Object.entries(responses ?? {})) {
-      if (status === '200' && response.anyOf) expect(exportRoutes.has(route)).toBe(true);
+      if (status === '200' && response.anyOf) expect(exportRoutes.has(route) || intentionallyUnionedResponses.has(route)).toBe(true);
     }
   }
 });
