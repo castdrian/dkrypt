@@ -12,7 +12,7 @@ import { isBundleIdAllowed } from '#apiKeyAccess.js';
 import { listBuilds, listTrains, type TFBuild } from '#testflight.js';
 import { apiIdempotencyRegistry } from '#idempotency.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, touchArtifact } from '#artifacts.js';
-import { normalizeVersionSelector, resolveDecryptTarget, VERSION_SELECTOR_RE } from '#decryptTarget.js';
+import { normalizeVersionSelector, resolveDecryptTarget, resolveLatestTestFlightTarget, VERSION_SELECTOR_RE, type ResolvedDecryptTarget } from '#decryptTarget.js';
 import { getRouteContract } from '#contracts.js';
 import { scopedLogger } from '#logger.js';
 
@@ -30,6 +30,7 @@ interface ArtifactCatalogServices {
 
 interface DecryptSubmissionServices {
   resolveDecryptTarget: typeof resolveDecryptTarget;
+  resolveLatestTestFlightTarget: typeof resolveLatestTestFlightTarget;
   enqueueDecryptJob: typeof enqueueDecryptJob;
   getJob: typeof getJob;
   waitForJob: typeof waitForJob;
@@ -190,8 +191,18 @@ function writeJobEvent(response: NodeJS.WritableStream, id: string, snapshot: un
 }
 
 export function createDecryptRoutes(
-  services: DecryptSubmissionServices = { resolveDecryptTarget, enqueueDecryptJob, getJob, waitForJob, getArtifactById, recordApiKeyBundleUsage },
+  overrides: Partial<DecryptSubmissionServices> = {},
 ): FastifyPluginAsyncTypebox {
+  const services: DecryptSubmissionServices = {
+    resolveDecryptTarget,
+    resolveLatestTestFlightTarget,
+    enqueueDecryptJob,
+    getJob,
+    waitForJob,
+    getArtifactById,
+    recordApiKeyBundleUsage,
+    ...overrides,
+  };
   return async (server) => {
     server.get(
       '/v1/decrypt',
@@ -421,6 +432,7 @@ export function createDecryptRoutes(
         const body = request.body as Record<string, unknown>;
         const bundleId = typeof body?.bundleId === 'string' ? body.bundleId.trim() : '';
         const selector = typeof body?.version === 'string' ? body.version.trim() : undefined;
+        const requestedChannel = body?.channel;
         const apiKey = getFastifyApiKeyContext(request);
 
         if (!BUNDLE_ID_RE.test(bundleId)) {
@@ -435,6 +447,22 @@ export function createDecryptRoutes(
           reply.code(401);
           return apiErrorEnvelope('unauthorized', 'unauthorized', request.id);
         }
+        if (requestedChannel !== undefined && requestedChannel !== 'appstore' && requestedChannel !== 'testflight') {
+          reply.code(400);
+          return apiErrorEnvelope('channel must be appstore or testflight', 'request_error', request.id);
+        }
+        if (requestedChannel === 'testflight' && apiKey.allowTestFlight === false) {
+          reply.code(403);
+          return apiErrorEnvelope('this API key is not scoped for TestFlight', 'request_error', request.id);
+        }
+        if (requestedChannel === 'testflight' && selector && !selector.includes('_')) {
+          reply.code(400);
+          return apiErrorEnvelope('TestFlight versions must include a build number such as 352.0_118977', 'request_error', request.id);
+        }
+        if (requestedChannel === 'appstore' && selector?.includes('_')) {
+          reply.code(400);
+          return apiErrorEnvelope('App Store versions cannot include a TestFlight build number', 'request_error', request.id);
+        }
         const projectId = DEFAULT_PROJECT_ID;
         if (!isBundleIdAllowed(apiKey.allowedBundleIds, bundleId)) {
           reply.code(403);
@@ -442,7 +470,12 @@ export function createDecryptRoutes(
         }
 
         try {
-          const fingerprint = requestFingerprint('/v1/decrypts', { bundleId, version: normalizeVersionSelector(selector) ?? null, projectId });
+          const fingerprint = requestFingerprint('/v1/decrypts', {
+            bundleId,
+            version: normalizeVersionSelector(selector) ?? null,
+            ...(requestedChannel === 'testflight' ? { channel: requestedChannel } : {}),
+            projectId,
+          });
           const key = idempotencyKeyFromHeader(request.headers['idempotency-key']);
           const job = await resolveIdempotentJob({
             key,
@@ -450,7 +483,17 @@ export function createDecryptRoutes(
             fingerprint,
             getJob: services.getJob,
             createJob: async () => {
-              const target = await services.resolveDecryptTarget(bundleId, selector);
+              let target: ResolvedDecryptTarget;
+              try {
+                target = requestedChannel === 'testflight' && !selector
+                  ? await services.resolveLatestTestFlightTarget(bundleId)
+                  : await services.resolveDecryptTarget(bundleId, selector);
+              } catch (error) {
+                throw new DecryptTargetRequestError(error instanceof Error ? error.message : String(error));
+              }
+              if (requestedChannel && target.channel !== requestedChannel) {
+                throw new DecryptTargetRequestError(`no ${requestedChannel} release matched the request`);
+              }
               if (target.channel === 'testflight' && apiKey.allowTestFlight === false) {
                 throw new IdempotencyRequestError(403, 'this API key is not scoped for TestFlight');
               }

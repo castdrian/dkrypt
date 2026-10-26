@@ -1327,7 +1327,11 @@ register('POST', '/v1/dashboard/backup/drill', { response: { 200: backupDrillRes
 register('DELETE', '/v1/dashboard/backup/history/:id', { params: backupHistoryParamsSchema, response: { 200: backupOkResponseSchema } });
 register('POST', '/v1/decrypts', {
   headers: IdempotencyKeyHeaders,
-  body: object({ bundleId: BundleId, version: Type.Optional(VersionSelector) }),
+  body: object({
+    bundleId: BundleId,
+    version: Type.Optional(VersionSelector),
+    channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])),
+  }),
   response: { 200: DecryptJobResponse, 202: DecryptJobResponse, 409: ErrorEnvelope, 410: ErrorEnvelope, 502: ErrorEnvelope },
 });
 register('GET', '/v1/artifacts', {

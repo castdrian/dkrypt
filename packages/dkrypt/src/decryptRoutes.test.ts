@@ -692,3 +692,66 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
     await server.close();
   }
 });
+
+test('API keys can queue the latest TestFlight build through decrypt submission', async () => {
+  const apiKey = createApiKey('Latest TestFlight action test', 'root');
+  const bundleId = 'com.example.latest-testflight';
+  const build = { id: 998, cfBundleShortVersion: '3.0', cfBundleVersion: '118977', bundleId };
+  const job: Job = {
+    id: `latest-testflight-${crypto.randomUUID()}`,
+    bundleId,
+    projectId: 'default',
+    source: 'manual',
+    priority: 0,
+    status: 'queued',
+    progress: 'queued',
+    createdAt: Date.now(),
+    versionLabel: '3.0_118977',
+    testflight: { appId: 123, build },
+    waiters: [],
+  };
+  let latestResolutionCount = 0;
+  let enqueuedOptions: Record<string, unknown> | undefined;
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+
+  try {
+    await server.register(createDecryptRoutes({
+      resolveDecryptTarget: async () => { throw new Error('exact resolver should not run for latest TestFlight'); },
+      resolveLatestTestFlightTarget: async () => {
+        latestResolutionCount += 1;
+        return { bundleId, selector: '3.0_118977', channel: 'testflight', testflight: { appId: 123, build }, versionLabel: '3.0_118977', artifactKey: 'testflight-998' };
+      },
+      enqueueDecryptJob: (_bundle, _source, options) => {
+        enqueuedOptions = options as Record<string, unknown>;
+        return job;
+      },
+      getJob: (id) => id === job.id ? job : undefined,
+      waitForJob: async (queued) => queued,
+      getArtifactById: () => undefined,
+      recordApiKeyBundleUsage: () => {},
+    }));
+    await server.ready();
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/decrypts',
+      headers: { authorization: `Bearer ${apiKey.key}`, 'idempotency-key': `latest-${crypto.randomUUID()}` },
+      payload: { bundleId, channel: 'testflight' },
+    });
+    const invalidExactVersion = await server.inject({
+      method: 'POST',
+      url: '/v1/decrypts',
+      headers: { authorization: `Bearer ${apiKey.key}` },
+      payload: { bundleId, channel: 'testflight', version: '3.0' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ channel: 'testflight', resolvedVersion: '3.0_118977', testflight: { buildNumber: '118977' } });
+    expect(latestResolutionCount).toBe(1);
+    expect(enqueuedOptions).toMatchObject({ versionLabel: '3.0_118977', testflight: { appId: 123, build } });
+    expect(invalidExactVersion.statusCode).toBe(400);
+  } finally {
+    revokeApiKey(apiKey.id, 'root', true);
+    await server.close();
+  }
+});

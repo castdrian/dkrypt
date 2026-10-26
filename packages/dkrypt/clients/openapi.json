@@ -3173,6 +3173,22 @@
                     "maxLength": 64,
                     "pattern": "^v?\\d+(?:\\.\\d+)*(?:_\\d+)?$",
                     "type": "string"
+                  },
+                  "channel": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "appstore"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "testflight"
+                        ]
+                      }
+                    ]
                   }
                 }
               }

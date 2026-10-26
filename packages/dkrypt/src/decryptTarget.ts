@@ -17,6 +17,14 @@ export interface ResolvedDecryptTarget {
   minimumOsVersion?: string;
 }
 
+export interface LatestTestFlightTargetServices {
+  lookupAppMetadata: typeof lookupAppMetadata;
+  listTrains: typeof listTrains;
+  listBuilds: typeof listBuilds;
+}
+
+const latestTestFlightTargetServices: LatestTestFlightTargetServices = { lookupAppMetadata, listTrains, listBuilds };
+
 export function normalizeVersionSelector(selector: string | undefined): string | undefined {
   const trimmed = selector?.trim();
   if (!trimmed) return undefined;
@@ -74,4 +82,40 @@ export async function resolveDecryptTarget(bundleId: string, selector?: string):
     artifactKey: artifactKeyForAppStoreVersion(bundleId, versionLabel, selected.externalVersionId),
     minimumOsVersion: selected.minimumOsVersion,
   };
+}
+
+export async function resolveLatestTestFlightTarget(
+  bundleId: string,
+  services: LatestTestFlightTargetServices = latestTestFlightTargetServices,
+): Promise<ResolvedDecryptTarget> {
+  const { trackId } = await services.lookupAppMetadata(bundleId);
+  const trains = await services.listTrains(trackId);
+  const latestFirstTrains = [...trains].sort((left, right) => compareVersions(right.trainVersion, left.trainVersion));
+
+  for (const train of latestFirstTrains) {
+    const builds = await services.listBuilds(trackId, train.trainVersion);
+    const build = builds
+      .filter((candidate) => {
+        if (candidate.bundleId !== bundleId) return false;
+        if (compareVersions(candidate.cfBundleShortVersion, train.trainVersion) !== 0) return false;
+        if (!candidate.expiration) return true;
+        const expiresAt = Date.parse(candidate.expiration);
+        return !Number.isFinite(expiresAt) || expiresAt > Date.now();
+      })
+      .sort((left, right) => compareVersions(right.cfBundleVersion, left.cfBundleVersion)
+        || (Date.parse(right.releaseDate ?? '') || 0) - (Date.parse(left.releaseDate ?? '') || 0))[0];
+
+    if (!build) continue;
+    const selector = `${build.cfBundleShortVersion}_${build.cfBundleVersion}`;
+    return {
+      bundleId,
+      selector,
+      channel: 'testflight',
+      testflight: { appId: trackId, build },
+      versionLabel: selector,
+      artifactKey: artifactKeyForTestFlight(bundleId, build.id),
+    };
+  }
+
+  throw new Error(`no available TestFlight build was found for ${bundleId}`);
 }
