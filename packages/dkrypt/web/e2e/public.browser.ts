@@ -1152,11 +1152,11 @@ test('IPA Library filters can be saved and reapplied across reloads', async ({ p
   await search.fill('com.example.saved');
   await search.press('Enter');
   await expect.poll(() => requestedFilters.at(-1)?.query).toBe('com.example.saved');
-  await page.getByRole('button', { name: 'All sources' }).click();
+  await page.getByRole('combobox', { name: 'All sources' }).click();
   await page.getByRole('option', { name: 'TestFlight', exact: true }).click();
   await expect.poll(() => requestedFilters.at(-1)).toEqual({ channel: 'testflight', query: 'com.example.saved', archived: false });
 
-  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await page.getByRole('combobox', { name: /Active/ }).click();
   await page.getByRole('option', { name: 'Archived', exact: true }).click();
   await expect.poll(() => requestedFilters.at(-1)).toEqual({ channel: 'testflight', query: 'com.example.saved', archived: true });
 
@@ -1164,10 +1164,10 @@ test('IPA Library filters can be saved and reapplied across reloads', async ({ p
   await page.getByRole('button', { name: 'Save filter', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Archived TestFlight', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'TestFlight', exact: true }).click();
+  await page.getByRole('combobox', { name: 'TestFlight', exact: true }).click();
   await page.getByRole('option', { name: 'App Store', exact: true }).click();
   await expect.poll(() => requestedFilters.at(-1)).toEqual({ channel: 'appstore', query: 'com.example.saved', archived: true });
-  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await page.getByRole('combobox', { name: /Archived/ }).click();
   await page.getByRole('option', { name: 'Active', exact: true }).click();
   await expect.poll(() => requestedFilters.at(-1)).toEqual({ channel: 'appstore', query: 'com.example.saved', archived: false });
   await page.getByRole('button', { name: 'Archived TestFlight', exact: true }).click();
@@ -1286,7 +1286,7 @@ test('IPA Library archive and restore keep archive state separate from eviction 
   await page.getByRole('button', { name: 'Archive com.example.archive' }).click();
   await expect(page.locator('article').filter({ hasText: 'com.example.archive' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await page.getByRole('combobox', { name: /Active/ }).click();
   await page.getByRole('option', { name: 'Archived', exact: true }).click();
   const archivedArtifact = page.locator('article').filter({ hasText: 'com.example.archive' });
   await expect(archivedArtifact).toHaveCount(1);
@@ -1301,7 +1301,7 @@ test('IPA Library archive and restore keep archive state separate from eviction 
   await expect(page.locator('#artifact-archive-status')).toBeFocused();
   await expect(page.locator('#artifact-archive-announcement')).toHaveText('Restored com.example.archive.');
 
-  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await page.getByRole('combobox', { name: /Archived/ }).click();
   await page.getByRole('option', { name: 'Active', exact: true }).click();
   const activeArtifact = page.locator('article').filter({ hasText: 'com.example.archive' });
   await expect(activeArtifact).toHaveCount(1);
@@ -1314,7 +1314,7 @@ test('IPA Library archive and restore keep archive state separate from eviction 
   await expect.poll(() => artifactListRequestCount).toBe(listRequestsBeforeBulkArchive + 1);
   await expect(page.locator('#artifact-archive-status')).toBeFocused();
   await expect(page.locator('#artifact-archive-announcement')).toHaveText('Archived 1 artifact.');
-  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  await page.getByRole('combobox', { name: /Active/ }).click();
   await page.getByRole('option', { name: 'Archived', exact: true }).click();
   await expect(archivedArtifact).toHaveCount(1);
   expect(artifactListRequestCount).toBeLessThan(20);
@@ -1573,7 +1573,7 @@ test('IPA Library discards a page response from a source filter that is no longe
   await expect(page.locator('[data-artifact-id="initial-appstore"]')).toHaveCount(1);
   await page.getByRole('button', { name: /Load more/ }).click();
   await oldPageStarted;
-  await page.getByRole('button', { name: 'All sources' }).click();
+  await page.getByRole('combobox', { name: 'All sources' }).click();
   await page.getByRole('option', { name: 'TestFlight', exact: true }).click();
   await expect(page.locator('[data-artifact-id="current-testflight"]')).toHaveCount(1);
   releaseOldPage();
@@ -1909,7 +1909,7 @@ test('batch TestFlight queue selects an eligible device independently for each a
   await page.getByRole('button', { name: 'Batch decrypt' }).first().click();
   await page.getByRole('button', { name: 'TestFlight', exact: true }).click();
   await page.getByPlaceholder('com.example.app@2.4.1_123\ncom.example.app2@3.0_456').fill('com.example.testflight@2.4.1_123\ncom.example.other@2.4.1_123');
-  const eligibleDevice = page.getByRole('button', { name: 'Eligible device for Example Beta' });
+  const eligibleDevice = page.getByRole('combobox', { name: 'Eligible device for Example Beta' });
   await expect(eligibleDevice).toBeVisible();
   await eligibleDevice.click();
   await page.getByRole('option', { name: 'Alternate iPad' }).click();

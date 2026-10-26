@@ -512,6 +512,7 @@
           />
           <Select
             id="artifact-archive-status"
+            ariaLabel="Archive status"
             items={ARTIFACT_STATUS_OPTIONS}
             value={archiveFilter}
             onValueChange={(value) => {

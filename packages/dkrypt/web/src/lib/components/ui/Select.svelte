@@ -17,6 +17,7 @@
 		placeholder?: string;
 		id?: string;
 		disabled?: boolean;
+		ariaLabel?: string;
 	}
 
 	let {
@@ -27,6 +28,7 @@
 		placeholder = "Select…",
 		id,
 		disabled = false,
+		ariaLabel,
 	}: Props = $props();
 
 	const selectedItem = $derived(items.find((i) => i.value === value));
@@ -35,6 +37,7 @@
 <SelectPrimitive.Root type="single" bind:value {onValueChange} {disabled}>
 	<SelectPrimitive.Trigger
 		{id}
+		aria-label={ariaLabel ? `${selectedItem?.label ?? placeholder} (${ariaLabel})` : id ? undefined : selectedItem?.label ?? placeholder}
 		data-slot="select-trigger"
 		class={cn(
 			"border-input bg-background ring-offset-background flex h-9 items-center justify-between gap-2 rounded-md border px-3 text-sm text-foreground shadow-sm focus:ring-ring focus:ring-2 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",

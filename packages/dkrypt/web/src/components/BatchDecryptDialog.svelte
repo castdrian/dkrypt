@@ -435,6 +435,7 @@
 								<label class="sr-only" for={`batch-testflight-device-${selection.bundleId}`}>Eligible device for {selection.app?.displayName ?? selection.bundleId}</label>
 								<Select
 									id={`batch-testflight-device-${selection.bundleId}`}
+									ariaLabel={`Eligible device for ${selection.app?.displayName ?? selection.bundleId}`}
 									items={selection.devices.map((device) => ({ value: device.id, label: device.name }))}
 									value={selectedDeviceByBundleId[selection.bundleId] ?? ""}
 									onValueChange={(deviceId) => setSelectedTestFlightDevice(selection.bundleId, deviceId)}
