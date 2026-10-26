@@ -93,6 +93,7 @@ test('submits the latest TestFlight decrypt, waits for completion, and verifies 
     assert.equal(outputs.sha256, sha256);
     assert.equal(outputs.size_bytes, String(bytes.length));
     assert.equal(outputs.path, result.path);
+    assert.equal((await readFile(path.join(directory, 'github-output'), 'utf8')).split('\n').filter((line) => line.startsWith('job-id=')).length, 1);
     assert.equal(calls[0].init.headers['Idempotency-Key'], 'stable-testflight-key');
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: running')));
     assert.ok(logs.some((message) => message.includes('dkrypt job job-1: done')));

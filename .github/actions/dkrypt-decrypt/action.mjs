@@ -174,7 +174,10 @@ export async function runAction(config, dependencies = {}) {
     path: download.outputPath,
     output: download.outputPath,
   };
-  for (const [name, value] of Object.entries(outputs)) await appendActionOutput(outputFile, name, value);
+  for (const [name, value] of Object.entries(outputs)) {
+    if (name === 'job-id' && jobId) continue;
+    await appendActionOutput(outputFile, name, value);
+  }
   log(`Downloaded and verified ${artifact.channel} IPA (${download.sizeBytes} bytes, SHA-256 ${download.sha256}) at ${download.outputPath}`);
   return outputs;
 }
