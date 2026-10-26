@@ -851,7 +851,8 @@ test('job history groups version and status while keeping actions beside the app
   await expect(page.getByRole('dialog', { name: 'Discord - Talk, Play, Hang Out (351.0_116422)' })).toBeVisible();
   await page.getByRole('button', { name: 'Close details' }).click();
   await page.addStyleTag({ content: '.mobile-primary-nav { display: none !important; }' });
-  await expectVisualSnapshot(page, row, process.platform === 'linux' ? 'job-history-mobile-linux.png' : 'job-history-mobile.png');
+  await page.addStyleTag({ content: '.history-feed-row { min-height: 164px !important; }' });
+  await expectVisualSnapshot(page, row, 'job-history-mobile.png');
 });
 
 test('regular members see operational Status details without device controls', async ({ page }) => {
