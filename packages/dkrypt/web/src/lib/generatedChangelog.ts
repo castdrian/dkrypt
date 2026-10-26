@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "refactor(github-action): share workflow summary formatting",
+    "description": "Released in 902a11e."
+  },
+  {
+    "date": "2026-10-26",
     "title": "fix(github-action): include failures and paths in summaries",
     "description": "Released in e72e833."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "fix(ops): persist worker and trace defaults in compose",
     "description": "Released in 651570a."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix(operations): clear capacity and device compatibility warnings",
-    "description": "Released in 3492832."
   }
 ] as const;
