@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-26",
+    "title": "test(github-action): keep timeout test alive on Node 22",
+    "description": "Released in 5901bf6."
+  },
+  {
+    "date": "2026-10-26",
     "title": "fix(github-action): write job ID output once",
     "description": "Released in 5e4fbab."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-26",
     "title": "fix(app-catalog): keep dashboard app names in English",
     "description": "Released in 7b04f69."
-  },
-  {
-    "date": "2026-10-26",
-    "title": "fix: harden App Store confirmation and SDK origins",
-    "description": "Released in 61ac92a."
   }
 ] as const;
