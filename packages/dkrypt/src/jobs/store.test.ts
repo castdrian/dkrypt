@@ -1101,6 +1101,8 @@ test('defers a scheduler request for an existing queued job while its device is 
 test('defers a scheduler request for an existing job blocked by its owner concurrency limit', async () => {
   await clearActiveTestJobs();
   const originalUserConcurrencyCap = config.userConcurrencyCap;
+  const abuseSeed = crypto.randomUUID();
+  const abuseSignals = { abuseNetworkHash: `network-${abuseSeed}`, abuseAddressHash: `address-${abuseSeed}` };
   const secondaryDevice = createDevice({ name: 'job-test-secondary-device', transport: 'wifi', host: '127.0.0.2' }, 'tests').id;
   config.userConcurrencyCap = 1;
   setCachedDeviceHealth(testDeviceId, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
@@ -1108,11 +1110,13 @@ test('defers a scheduler request for an existing job blocked by its owner concur
   const running = enqueueDecryptJob(`com.test.scheduler-concurrency-blocker.${crypto.randomUUID()}`, 'manual', {
     queuedBy: 'scheduler-concurrency-owner',
     preferredDeviceId: testDeviceId,
+    ...abuseSignals,
   });
   const bundleId = `com.test.scheduler-concurrency-deferred.${crypto.randomUUID()}`;
   const queued = enqueueDecryptJob(bundleId, 'manual', {
     queuedBy: 'scheduler-concurrency-owner',
     preferredDeviceId: secondaryDevice,
+    ...abuseSignals,
   });
   queued.deadlineAt = Date.now() + 60_000;
 

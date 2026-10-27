@@ -7,6 +7,8 @@ import { createJobRepository, sharedOfflineWorkerCapacity, workerRuntimeConfigur
 import type { Job } from '#jobs/types.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
 
+const abuseContext = { networkHash: 'network-test', addressHash: 'address-test' };
+
 function createJob(overrides: Partial<Job> = {}): Job {
   return {
     id: 'job-1',
@@ -184,7 +186,7 @@ test('free quota reservations settle to anonymous completion timestamps and expi
 
     for (let index = 0; index < 3; index += 1) {
       const job = createJob({ id: `free-quota-${index}`, bundleId: `com.example.free${index}`, createdAt: startedAt + index });
-      expect(repository.admit(job, ownerId, 3, true)).toBe(job.id);
+      expect(repository.admit(job, ownerId, 3, true, abuseContext)).toBe(job.id);
       repository.settleQuota(job.id, true);
     }
 
@@ -194,7 +196,7 @@ test('free quota reservations settle to anonymous completion timestamps and expi
     expect(repository.freeQuotaUsage(ownerId, Date.now() + 60_000)).toMatchObject({ limit: 3, used: 3, remaining: 0 });
 
     const blocked = createJob({ id: 'free-quota-blocked', bundleId: 'com.example.blocked', createdAt: Date.now() + 60_000 });
-    expect(() => repository!.admit(blocked, ownerId, 3, true)).toThrow('free decrypt allowance exhausted');
+    expect(() => repository!.admit(blocked, ownerId, 3, true, abuseContext)).toThrow('free decrypt allowance exhausted');
 
     const nextWindow = Math.max(...rows.map((row) => row.completed_at ?? 0)) + 30 * 24 * 60 * 60 * 1000 + 1;
     expect(repository.freeQuotaUsage(ownerId, nextWindow)).toMatchObject({ limit: 3, used: 0, remaining: 3 });
@@ -216,11 +218,11 @@ test('free quota backup data contains only recent completion timestamps and rest
     const now = Date.now();
     for (let index = 0; index < 2; index += 1) {
       const job = createJob({ id: `quota-backup-${index}`, createdAt: now + index });
-      source.admit(job, ownerId, 3, true);
+      source.admit(job, ownerId, 3, true, abuseContext);
       source.settleQuota(job.id, true);
     }
     const pending = createJob({ id: 'quota-backup-pending', createdAt: now + 3 });
-    source.admit(pending, ownerId, 3, true);
+    source.admit(pending, ownerId, 3, true, abuseContext);
 
     const completionRecords = source.freeQuotaCompletions(now + 4);
     expect(completionRecords).toHaveLength(2);
@@ -247,7 +249,7 @@ test('free quota reservations are released when work fails or is cancelled', asy
     repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
     const ownerId = 'free-release@example.test';
     const job = createJob({ id: 'free-quota-release', createdAt: Date.now() });
-    expect(repository.admit(job, ownerId, 3, true)).toBe(job.id);
+    expect(repository.admit(job, ownerId, 3, true, abuseContext)).toBe(job.id);
     expect(repository.freeQuotaUsage(ownerId).used).toBe(1);
     repository.settleQuota(job.id, false);
     expect(repository.freeQuotaUsage(ownerId).used).toBe(0);

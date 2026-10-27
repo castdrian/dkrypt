@@ -7,7 +7,9 @@ async function runOAuthCallback(server: Awaited<ReturnType<typeof buildTestServe
   const login = await server.inject({ method: 'GET', url: `/v1/auth/${provider}/login` });
   const authorization = new URL(String(login.headers.location), 'http://localhost');
   const cookieHeader = login.headers['set-cookie'];
-  const cookie = (Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader)?.split(';', 1)[0] ?? '';
+  const stateCookieName = provider === 'github' ? 'github_oauth_state' : 'discord_oauth_state';
+  const cookies = Array.isArray(cookieHeader) ? cookieHeader : cookieHeader ? [cookieHeader] : [];
+  const cookie = cookies.find((value) => value.startsWith(`${stateCookieName}=`))?.split(';', 1)[0] ?? '';
   const state = authorization.searchParams.get('state') ?? '';
   const callback = await server.inject({
     method: 'GET',

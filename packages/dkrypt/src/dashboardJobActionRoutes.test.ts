@@ -111,14 +111,14 @@ test('manual decrypt submission preserves project, device, and version selection
     expect(enqueueArgs).toEqual([
       'com.example.app',
       'manual',
-      {
+      expect.objectContaining({
         versionLabel: 'v2',
         queuedBy: 'root',
         priority: 4,
         preferredDeviceId: 'device-primary',
         projectId: 'default',
         minimumOsVersion: '17.0',
-      },
+      }),
     ]);
   } finally {
     await server.close();
@@ -215,7 +215,7 @@ test('retry uses the requested primary device and retains source job metadata', 
     expect(enqueueArgs).toEqual([
       'com.example.app',
       'manual',
-      {
+      expect.objectContaining({
         externalVersionId: 'version-1',
         versionLabel: '2.0',
         queuedBy: 'root',
@@ -223,7 +223,7 @@ test('retry uses the requested primary device and retains source job metadata', 
         preferredDeviceId: 'device-primary',
         projectId: 'default',
         minimumOsVersion: '17.1',
-      },
+      }),
     ]);
   } finally {
     await server.close();

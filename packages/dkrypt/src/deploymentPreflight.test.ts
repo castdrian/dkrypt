@@ -23,6 +23,22 @@ test('deployment preflight dry-runs and restores a database without changing the
     rewindApiKeySearchMigration(database.db);
     rewindSessionSearchMigration(database.db);
     database.db.exec(`
+      DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_expiry;
+      DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_turnstile;
+      DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_browser;
+      DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_address;
+      DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_network;
+      DROP TABLE IF EXISTS free_decrypt_abuse_quota;
+      DROP INDEX IF EXISTS abuse_signup_events_by_expiry;
+      DROP INDEX IF EXISTS abuse_signup_events_by_email_time;
+      DROP INDEX IF EXISTS abuse_signup_events_by_turnstile_time;
+      DROP INDEX IF EXISTS abuse_signup_events_by_browser_time;
+      DROP INDEX IF EXISTS abuse_signup_events_by_address_time;
+      DROP INDEX IF EXISTS abuse_signup_events_by_network_time;
+      DROP TABLE IF EXISTS abuse_ip_reputation;
+      DROP INDEX IF EXISTS abuse_signup_challenges_by_expiry;
+      DROP TABLE IF EXISTS abuse_signup_challenges;
+      DROP TABLE IF EXISTS abuse_signup_events;
       DROP INDEX decrypt_quota_by_owner_time;
       DROP TABLE decrypt_quota_ledger;
       DROP TABLE billing_customers;
