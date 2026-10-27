@@ -603,7 +603,7 @@ async function computeDeviceHealth(device: DeviceRecord, signal?: AbortSignal): 
     : Promise.resolve(undefined);
   let agentHeartbeatAt: number | undefined;
   try {
-    const telemetry = await withSSH(device, async (conn) => {
+    const telemetry = await withSSH(device, async (conn, operationSignal) => {
       const trackAgentHeartbeat = <T>(query: () => Promise<T>) => async (): Promise<T> => {
         const value = await query();
         if ('transport' in conn && conn.transport === 'autoinstall') agentHeartbeatAt = Date.now();
@@ -620,7 +620,7 @@ async function computeDeviceHealth(device: DeviceRecord, signal?: AbortSignal): 
         storage: trackAgentHeartbeat(() => queryDeviceStorage(conn)),
         network: trackAgentHeartbeat(() => queryNetworkStatus(conn)),
         bridgeHeartbeats: trackAgentHeartbeat(() => readBridgeHeartbeats(conn)),
-      }, signal);
+      }, operationSignal);
     }, signal, 'background');
     const bridge = await bridgeHealthPromise;
     const sshSftpReady = await probeDeviceSshTunnel(device, signal);

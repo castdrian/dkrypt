@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -540,12 +540,13 @@ test('resumes an interrupted IPA response from the saved byte offset', async () 
             controller.error(new Error('connection dropped'));
           }
         },
-      }));
+      }), { headers: { etag: `"${sha256}"` } });
     }
     assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+    assert.equal(init.headers['If-Range'], `"${sha256}"`);
     return new Response(bytes.subarray(firstPart.length), {
       status: 206,
-      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}` },
+      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}`, etag: `"${sha256}"` },
     });
   };
 
@@ -581,11 +582,12 @@ test('resumes a response that ends cleanly before the expected artifact size', a
   let attempts = 0;
   const fetchImpl = async (_input, init) => {
     attempts += 1;
-    if (attempts === 1) return new Response(firstPart);
+    if (attempts === 1) return new Response(firstPart, { headers: { etag: `"${sha256}"` } });
     assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+    assert.equal(init.headers['If-Range'], `"${sha256}"`);
     return new Response(bytes.subarray(firstPart.length), {
       status: 206,
-      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}` },
+      headers: { 'content-range': `bytes ${firstPart.length}-${bytes.length - 1}/${bytes.length}`, etag: `"${sha256}"` },
     });
   };
 
@@ -608,6 +610,97 @@ test('resumes a response that ends cleanly before the expected artifact size', a
     assert.equal(attempts, 2);
     assert.equal(await readFile(output, 'utf8'), bytes.toString());
     assert.equal(result.sha256, sha256);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('restarts from byte zero when a resumed request receives the complete file', async () => {
+  const directory = await temporaryDirectory();
+  const output = path.join(directory, 'restarted.ipa');
+  const temporaryPath = `${output}.partial`;
+  const firstPart = bytes.subarray(0, 6);
+
+  try {
+    await writeFile(temporaryPath, firstPart);
+    const result = await downloadVerifiedArtifact({
+      url: '/v1/artifacts/restarted/file',
+      origin: 'https://dkrypt.example',
+      apiKey: 'test-api-key',
+      outputPath: output,
+      expectedSha256: sha256,
+      expectedSizeBytes: bytes.length,
+      fetchImpl: async (_input, init) => {
+        assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+        assert.equal(init.headers['If-Range'], `"${sha256}"`);
+        return new Response(bytes, { headers: { etag: `"${'0'.repeat(64)}"` } });
+      },
+      log: () => {},
+    });
+
+    assert.equal(await readFile(output, 'utf8'), bytes.toString());
+    assert.equal(result.sha256, sha256);
+    assert.equal((await readdir(directory)).some((entry) => entry.endsWith('.partial')), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('restarts from byte zero after If-Range returns a changed full artifact and verifies its checksum', async () => {
+  const directory = await temporaryDirectory();
+  const output = path.join(directory, 'changed-full-response.ipa');
+  const temporaryPath = `${output}.partial`;
+  const firstPart = bytes.subarray(0, 6);
+  const changedBytes = Buffer.from(bytes);
+  changedBytes[0] ^= 0xff;
+
+  try {
+    await writeFile(temporaryPath, firstPart);
+    await assert.rejects(downloadVerifiedArtifact({
+      url: '/v1/artifacts/changed-full-response/file',
+      origin: 'https://dkrypt.example',
+      apiKey: 'test-api-key',
+      outputPath: output,
+      expectedSha256: sha256,
+      expectedSizeBytes: bytes.length,
+      fetchImpl: async (_input, init) => {
+        assert.equal(init.headers.Range, `bytes=${firstPart.length}-`);
+        assert.equal(init.headers['If-Range'], `"${sha256}"`);
+        return new Response(changedBytes, { headers: { etag: `"${'0'.repeat(64)}"` } });
+      },
+      maxAttempts: 1,
+      log: () => {},
+    }), /integrity check failed/);
+    assert.equal((await readdir(directory)).some((entry) => entry.endsWith('.partial')), false);
+    await assert.rejects(readFile(output));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects and removes a resumed response whose ETag changed', async () => {
+  const directory = await temporaryDirectory();
+  const output = path.join(directory, 'changed-etag.ipa');
+  const temporaryPath = `${output}.partial`;
+
+  try {
+    await writeFile(temporaryPath, bytes.subarray(0, 6));
+    await assert.rejects(downloadVerifiedArtifact({
+      url: '/v1/artifacts/changed-etag/file',
+      origin: 'https://dkrypt.example',
+      apiKey: 'test-api-key',
+      outputPath: output,
+      expectedSha256: sha256,
+      expectedSizeBytes: bytes.length,
+      fetchImpl: async () => new Response(bytes.subarray(6), {
+        status: 206,
+        headers: { 'content-range': `bytes 6-${bytes.length - 1}/${bytes.length}`, etag: `"${'0'.repeat(64)}"` },
+      }),
+      maxAttempts: 1,
+      log: () => {},
+    }), /ETag/);
+    assert.equal((await readdir(directory)).some((entry) => entry.endsWith('.partial')), false);
+    await assert.rejects(readFile(output));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

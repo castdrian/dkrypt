@@ -189,6 +189,7 @@ export async function downloadVerifiedArtifact({
   const downloadUrl = validateSameOrigin(url, origin);
   const absoluteOutputPath = path.resolve(outputPath);
   const normalizedSha256 = typeof expectedSha256 === 'string' ? expectedSha256.toLowerCase() : '';
+  const expectedEtag = `"${normalizedSha256}"`;
   if (!/^[a-f0-9]{64}$/.test(normalizedSha256)) throw new Error('dkrypt did not report a valid artifact SHA-256');
   if (!Number.isSafeInteger(expectedSizeBytes) || expectedSizeBytes < 0) throw new Error('dkrypt did not report a valid artifact size');
   await mkdir(path.dirname(absoluteOutputPath), { recursive: true });
@@ -219,7 +220,7 @@ export async function downloadVerifiedArtifact({
         headers: {
           Accept: 'application/octet-stream',
           Authorization: `Bearer ${apiKey}`,
-          ...(offset > 0 ? { Range: `bytes=${offset}-` } : {}),
+          ...(offset > 0 ? { Range: `bytes=${offset}-`, 'If-Range': expectedEtag } : {}),
         },
       });
       if (retryableStatus(response.status)) {
@@ -231,6 +232,12 @@ export async function downloadVerifiedArtifact({
         if (attempt === maxAttempts) throw lastError;
         await pauseBeforeRetry({ attempt, retryAfterMs: lastError.retryAfterMs, label: 'IPA download', log, sleep, baseMs: retryBaseMs, maxMs: retryMaxMs, random, deadlineAt });
         continue;
+      }
+      const responseEtag = response.headers.get('etag');
+      const resumedFullResponse = offset > 0 && response.status === 200;
+      if ((responseEtag && responseEtag !== expectedEtag && !resumedFullResponse) || (response.status === 206 && responseEtag !== expectedEtag)) {
+        await rm(temporaryPath, { force: true });
+        throw new ArtifactIntegrityError('dkrypt returned an ETag that does not match the expected IPA checksum');
       }
       if (response.status === 416) {
         const total = response.headers.get('content-range')?.match(/^bytes \*\/(\d+)$/)?.[1];
@@ -254,7 +261,7 @@ export async function downloadVerifiedArtifact({
       }
       if (response.status === 206) {
         const contentRange = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
-        if (!contentRange || Number(contentRange[1]) !== offset || Number(contentRange[2]) < offset || Number(contentRange[3]) !== expectedSizeBytes) {
+        if (!contentRange || Number(contentRange[1]) !== offset || Number(contentRange[2]) !== expectedSizeBytes - 1 || Number(contentRange[3]) !== expectedSizeBytes) {
           await rm(temporaryPath, { force: true });
           throw new ApiRequestError('dkrypt returned an invalid resumed IPA byte range', { retryable: true });
         }

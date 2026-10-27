@@ -3,15 +3,17 @@ export type DeviceOperationPriority = 'foreground' | 'interactive' | 'normal' | 
 interface QueueTask<T> {
   priority: DeviceOperationPriority;
   sequence: number;
-  operation: () => Promise<T>;
-  signal?: AbortSignal;
-  abort?: () => void;
+  operation: (signal: AbortSignal) => Promise<T>;
+  controller: AbortController;
+  externalSignal?: AbortSignal;
+  abortExternal?: () => void;
   resolve: (value: T) => void;
   reject: (error: Error) => void;
 }
 
 interface QueueState {
   active: boolean;
+  activeTask?: QueueTask<unknown>;
   tasks: QueueTask<unknown>[];
 }
 
@@ -32,13 +34,22 @@ export class DeviceOperationQueueFullError extends Error {
   }
 }
 
+export class DeviceOperationPreemptedError extends Error {
+  readonly retryable = true;
+
+  constructor() {
+    super('Background device work was paused for a higher-priority operation');
+    this.name = 'DeviceOperationPreemptedError';
+  }
+}
+
 export class KeyedPriorityQueue {
   private readonly queues = new Map<string, QueueState>();
   private sequence = 0;
 
   constructor(private readonly maximumQueuedBackgroundTasks = 32) {}
 
-  run<T>(key: string, priority: DeviceOperationPriority, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  run<T>(key: string, priority: DeviceOperationPriority, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) return Promise.reject(this.abortError(signal));
     const state = this.queues.get(key) ?? { active: false, tasks: [] };
     if (priority === 'background' && state.tasks.filter((task) => task.priority === 'background').length >= this.maximumQueuedBackgroundTasks) {
@@ -47,17 +58,22 @@ export class KeyedPriorityQueue {
 
     this.queues.set(key, state);
     return new Promise<T>((resolve, reject) => {
-      const task: QueueTask<T> = { priority, sequence: this.sequence++, operation, signal, resolve, reject };
-      task.abort = () => {
+      const controller = new AbortController();
+      const task: QueueTask<T> = { priority, sequence: this.sequence++, operation, controller, externalSignal: signal, resolve, reject };
+      task.abortExternal = () => {
+        controller.abort(this.abortError(signal));
         const index = state.tasks.indexOf(task as QueueTask<unknown>);
         if (index < 0) return;
         state.tasks.splice(index, 1);
-        signal?.removeEventListener('abort', task.abort!);
+        signal?.removeEventListener('abort', task.abortExternal!);
         reject(this.abortError(signal));
         this.cleanup(key, state);
       };
-      signal?.addEventListener('abort', task.abort, { once: true });
+      signal?.addEventListener('abort', task.abortExternal, { once: true });
       state.tasks.push(task as QueueTask<unknown>);
+      if (state.activeTask?.priority === 'background' && priority !== 'background' && priorities[priority] < priorities.background) {
+        state.activeTask.controller.abort(new DeviceOperationPreemptedError());
+      }
       this.pump(key, state);
     });
   }
@@ -70,19 +86,25 @@ export class KeyedPriorityQueue {
       this.cleanup(key, state);
       return;
     }
-    task.signal?.removeEventListener('abort', task.abort!);
-    if (task.signal?.aborted) {
-      task.reject(this.abortError(task.signal));
+    if (task.controller.signal.aborted) {
+      task.externalSignal?.removeEventListener('abort', task.abortExternal!);
+      task.reject(this.abortError(task.controller.signal));
       this.pump(key, state);
       return;
     }
 
     state.active = true;
+    state.activeTask = task;
     Promise.resolve()
-      .then(task.operation)
-      .then(task.resolve, task.reject)
+      .then(() => task.operation(task.controller.signal))
+      .then((value) => {
+        if (task.controller.signal.aborted) task.reject(this.abortError(task.controller.signal));
+        else task.resolve(value);
+      }, task.reject)
       .finally(() => {
+        task.externalSignal?.removeEventListener('abort', task.abortExternal!);
         state.active = false;
+        state.activeTask = undefined;
         this.pump(key, state);
       });
   }

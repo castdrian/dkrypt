@@ -18,6 +18,7 @@
         "cron-parser": "^5",
         "discord-api-types": "^0.38.57",
         "fastify": "^5.12.7",
+        "iso-3166": "4.4.0",
         "node-cron": "^4.6.0",
         "nodemailer": "^10.2.0",
         "plist": "^5.0.0",
@@ -245,6 +246,8 @@
     "inherits": ["inherits@2.0.4", "", {}, "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ=="],
 
     "ipaddr.js": ["ipaddr.js@2.5.0", "", {}, "sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w=="],
+
+    "iso-3166": ["iso-3166@4.4.0", "", {}, "sha512-I6ylkNQgxVh7cYADMUJpqBUdremGvyGZkDRSk9Cdic/ITBUemsllQnUeRpz7yDKyfgAXI9oPa5A9dia+7IXLqw=="],
 
     "json-schema-ref-resolver": ["json-schema-ref-resolver@3.0.0", "", { "dependencies": { "dequal": "^2.0.3" } }, "sha512-hOrZIVL5jyYFjzk7+y7n5JDzGlU8rfWDuYyHwGa2WA8/pcmMHezp2xsVwxrebD/Q9t8Nc5DboieySDpCp4WG4A=="],
 

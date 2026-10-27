@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-const { lookupAppMetadata, lookupAppMetadataByTrackId, searchApps } = await import(`${new URL('./appStoreMetadata.ts', import.meta.url).href}?storefront-test`);
+const { lookupAppMetadata, lookupAppMetadataByTrackId, lookupCurrentVersion, searchApps } = await import(`${new URL('./appStoreMetadata.ts', import.meta.url).href}?storefront-test`);
 
 const originalFetch = globalThis.fetch;
 
@@ -188,6 +188,17 @@ describe('iTunes storefront selection', () => {
       expect(requests[0]?.searchParams.get('entity')).toBe('software');
       expect(requests[0]?.searchParams.get('lang')).toBe('en_us');
       expect(() => lookupAppMetadataByTrackId(-1)).toThrow();
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test('looks up the current version in an explicit device storefront', async () => {
+    const requests: URL[] = [];
+    mockFetch(requests);
+    try {
+      await lookupCurrentVersion('com.hammerandchisel.discord', undefined, 'AU');
+      expect(requests[0]?.searchParams.get('country')).toBe('AU');
     } finally {
       restoreFetch();
     }

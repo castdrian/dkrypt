@@ -85,9 +85,10 @@ function parseFileSizeBytes(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-export async function lookupCurrentVersion(bundleId: string, signal?: AbortSignal): Promise<ItunesLookupResult> {
+export async function lookupCurrentVersion(bundleId: string, signal?: AbortSignal, storefrontCountry?: string): Promise<ItunesLookupResult> {
+  if (storefrontCountry !== undefined && !/^[A-Z]{2}$/.test(storefrontCountry)) throw new Error('country must be a two-letter uppercase storefront code');
   throwIfAborted(signal);
-  const url = await buildItunesUrl('lookup', { bundleId });
+  const url = await buildItunesUrl('lookup', { bundleId, ...(storefrontCountry ? { country: storefrontCountry } : {}) });
   throwIfAborted(signal);
   const res = await fetch(url, { signal });
   throwIfAborted(signal);

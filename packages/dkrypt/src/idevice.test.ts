@@ -373,10 +373,11 @@ test('createBridgeEnvelope matches the shared bridge fixture', async () => {
   expect(fixture.contract).toEqual({
     version: BRIDGE_PROTOCOL_VERSION,
     ...BRIDGE_CAPABILITIES,
-    appstore: BRIDGE_CAPABILITIES.appstore.filter((capability) => capability !== 'localized_install_titles'),
+    appstore: BRIDGE_CAPABILITIES.appstore.filter((capability) => !['localized_install_titles', 'storefront'].includes(capability)),
     testflightLifecycle: TESTFLIGHT_LIFECYCLE_CAPABILITIES,
   });
   expect(BRIDGE_CAPABILITIES.appstore).toContain('localized_install_titles');
+  expect(BRIDGE_CAPABILITIES.appstore).toContain('storefront');
 });
 
 test('createDeviceAgentEnvelope matches the shared bridge fixture', async () => {

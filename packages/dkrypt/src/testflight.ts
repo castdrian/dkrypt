@@ -176,19 +176,19 @@ async function ensureTestFlightRunningOnConnection(conn: DeviceClient, device: D
 
 export async function ensureTestFlightRunning(device = primaryDevice(), requiredCapabilities: readonly string[] = []): Promise<void> {
   if (hasCachedTestFlightBridge(device, requiredCapabilities)) return;
-  return withTestFlightOperation('ensure_running', device, () => withSSH(device, (conn) => ensureTestFlightRunningOnConnection(conn, device, requiredCapabilities), undefined, 'background'));
+  return withTestFlightOperation('ensure_running', device, () => withSSH(device, (conn, signal) => ensureTestFlightRunningOnConnection(conn, device, requiredCapabilities, signal), undefined, 'background'));
 }
 
 export async function listTrains(appId: number, device = primaryDevice()): Promise<TFTrain[]> {
-  return trainLookups.run(`${device.id}:${appId}`, () => observeTestFlightLookup('trains', () => withTestFlightOperation('list_trains', device, () => withReadyBridgeRequest(async (conn) => {
-    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_trains', appId }, 45_000);
+  return trainLookups.run(`${device.id}:${appId}`, () => observeTestFlightLookup('trains', () => withTestFlightOperation('list_trains', device, () => withReadyBridgeRequest(async (conn, signal) => {
+    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_trains', appId }, 45_000, signal);
     return response.data as TFTrain[];
   }, device, [], true, 'background'), { 'testflight.app_id': appId })));
 }
 
 export async function listBuilds(appId: number, trainVersion: string, device = primaryDevice()): Promise<TFBuild[]> {
-  return buildLookups.run(`${device.id}:${appId}:${trainVersion}`, () => observeTestFlightLookup('builds', () => withTestFlightOperation('list_builds', device, () => withReadyBridgeRequest(async (conn) => {
-    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_builds', appId, trainVersion }, 45_000);
+  return buildLookups.run(`${device.id}:${appId}:${trainVersion}`, () => observeTestFlightLookup('builds', () => withTestFlightOperation('list_builds', device, () => withReadyBridgeRequest(async (conn, signal) => {
+    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_builds', appId, trainVersion }, 45_000, signal);
     return response.data as TFBuild[];
   }, device, [], true, 'background'), { 'testflight.app_id': appId, 'testflight.train_version': trainVersion })));
 }
@@ -225,8 +225,8 @@ export async function unsubscribeFromTestFlightInvite(bundleId: string, device =
 }
 
 export async function listTestFlightApps(device = primaryDevice(), refreshCatalog = false): Promise<TFDeviceApp[]> {
-  return withTestFlightOperation('list_apps', device, () => withReadyBridgeRequest(async (conn) => {
-    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_apps', refresh: refreshCatalog });
+  return withTestFlightOperation('list_apps', device, () => withReadyBridgeRequest(async (conn, signal) => {
+    const response = await sendTestFlightBridgeRequest(conn, { action: 'list_apps', refresh: refreshCatalog }, 20_000, signal);
     if (!Array.isArray(response.apps)) return [];
     return response.apps.filter((entry: unknown): entry is TFDeviceApp => {
       if (typeof entry !== 'object' || entry === null) return false;
@@ -236,11 +236,11 @@ export async function listTestFlightApps(device = primaryDevice(), refreshCatalo
   }, device, TESTFLIGHT_DEVICE_CATALOG_CAPABILITIES, false, 'background'), { 'testflight.refresh_catalog': refreshCatalog });
 }
 
-async function withReadyBridgeRequest<T>(request: (conn: DeviceClient) => Promise<T>, device: DeviceRecord, requiredCapabilities: readonly string[] = [], retryMetadataTimeout = false, priority: DeviceOperationPriority = 'background'): Promise<T> {
+async function withReadyBridgeRequest<T>(request: (conn: DeviceClient, signal: AbortSignal) => Promise<T>, device: DeviceRecord, requiredCapabilities: readonly string[] = [], retryMetadataTimeout = false, priority: DeviceOperationPriority = 'background'): Promise<T> {
   return withBridgeRecovery(
-    () => withSSH(device, async (conn) => {
-      await ensureTestFlightRunningOnConnection(conn, device, requiredCapabilities);
-      return request(conn);
+    () => withSSH(device, async (conn, signal) => {
+      await ensureTestFlightRunningOnConnection(conn, device, requiredCapabilities, signal);
+      return request(conn, signal);
     }, undefined, priority),
     device,
     retryMetadataTimeout,

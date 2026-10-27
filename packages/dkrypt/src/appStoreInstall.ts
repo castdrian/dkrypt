@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { iso31661Alpha3ToAlpha2 } from 'iso-3166';
 import {
   armAppStoreAutoConfirm,
   clearAppStoreAutoConfirm,
@@ -32,7 +33,14 @@ const APP_STORE_BRIDGE_POLL_INTERVAL_MS = 500;
 const APP_STORE_INSTALL_STATUS_POLL_INTERVAL_MS = 5_000;
 const APP_STORE_COMPLETED_DOWNLOAD_RETRY_DELAY_MS = 90_000;
 const APP_STORE_DOWNLOAD_RETRY_MIN_REMAINING_MS = 45_000;
-const APP_STORE_LOCALE_RE = /^[a-z]{2,3}[_-]([A-Za-z]{2})(?:@.*)?$/;
+
+function appStoreCountryCode(response: Record<string, unknown>): string {
+  const storefrontCode = typeof response.countryCode === 'string' ? response.countryCode.toUpperCase() : '';
+  if (/^[A-Z]{2}$/.test(storefrontCode)) return storefrontCode;
+  const countryCode = iso31661Alpha3ToAlpha2[storefrontCode];
+  if (!countryCode) throw new Error('StoreKit returned an unsupported App Store storefront country');
+  return countryCode;
+}
 
 class AppStoreInstallTimeoutError extends Error {
   readonly retryable = true;
@@ -117,7 +125,7 @@ async function ensureAppStoreBridgeReady(conn: DeviceClient, signal?: AbortSigna
 
 async function restartAppStore(conn: DeviceClient, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
-  await execCommand(conn, 'killall AppStore PassbookUIService 2>/dev/null || true');
+  await execCommand(conn, 'killall AppStore PassbookUIService 2>/dev/null || true', 10_000, signal);
   throwIfAborted(signal);
   await delayWithSignal(1_000, signal);
 }
@@ -162,54 +170,51 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     log.info(message, { bundleId, externalVersionId });
     onProgress?.(message);
   };
+  let activeSignal = options.signal;
   const ensureNotCancelled = () => {
     if (options.isCancelled?.()) throw new Error('App Store install cancelled');
-    throwIfAborted(options.signal);
+    throwIfAborted(activeSignal);
   };
 
   ensureNotCancelled();
   report('resolving App Store id for bundle');
-  const { trackId, version: latestVersion } = options.currentVersion ?? (await lookupCurrentVersion(bundleId, options.signal));
-  ensureNotCancelled();
-  const targetVersion = expectedVersion
-    ? normalizeVersion(expectedVersion)
-    : versionId === undefined
-      ? normalizeVersion(latestVersion)
-      : undefined;
-  if (!targetVersion) throw new Error(`could not resolve the expected App Store version for ${bundleId}`);
-  const listing = await lookupAppMetadataByTrackId(trackId);
-  ensureNotCancelled();
-  if (listing.bundleId !== bundleId || listing.price !== 0) {
-    throw new Error(`App Store automation requires a verified free listing for ${bundleId}`);
-  }
-
-  return withSSH(options.device ?? primaryDevice(), async (conn) => {
+  return withSSH(options.device ?? primaryDevice(), async (conn, operationSignal) => {
+    activeSignal = operationSignal;
     ensureNotCancelled();
-    const appNames = [listing.trackName];
-    let country: string | undefined;
+    await ensureAppStoreBridgeReady(conn, operationSignal);
+    ensureNotCancelled();
+    let country: string;
     try {
-      const locale = await execCommand(conn, 'defaults read /var/mobile/Library/Preferences/.GlobalPreferences AppleLocale 2>/dev/null', 5_000, options.signal);
+      const storefront = await sendAppStoreBridgeRequest(conn, { action: 'storefront' }, 15_000, operationSignal);
       ensureNotCancelled();
-      country = APP_STORE_LOCALE_RE.exec(locale.stdout.trim())?.[1]?.toUpperCase();
+      country = appStoreCountryCode(storefront);
     } catch (error) {
       ensureNotCancelled();
-      throw new Error(`could not verify the device App Store storefront before installing ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`could not verify the signed-in App Store storefront before installing ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!country) throw new Error(`could not verify the device App Store storefront before installing ${bundleId}`);
-    if (country && country !== 'US') {
-      let localizedListing: Awaited<ReturnType<typeof lookupAppMetadataByTrackId>> | undefined;
-      try {
-        localizedListing = await lookupAppMetadataByTrackId(trackId, country);
-        ensureNotCancelled();
-      } catch (error) {
-        ensureNotCancelled();
-        throw new Error(`could not verify the free ${country} App Store listing for ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      if (!localizedListing || localizedListing.trackId !== trackId || localizedListing.bundleId !== bundleId || localizedListing.price !== 0) {
-        throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
-      }
-      if (!appNames.includes(localizedListing.trackName)) appNames.push(localizedListing.trackName);
+    const { trackId, version: latestVersion } = await lookupCurrentVersion(bundleId, operationSignal, country);
+    ensureNotCancelled();
+    if (options.currentVersion && options.currentVersion.trackId !== trackId) {
+      throw new Error(`the App Store track ID for ${bundleId} changed between metadata resolution and device verification`);
     }
+    const targetVersion = expectedVersion
+      ? normalizeVersion(expectedVersion)
+      : versionId === undefined
+        ? normalizeVersion(latestVersion)
+        : undefined;
+    if (!targetVersion) throw new Error(`could not resolve the expected App Store version for ${bundleId}`);
+    let listing: Awaited<ReturnType<typeof lookupAppMetadataByTrackId>>;
+    try {
+      listing = await lookupAppMetadataByTrackId(trackId, country, operationSignal);
+      ensureNotCancelled();
+    } catch (error) {
+      ensureNotCancelled();
+      throw new Error(`could not verify the free ${country} App Store listing for ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (listing.bundleId !== bundleId || listing.trackId !== trackId || listing.price !== 0) {
+      throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
+    }
+    const appNames = [listing.trackName];
     const existing = await findInstalledAppStoreBundle(conn, bundleId);
     ensureNotCancelled();
     if (existing) {
@@ -222,12 +227,12 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     }
 
     report('restarting the App Store to clear pending purchases');
-    await restartAppStore(conn, options.signal);
+    await restartAppStore(conn, operationSignal);
 
     report('bringing the App Store to the foreground');
-    await ensureAppStoreForeground(conn, options.signal);
+    await ensureAppStoreForeground(conn, operationSignal);
     ensureNotCancelled();
-    await ensureAppStoreBridgeReady(conn, options.signal);
+    await ensureAppStoreBridgeReady(conn, operationSignal);
 
     try {
       ensureNotCancelled();
@@ -238,7 +243,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       let operationId = options.operationId ?? randomUUID();
       const request: Record<string, unknown> = { action: 'install', adamId: trackId, appName: listing.trackName, appNames, verifiedPrice: listing.price, contextMode: 'fallback', operationId };
       if (versionId !== undefined) request.versionId = versionId;
-      const installResponse = await sendAppStoreBridgeRequest(conn, request, 20_000, options.signal);
+      const installResponse = await sendAppStoreBridgeRequest(conn, request, 20_000, operationSignal);
       ensureNotCancelled();
       if (installResponse?.requested === false && installResponse?.completed !== true) {
         throw new Error('App Store did not start the requested installation');
@@ -272,7 +277,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
           }
           if (!currentInstallStatus({ install: status }, operationId)) {
             try {
-              status = (await sendAppStoreBridgeRequest(conn, { action: 'status' }, APP_STORE_BRIDGE_STATUS_TIMEOUT_MS, options.signal)).install;
+              status = (await sendAppStoreBridgeRequest(conn, { action: 'status' }, APP_STORE_BRIDGE_STATUS_TIMEOUT_MS, operationSignal)).install;
             } catch (error) {
               ensureNotCancelled();
               log.warn('App Store bridge status check failed while installation continues', { bundleId, externalVersionId, error: String(error) });
@@ -313,13 +318,13 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
         if (!retriedCompletedPurchase && purchaseCompletedAt !== undefined && Date.now() - purchaseCompletedAt >= APP_STORE_COMPLETED_DOWNLOAD_RETRY_DELAY_MS && Date.now() + APP_STORE_DOWNLOAD_RETRY_MIN_REMAINING_MS < deadline) {
           ensureNotCancelled();
           report('App Store confirmed the purchase but did not install the app; retrying the download once');
-          await restartAppStore(conn, options.signal);
-          await ensureAppStoreForeground(conn, options.signal);
-          await ensureAppStoreBridgeReady(conn, options.signal);
+          await restartAppStore(conn, operationSignal);
+          await ensureAppStoreForeground(conn, operationSignal);
+          await ensureAppStoreBridgeReady(conn, operationSignal);
           ensureNotCancelled();
           await armAppStoreAutoConfirm(conn, 'Install');
           operationId = `${operationId}-download-retry-1`;
-          const retryResponse = await sendAppStoreBridgeRequest(conn, { ...request, operationId }, 20_000, options.signal);
+          const retryResponse = await sendAppStoreBridgeRequest(conn, { ...request, operationId }, 20_000, operationSignal);
           ensureNotCancelled();
           if (retryResponse?.requested === false && retryResponse?.completed !== true) throw new Error('App Store did not start the download retry');
           retriedCompletedPurchase = true;
@@ -334,7 +339,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
           lastReportedAt = elapsedSec;
           report(`still waiting for the App Store to finish installing (${elapsedSec}s elapsed)`);
         }
-        await delayWithSignal(5_000, options.signal);
+        await delayWithSignal(5_000, operationSignal);
       }
       ensureNotCancelled();
       const finalBundlePath = await findInstalledAppStoreBundle(conn, bundleId);
@@ -365,5 +370,5 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     } finally {
       await clearAppStoreAutoConfirm(conn).catch(() => {});
     }
-  }, options.signal, 'foreground');
+    }, options.signal, 'foreground');
 }

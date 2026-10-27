@@ -21,8 +21,9 @@ let postInstallStatusSuccesses = 0;
 let foregroundRequests = 0;
 let listingPrice = 0;
 let listingBundleId = '';
-let deviceLocale = 'en_US';
-let deviceLocaleReadError = false;
+let deviceStorefrontCode = 'USA';
+let deviceStorefrontReadError = false;
+let currentVersionCountry: string | undefined;
 let localizedLookupError = false;
 let localizedListingPrice = 0;
 let localizedListingBundleId = '';
@@ -37,11 +38,7 @@ mock.module('#idevice.js', () => ({
   ...idevice,
   armAppStoreAutoConfirm: async () => calls.push('arm'),
   clearAppStoreAutoConfirm: async () => calls.push('clear'),
-  execCommand: async (_conn: object, command: string) => {
-    if (command.includes('AppleLocale')) {
-      if (deviceLocaleReadError) throw new Error('locale unavailable');
-      return { stdout: deviceLocale, stderr: '', code: 0 };
-    }
+  execCommand: async (_conn: object, _command: string) => {
     calls.push('restart');
     return { stdout: '', stderr: '', code: 0 };
   },
@@ -71,7 +68,12 @@ mock.module('#idevice.js', () => ({
         throw new Error('status request timed out');
       }
       if (installRequest && installStatusSequence.length > 0) installStatus = installStatusSequence.shift()!;
-      return { capabilities: ['install', 'status', 'diagnostics', 'foreground_status', 'localized_install_titles', 'protocol_v1', 'authenticated_requests', 'operation_responses', 'heartbeats', 'stale_artifact_cleanup'], foreground: foregroundStatuses.shift() ?? true, install: installStatus };
+      return { capabilities: ['install', 'status', 'diagnostics', 'foreground_status', 'localized_install_titles', 'storefront', 'protocol_v1', 'authenticated_requests', 'operation_responses', 'heartbeats', 'stale_artifact_cleanup'], foreground: foregroundStatuses.shift() ?? true, install: installStatus };
+    }
+    if (request.action === 'storefront') {
+      calls.push('storefront');
+      if (deviceStorefrontReadError) throw new Error('storefront unavailable');
+      return { ok: true, countryCode: deviceStorefrontCode };
     }
     installRequest = request;
     installRequests.push(request);
@@ -91,13 +93,14 @@ mock.module('#idevice.js', () => ({
     calls.push('force-uninstall');
     return true;
   },
-  withSSH: async (_device: object, fn: (conn: object) => Promise<void>) => fn({}),
+  withSSH: async (_device: object, fn: (conn: object, signal: AbortSignal) => Promise<void>) => fn({}, new AbortController().signal),
 }));
 
 mock.module('#appStoreMetadata.js', () => ({
   ...itunes,
-  lookupCurrentVersion: async (bundleId: string) => {
+  lookupCurrentVersion: async (bundleId: string, _signal?: AbortSignal, country?: string) => {
     listingBundleId = bundleId;
+    currentVersionCountry = country;
     return { trackId: 123, version: '338.0' };
   },
   lookupAppMetadataByTrackId: async (_trackId: number, country?: string) => {
@@ -122,7 +125,7 @@ describe('installFromAppStore', () => {
 
   beforeEach(() => {
     globalThis.setTimeout = ((handler: () => void) => {
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     calls.length = 0;
@@ -147,8 +150,9 @@ describe('installFromAppStore', () => {
     foregroundRequests = 0;
     listingPrice = 0;
     listingBundleId = '';
-    deviceLocale = 'en_US';
-    deviceLocaleReadError = false;
+    deviceStorefrontCode = 'USA';
+    deviceStorefrontReadError = false;
+    currentVersionCountry = undefined;
     localizedLookupError = false;
     localizedListingPrice = 0;
     localizedListingBundleId = '';
@@ -173,8 +177,8 @@ describe('installFromAppStore', () => {
 
   test('refuses a paid listing before changing the device', async () => {
     listingPrice = 1.99;
-    await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free listing');
-    expect(calls).toEqual([]);
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free US listing');
+    expect(calls).toEqual(['status', 'storefront']);
   });
 
   test('refuses a pinned release without an expected version before contacting the device', async () => {
@@ -183,35 +187,43 @@ describe('installFromAppStore', () => {
   });
 
   test('does not continue when the device storefront cannot be identified', async () => {
-    deviceLocaleReadError = true;
-    await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the device App Store storefront');
-    expect(calls).toEqual([]);
+    deviceStorefrontReadError = true;
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the signed-in App Store storefront');
+    expect(calls).toEqual(['status', 'storefront']);
     expect(installRequest).toBeUndefined();
   });
 
-  test('sends only verified local and US names for a device with a localized App Store title', async () => {
-    deviceLocale = 'en_AU@rg=uszzzz';
+  test('uses the signed-in storefront country to resolve the install title', async () => {
+    deviceStorefrontCode = 'AUS';
     await installFromAppStore('com.example.app');
-    expect(installRequest).toMatchObject({ appName: 'Example App', appNames: ['Example App', 'Localized Example App'], verifiedPrice: 0 });
+    expect(currentVersionCountry).toBe('AU');
+    expect(installRequest).toMatchObject({ appName: 'Localized Example App', appNames: ['Localized Example App'], verifiedPrice: 0 });
+  });
+
+  test('accepts the asynchronous account storefront country code', async () => {
+    deviceStorefrontCode = 'DE';
+    await installFromAppStore('com.example.app');
+    expect(currentVersionCountry).toBe('DE');
+    expect(installRequest).toMatchObject({ appName: 'Example App', appNames: ['Example App'], verifiedPrice: 0 });
   });
 
   test('rejects a paid or mismatched localized listing before changing the device', async () => {
-    deviceLocale = 'en_AU';
+    deviceStorefrontCode = 'AUS';
     localizedListingPrice = 1.99;
     await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free AU listing');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['status', 'storefront']);
 
     localizedListingPrice = 0;
     localizedListingBundleId = 'com.example.other';
     await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free AU listing');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['status', 'storefront', 'status', 'storefront']);
   });
 
   test('does not continue when a localized App Store listing cannot be verified', async () => {
-    deviceLocale = 'en_AU';
+    deviceStorefrontCode = 'AUS';
     localizedLookupError = true;
     await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the free AU App Store listing');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['status', 'storefront']);
     expect(installRequest).toBeUndefined();
   });
 
@@ -220,7 +232,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = [undefined, undefined, undefined, undefined, undefined];
@@ -242,7 +254,7 @@ describe('installFromAppStore', () => {
     }
 
     expect(progress.some((message) => message.includes('device action'))).toBe(false);
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'status', 'status', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'status', 'status', 'status', 'clear']);
   });
 
   test('waits through a payment sheet until the requested version installs', async () => {
@@ -250,7 +262,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = [undefined, undefined, undefined, undefined, undefined, { path: '/apps/Discord.app', shortVersion: '348.0' }];
@@ -272,7 +284,7 @@ describe('installFromAppStore', () => {
       globalThis.setTimeout = originalSetTimeout;
     }
 
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'status', 'status', 'status', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'status', 'status', 'status', 'status', 'clear']);
   });
 
   test('retries after a temporarily unavailable bridge before purchasing', async () => {
@@ -281,9 +293,9 @@ describe('installFromAppStore', () => {
 
     await installFromAppStore('com.hammerandchisel.discord');
 
-    expect(calls.filter((call) => call === 'status')).toHaveLength(3);
+    expect(calls.filter((call) => call === 'status')).toHaveLength(4);
     expect(foregroundRequests).toBe(2);
-    expect(calls).toEqual(['restart', 'status', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
   });
 
   test('keeps waiting when an App Store status poll times out after the purchase starts', async () => {
@@ -292,7 +304,7 @@ describe('installFromAppStore', () => {
 
     await expect(installFromAppStore('com.hammerandchisel.discord')).resolves.toMatchObject({ shortVersion: '338.0' });
 
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
   });
 
   test('recognizes a completed purchase when bridge status stops responding and permits a retry', async () => {
@@ -300,7 +312,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = Array(10).fill(undefined);
@@ -321,7 +333,7 @@ describe('installFromAppStore', () => {
       Date.now = originalDateNow;
       globalThis.setTimeout = originalSetTimeout;
     }
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'clear']);
   });
 
   test('retries a completed free purchase once when no app download follows', async () => {
@@ -329,7 +341,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = [...Array(22).fill(undefined), { path: '/apps/Cleaner.app', shortVersion: '338.0' }];
@@ -365,7 +377,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = Array(10).fill(undefined);
@@ -388,7 +400,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = Array(10).fill(undefined);
@@ -416,7 +428,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 20_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     foregroundStatuses = [false];
@@ -429,7 +441,7 @@ describe('installFromAppStore', () => {
       globalThis.setTimeout = originalSetTimeout;
     }
 
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
   });
 
   test('replaces an installed beta before decrypting a pinned App Store version', async () => {
@@ -439,7 +451,7 @@ describe('installFromAppStore', () => {
       onProgress: (message) => progress.push(message),
     });
 
-    expect(calls).toEqual(['uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
     expect(installRequest).toMatchObject({ action: 'install', adamId: 123, appName: 'Example App', verifiedPrice: 0, contextMode: 'fallback', versionId: 123456789 });
     expect(installRequest).not.toHaveProperty('requestId');
     expect(progress).toContain('removing the installed app before the App Store install');
@@ -451,7 +463,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 20_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
 
@@ -472,7 +484,7 @@ describe('installFromAppStore', () => {
   test('replaces an installed app before decrypting the current App Store version', async () => {
     await installFromAppStore('com.hammerandchisel.discord');
 
-    expect(calls).toEqual(['uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
     expect(installRequest).toMatchObject({ action: 'install', adamId: 123, contextMode: 'fallback' });
   });
 
@@ -481,7 +493,7 @@ describe('installFromAppStore', () => {
 
     await installFromAppStore('com.hammerandchisel.discord', { externalVersionId: '123456789', expectedVersion: '338.0' });
 
-    expect(calls).toEqual(['uninstall', 'force-uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'uninstall', 'force-uninstall', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
   });
 
   test('waits for the requested version when a stale App Store install lands first', async () => {
@@ -497,7 +509,7 @@ describe('installFromAppStore', () => {
       onProgress: (message) => progress.push(message),
     });
 
-    expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'clear']);
+    expect(calls).toEqual(['status', 'storefront', 'restart', 'status', 'arm', 'request', 'status', 'clear']);
     expect(progress).toContain('waiting for App Store version 338.0; version 337.0 is currently installed');
     expect(progress.at(-1)).toBe('install verified: 338.0 build 106000 in 0s');
   });
@@ -507,7 +519,7 @@ describe('installFromAppStore', () => {
     Date.now = () => now;
     globalThis.setTimeout = ((handler: () => void) => {
       now += 5_000;
-      handler();
+      queueMicrotask(handler);
       return 0;
     }) as unknown as typeof setTimeout;
     installedBundles = [

@@ -537,7 +537,7 @@ class RustDeviceAgentClient implements DeviceAgentClient {
 }
 
 const sshSessions = new Map<string, SshSession>();
-const sshCommandSignals = new WeakMap<Client, AbortSignal>();
+const sshCommandSignals = new WeakMap<DeviceClient, AbortSignal>();
 interface DeviceAgentSession {
   client: DeviceAgentClient;
   idleTimer?: NodeJS.Timeout;
@@ -799,14 +799,14 @@ export async function probeDeviceSshTunnel(connection: DeviceConnection, signal?
   const startedAt = performance.now();
   let ready = false;
   try {
-    await deviceOperationQueue.run(sshSessionKey(connection), 'background', () => withDeviceTunnel(connection, async (auth) => {
+    await deviceOperationQueue.run(sshSessionKey(connection), 'background', (operationSignal) => withDeviceTunnel(connection, async (auth) => {
       const privateKey = await readFile(auth.keyPath);
-      throwIfAborted(signal);
+      throwIfAborted(operationSignal);
       const client = await retryTransientSshConnection(
-        () => connectSshClient(auth, privateKey, signal, 5_000),
+        () => connectSshClient(auth, privateKey, operationSignal, 5_000),
         SSH_HANDSHAKE_RETRIES,
         SSH_HANDSHAKE_RETRY_DELAY_MS,
-        signal,
+        operationSignal,
       );
       try {
         await new Promise<void>((resolve, reject) => {
@@ -816,14 +816,14 @@ export async function probeDeviceSshTunnel(connection: DeviceConnection, signal?
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
-            signal?.removeEventListener('abort', onAbort);
+            operationSignal.removeEventListener('abort', onAbort);
             if (error) reject(error);
             else resolve();
           };
-          const onAbort = () => finish(abortedOperationError(signal as AbortSignal));
+          const onAbort = () => finish(abortedOperationError(operationSignal));
           timeout = setTimeout(() => finish(new Error('SSH SFTP subsystem probe timed out')), SSH_SFTP_PROBE_TIMEOUT_MS);
-          signal?.addEventListener('abort', onAbort, { once: true });
-          if (signal?.aborted) {
+          operationSignal.addEventListener('abort', onAbort, { once: true });
+          if (operationSignal.aborted) {
             onAbort();
             return;
           }
@@ -839,7 +839,7 @@ export async function probeDeviceSshTunnel(connection: DeviceConnection, signal?
       } finally {
         client.end();
       }
-    }, signal), signal);
+    }, operationSignal), signal);
     throwIfAborted(signal);
     ready = true;
     return ready;
@@ -1064,7 +1064,7 @@ export function getDeviceTransportOrder(connection: DeviceConnection, mode = con
   return normalizedMode === 'autoinstall' ? ['autoinstall'] : ['autoinstall', 'ssh'];
 }
 
-async function withDeviceAgent<T>(connection: DeviceConnection, fn: (client: DeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function withDeviceAgent<T>(connection: DeviceConnection, fn: (client: DeviceClient, signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
   throwIfAborted(signal);
   let opened: { key: string; session: DeviceAgentSession };
   try {
@@ -1075,10 +1075,11 @@ async function withDeviceAgent<T>(connection: DeviceConnection, fn: (client: Dev
     throw new DeviceAgentUnavailableError(`could not connect to the dkrypt device agent: ${detail}`, { cause: error });
   }
   const cancelPending = () => opened.session.client.cancelPending();
+  if (signal) sshCommandSignals.set(opened.session.client, signal);
   signal?.addEventListener('abort', cancelPending, { once: true });
   try {
     throwIfAborted(signal);
-    const result = await fn(opened.session.client);
+    const result = await fn(opened.session.client, signal);
     throwIfAborted(signal);
     return result;
   } catch (error) {
@@ -1089,49 +1090,48 @@ async function withDeviceAgent<T>(connection: DeviceConnection, fn: (client: Dev
     throw error;
   } finally {
     signal?.removeEventListener('abort', cancelPending);
+    if (signal && sshCommandSignals.get(opened.session.client) === signal) sshCommandSignals.delete(opened.session.client);
     releaseDeviceAgentSession(opened.key, opened.session);
   }
 }
 
 export async function withAutoinstallDeviceAgent<T>(connection: DeviceConnection, fn: (client: DeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!isDirectUsbDeviceAgentConnection(connection)) throw new DeviceAgentUnavailableError('the direct USB recovery channel is unavailable for this device');
-  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', () => withDeviceAgent(connection, fn, signal), signal);
+  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', (operationSignal) => withDeviceAgent(connection, fn, operationSignal), signal);
 }
 
-export async function withSSH<T>(connection: DeviceConnection, fn: (conn: DeviceClient) => Promise<T>, signal?: AbortSignal, priority: DeviceOperationPriority = 'normal'): Promise<T> {
+export async function withSSH<T>(connection: DeviceConnection, fn: (conn: DeviceClient, signal: AbortSignal) => Promise<T>, signal?: AbortSignal, priority: DeviceOperationPriority = 'normal'): Promise<T> {
   throwIfAborted(signal);
-  return deviceOperationQueue.run(sshSessionKey(connection), priority, async () => {
-    throwIfAborted(signal);
+  return deviceOperationQueue.run(sshSessionKey(connection), priority, async (operationSignal) => {
+    throwIfAborted(operationSignal);
     const transportOrder = getDeviceTransportOrder(connection);
     if (transportOrder[0] === 'autoinstall' && isRustDeviceConnection(connection)) {
-      return withDeviceAgent(connection, fn, signal);
+      return withDeviceAgent(connection, (client) => fn(client, operationSignal), operationSignal);
     }
-    throwIfAborted(signal);
+    throwIfAborted(operationSignal);
     let key = '';
     let session: SshSession | undefined;
     let clearCommandSignal: (() => void) | undefined;
     try {
-      const opened = await getSshSession(connection, signal);
+      const opened = await getSshSession(connection, operationSignal);
       key = opened.key;
       session = opened.session;
-      throwIfAborted(signal);
-      if (signal) {
-        const currentConnection = session.conn;
-        clearCommandSignal = () => sshCommandSignals.delete(currentConnection);
-        sshCommandSignals.set(currentConnection, signal);
-        signal.addEventListener('abort', clearCommandSignal, { once: true });
-      }
-      const result = await fn(session.conn);
-      throwIfAborted(signal);
+      throwIfAborted(operationSignal);
+      const currentConnection = session.conn;
+      clearCommandSignal = () => sshCommandSignals.delete(currentConnection);
+      sshCommandSignals.set(currentConnection, operationSignal);
+      operationSignal.addEventListener('abort', clearCommandSignal, { once: true });
+      const result = await fn(session.conn, operationSignal);
+      throwIfAborted(operationSignal);
       return result;
     } catch (error) {
-      throwIfAborted(signal);
+      throwIfAborted(operationSignal);
       if (session && (session.unusable || isTransientSshConnectionError(error))) closeSshSession(key, session);
       throw error;
     } finally {
-      if (clearCommandSignal) signal?.removeEventListener('abort', clearCommandSignal);
+      if (clearCommandSignal) operationSignal.removeEventListener('abort', clearCommandSignal);
       if (session) {
-        if (signal && sshCommandSignals.get(session.conn) === signal) sshCommandSignals.delete(session.conn);
+        if (sshCommandSignals.get(session.conn) === operationSignal) sshCommandSignals.delete(session.conn);
         releaseSshSession(key, session);
       }
     }
@@ -1140,12 +1140,12 @@ export async function withSSH<T>(connection: DeviceConnection, fn: (conn: Device
 
 export async function withIpadecrypt<T>(connection: DeviceConnection, fn: (runtimeDir: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
   throwIfAborted(signal);
-  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', () => withDeviceTunnel(connection, async (auth, runtimeDir) => {
-    throwIfAborted(signal);
+  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', (operationSignal) => withDeviceTunnel(connection, async (auth, runtimeDir) => {
+    throwIfAborted(operationSignal);
     const readyRuntimeDir = await ensureIpadecryptRuntime(runtimeDir, auth);
-    throwIfAborted(signal);
+    throwIfAborted(operationSignal);
     return fn(readyRuntimeDir);
-  }, signal), signal);
+  }, operationSignal), signal);
 }
 
 async function discoverRustDevices(): Promise<DeviceDiscoveryResult> {
@@ -1388,8 +1388,8 @@ function isDeviceSession(conn: DeviceClient): conn is DeviceSession {
 }
 
 export function execCommand(conn: DeviceClient, command: string, timeoutMs = REMOTE_COMMAND_TIMEOUT_MS, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  if (isDeviceSession(conn)) return conn.exec(command, timeoutMs, signal);
   const commandSignal = signal ?? sshCommandSignals.get(conn);
+  if (isDeviceSession(conn)) return conn.exec(command, timeoutMs, commandSignal);
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
@@ -1605,6 +1605,7 @@ async function sendBridgeRequestRawTo(
   timeoutMs = 20_000,
   signal?: AbortSignal,
 ): Promise<any> {
+  signal ??= sshCommandSignals.get(conn);
   const runtimeDir = isDeviceSession(conn) ? conn.runtimeDir : connectionRuntimeDirs.get(conn);
   if (!runtimeDir) throw new Error('autoinstall bridge requests must run through a managed device session');
   return bridgeRequestQueue.run(runtimeDir, 'normal', async () => {
