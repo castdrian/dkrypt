@@ -159,6 +159,7 @@
   let planChangePreview = $state<PlanChangePreview | undefined>();
   let planChangePreviewLoading = $state(false);
   let planChangePreviewError = $state<string | undefined>();
+  let planChangePreviewRequest = 0;
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
@@ -476,6 +477,7 @@
   }
 
   async function loadPlanChangePreview(planId: string): Promise<void> {
+    const requestId = ++planChangePreviewRequest;
     planChangePreview = undefined;
     planChangePreviewError = undefined;
     planChangePreviewLoading = true;
@@ -486,12 +488,18 @@
         body: JSON.stringify({ planId }),
       });
       const result = await response.json().catch(() => ({})) as PlanChangePreview & { error?: string; message?: string };
+      if (requestId !== planChangePreviewRequest || !planChangeOpen || pendingPlanChange?.id !== planId) return;
       if (!response.ok) {
         planChangePreviewError = result.message ?? result.error ?? 'Stripe could not calculate this plan-change preview.';
         return;
       }
+      if (result.planId !== planId) {
+        planChangePreviewError = 'Stripe returned a preview for a different plan. Refresh the preview before confirming.';
+        return;
+      }
       if (billing && result.currentPlanId !== billing.entitlement.planId) {
         await loadBilling();
+        if (requestId !== planChangePreviewRequest || !planChangeOpen || pendingPlanChange?.id !== planId) return;
         if (billing?.entitlement.planId !== result.currentPlanId) {
           planChangePreviewError = 'Your subscription changed while the preview was loading. Refresh the preview before confirming.';
           return;
@@ -499,10 +507,18 @@
       }
       planChangePreview = result;
     } catch {
-      planChangePreviewError = 'Could not reach Stripe to calculate the plan-change preview.';
+      if (requestId === planChangePreviewRequest) planChangePreviewError = 'Could not reach Stripe to calculate the plan-change preview.';
     } finally {
-      planChangePreviewLoading = false;
+      if (requestId === planChangePreviewRequest) planChangePreviewLoading = false;
     }
+  }
+
+  function closePlanChangeReview(): void {
+    planChangePreviewRequest += 1;
+    planChangeOpen = false;
+    pendingPlanChange = undefined;
+    planChangePreview = undefined;
+    planChangePreviewLoading = false;
   }
 
   async function changePlan(plan: Plan, prorationDate?: number): Promise<boolean> {
@@ -557,7 +573,7 @@
 
   async function confirmPlanChange(): Promise<void> {
     const plan = pendingPlanChange;
-    if (!plan || !planChangePreview || planChangePreviewLoading) return;
+    if (!plan || !planChangeOpen || !planChangePreview || planChangePreview.planId !== plan.id || planChangePreviewLoading) return;
     const changed = await changePlan(plan, planChangePreview.prorationDate);
     if (changed) {
       planChangeOpen = false;
@@ -732,8 +748,8 @@
     {@const currentPlan = billing.currentPlan}
     {@const newRemaining = pendingPlanChange.dailyDecryptLimit === undefined ? null : Math.max(0, pendingPlanChange.dailyDecryptLimit - billing.quota.used)}
     {@const priceChange = currentPlan?.currency === pendingPlanChange.currency ? pendingPlanChange.amount - currentPlan.amount : undefined}
-    <Dialog open={planChangeOpen} onOpenChange={(open) => { planChangeOpen = open; if (!open) { pendingPlanChange = undefined; planChangePreview = undefined; } }} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
-      <div class="flex items-start justify-between gap-3"><div><h2 class="text-base font-semibold">Review your plan change</h2><p class="mt-1 text-xs text-muted">Nothing changes until you confirm.</p></div><Button size="icon" variant="ghost" aria-label="Close plan review" onclick={() => (planChangeOpen = false)}><X class="h-4 w-4" /></Button></div>
+    <Dialog open={planChangeOpen} onOpenChange={(open) => { if (open) planChangeOpen = true; else closePlanChangeReview(); }} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
+      <div class="flex items-start justify-between gap-3"><div><h2 class="text-base font-semibold">Review your plan change</h2><p class="mt-1 text-xs text-muted">Nothing changes until you confirm.</p></div><Button size="icon" variant="ghost" aria-label="Close plan review" onclick={closePlanChangeReview}><X class="h-4 w-4" /></Button></div>
       <div class="mt-4 grid gap-3 sm:grid-cols-2">
         <div class="rounded-lg border border-border p-3"><div class="text-[11px] text-muted">Current</div><div class="mt-1 font-medium">{currentPlan?.name ?? planLabel(billing.entitlement.planId)}</div><div class="mt-1 text-sm">{currentPlan ? fallbackPrice(currentPlan) : 'Current price'}<span class="text-xs text-muted"> / month</span></div><div class="mt-2 text-xs text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.limit} new decrypts per rolling 24 hours`}</div></div>
         <div class="rounded-lg border border-accent/50 bg-accent/5 p-3"><div class="text-[11px] text-muted">After switching</div><div class="mt-1 font-medium">{pendingPlanChange.name}</div><div class="mt-1 text-sm">{fallbackPrice(pendingPlanChange)}<span class="text-xs text-muted"> / month</span></div><div class="mt-2 text-xs text-muted">{pendingPlanChange.dailyDecryptLimit === undefined ? 'Unlimited new decrypts' : `${pendingPlanChange.dailyDecryptLimit} new decrypts per rolling 24 hours`}</div></div>
@@ -763,7 +779,7 @@
       {#if billing.entitlement.legacy}
         <div class="mt-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs"><div class="font-medium">Grandfathered benefits will end</div><p class="mt-1 text-muted">This switch permanently ends your current legacy plan. Its price and benefits cannot be restored later.</p></div>
       {/if}
-      <div class="mt-4 flex flex-wrap justify-end gap-2"><Button variant="secondary" onclick={() => (planChangeOpen = false)}>Keep current plan</Button><Button disabled={!planChangePreview || planChangePreviewLoading || Boolean(planChangePreviewError)} loading={openingPlan === pendingPlanChange.id} onclick={() => void confirmPlanChange()}>{billing.entitlement.legacy ? 'Switch and end legacy plan' : `Confirm switch to ${pendingPlanChange.name}`}</Button></div>
+      <div class="mt-4 flex flex-wrap justify-end gap-2"><Button variant="secondary" onclick={closePlanChangeReview}>Keep current plan</Button><Button disabled={!planChangePreview || planChangePreview.planId !== pendingPlanChange.id || planChangePreviewLoading || Boolean(planChangePreviewError)} loading={openingPlan === pendingPlanChange.id} onclick={() => void confirmPlanChange()}>{billing.entitlement.legacy ? 'Switch and end legacy plan' : `Confirm switch to ${pendingPlanChange.name}`}</Button></div>
     </Dialog>
   {/if}
 

@@ -42,6 +42,7 @@ import {
   linkBillingCustomer,
   listBillingSubscriptions,
   listBillingEntitlementHistory,
+  listBillingCharges,
   listCryptoCheckouts,
   listPlans,
   planForPrice,
@@ -686,6 +687,9 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const invoices: Array<{ id: string; provider: 'stripe' | 'nowpayments'; planId: string; status: string; createdAt: string; amountMinor: number; currency: string; invoiceUrl?: string; paymentId?: string }> = [];
     const warnings: string[] = [];
+    const refundedCryptoPayments = new Set(listBillingCharges()
+      .filter((charge) => charge.userId === userId && charge.provider === 'nowpayments' && charge.status === 'refunded')
+      .map((charge) => charge.chargeId));
     const customerId = getBillingCustomerId(userId);
     if (stripeEnabled && customerId) {
       try {
@@ -709,11 +713,12 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       }
     }
     for (const checkout of listCryptoCheckouts().filter((entry) => entry.userId === userId)) {
+      const paymentId = checkout.providerPaymentId ?? checkout.checkoutId;
       invoices.push({
         id: checkout.checkoutId,
         provider: 'nowpayments',
         planId: checkout.planId,
-        status: checkout.status,
+        status: refundedCryptoPayments.has(`nowpayments:${paymentId}`) ? 'refunded' : checkout.status,
         createdAt: checkout.createdAt,
         amountMinor: Math.round(checkout.amount * 100),
         currency: checkout.currency.toUpperCase(),
@@ -808,9 +813,28 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         const customerId = getBillingCustomerId(userId) ?? stripeSubscriptions[0]?.customerId;
 
         if (stripeEnabled && customerId) {
-          const currentStripeSubscriptions = await callStripe((client) => client.subscriptions.list({ customer: customerId, status: 'all', limit: 20 }));
+          const currentStripeSubscriptions: Stripe.Subscription[] = [];
+          let startingAfter: string | undefined;
+          let subscriptionsComplete = false;
+          for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+            const page = await callStripe((client) => client.subscriptions.list({
+              customer: customerId,
+              status: 'all',
+              limit: 100,
+              ...(startingAfter ? { starting_after: startingAfter } : {}),
+            }));
+            currentStripeSubscriptions.push(...page.data);
+            if (!page.has_more) {
+              subscriptionsComplete = true;
+              break;
+            }
+            const nextStartingAfter = page.data.at(-1)?.id;
+            if (!nextStartingAfter || nextStartingAfter === startingAfter) throw new Error('Stripe subscription pagination did not advance');
+            startingAfter = nextStartingAfter;
+          }
+          if (!subscriptionsComplete) throw new Error('Stripe subscription history exceeds the supported pagination limit');
           const seen = new Set<string>();
-          const providerSubscriptions = currentStripeSubscriptions.data.filter((subscription) => stripeObjectId(subscription.customer) === customerId);
+          const providerSubscriptions = currentStripeSubscriptions.filter((subscription) => stripeObjectId(subscription.customer) === customerId);
           for (const subscription of providerSubscriptions) seen.add(subscription.id);
           const missingSubscriptions = stripeSubscriptions.filter((subscription) => !seen.has(subscription.subscriptionId));
           const reconciledSubscriptions = await Promise.all(missingSubscriptions.map((subscription) =>
