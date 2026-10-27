@@ -63,7 +63,7 @@ Object.assign(process.env, {
 
 const { config } = await import('#config.js');
 const { artifactKeyForAppStore, closeArtifactDatabase, promoteArtifact } = await import('#artifacts.js');
-const { closeBillingDatabase } = await import('#billing.js');
+const { closeBillingDatabase, createBillingAccessCode, redeemBillingAccessCode } = await import('#billing.js');
 const { closeIdentityDatabase } = await import('#identity.js');
 const { closeIdempotencyDatabase } = await import('#idempotency.js');
 const { cancelQueuedJob, closeJobStore } = await import('#jobs/store.js');
@@ -140,6 +140,13 @@ try {
   await Promise.all(eventStreams.map((reader) => reader.cancel()));
   streamControllers.forEach((controller) => controller.abort());
   streamControllers.length = 0;
+
+  for (let index = 0; index < 16; index += 1) {
+    const created = createBillingAccessCode({ planId: 'standard', durationDays: 1, redeemWithinDays: 1, createdBy: 'root' });
+    assert.ok(created);
+    const redeemed = redeemBillingAccessCode(created.code, `load-test-user-${index}`);
+    assert.ok('accessCode' in redeemed);
+  }
 
   const artifactBytes = Buffer.alloc(256 * 1024, 0x6b);
   await writeFile(stagedArtifactPath, artifactBytes);
