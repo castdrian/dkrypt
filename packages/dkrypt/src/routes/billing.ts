@@ -7,6 +7,7 @@ import type {
   BillingAccessCodeRedeemRoute,
   BillingAccessCodeRevokeRoute,
   BillingCancelRoute,
+  BillingPauseRoute,
   BillingCheckoutControlRoute,
   BillingCheckoutRoute,
   BillingProviderStatusRoute,
@@ -78,6 +79,8 @@ function metadataUserId(metadata: unknown): string | undefined {
   const value = (metadata as Record<string, unknown>).dkrypt_user_id;
   return typeof value === 'string' && value.length <= 160 ? resolveAuthUserId(value) : undefined;
 }
+
+const stripePaymentMethodStatusCache = new Map<string, { expiresAt: number; value: Record<string, unknown> }>();
 
 function sendBillingError(request: FastifyRequest, reply: FastifyReply, statusCode: number, message: string, code?: string) {
   return reply.code(statusCode).send({
@@ -261,6 +264,7 @@ function persistStripeSubscription(subscription: Stripe.Subscription, occurredAt
     : subscription.cancel_at_period_end
       ? unixDate(item.current_period_end)
       : undefined;
+  const pauseResumesAt = unixDate(subscription.pause_collection?.resumes_at);
   const existing = getBillingSubscriptionById(subscription.id);
   const refundRevoked = existing?.provider === 'stripe' && existing.status === 'revoked' && existing.failureReason === 'payment refunded';
 
@@ -277,10 +281,13 @@ function persistStripeSubscription(subscription: Stripe.Subscription, occurredAt
     nextBilledAt: refundRevoked || scheduledChangeAction ? undefined : unixDate(item.current_period_end),
     scheduledChangeAction,
     scheduledChangeAt,
+    paused: !refundRevoked && Boolean(subscription.pause_collection),
+    pauseResumesAt: !refundRevoked ? pauseResumesAt : undefined,
     failureReason: refundRevoked ? 'payment refunded' : undefined,
     occurredAt,
     updatedAt,
   });
+  stripePaymentMethodStatusCache.delete(subscription.id);
 }
 
 async function reconcileStripeSubscription(subscriptionId: string, stripeClient?: Stripe, eventOccurredAt?: string, fallbackUserId?: string): Promise<void> {
@@ -533,6 +540,58 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     decryptCreditPriceLookup = lookup;
     return lookup;
   };
+  const getPaymentMethodStatus = async (userId: string, subscriptionId: string | undefined): Promise<Record<string, unknown> | undefined> => {
+    if (!stripeEnabled || !subscriptionId) return undefined;
+    const cached = stripePaymentMethodStatusCache.get(subscriptionId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const billingSubscription = getBillingSubscription(userId, subscriptionId);
+    if (!billingSubscription || billingSubscription.provider !== 'stripe') return undefined;
+    try {
+      const subscription = await callStripe((client) => client.subscriptions.retrieve(subscriptionId, { expand: ['default_payment_method'] }));
+      let paymentMethod = typeof subscription.default_payment_method === 'object' && subscription.default_payment_method !== null
+        ? subscription.default_payment_method as Stripe.PaymentMethod
+        : undefined;
+      let paymentMethodId = stripeObjectId(subscription.default_payment_method);
+      if (!paymentMethodId) {
+        const customer = await callStripe((client) => client.customers.retrieve(billingSubscription.customerId, { expand: ['invoice_settings.default_payment_method'] }));
+        if (!('deleted' in customer) && customer.invoice_settings.default_payment_method) {
+          paymentMethodId = stripeObjectId(customer.invoice_settings.default_payment_method);
+          if (typeof customer.invoice_settings.default_payment_method === 'object') paymentMethod = customer.invoice_settings.default_payment_method as Stripe.PaymentMethod;
+        }
+      }
+      if (!paymentMethod && paymentMethodId) paymentMethod = await callStripe((client) => client.paymentMethods.retrieve(paymentMethodId!));
+      const card = paymentMethod?.card;
+      const expMonth = card?.exp_month;
+      const expYear = card?.exp_year;
+      const now = new Date();
+      const expired = expMonth !== undefined && expYear !== undefined && (expYear < now.getUTCFullYear() || (expYear === now.getUTCFullYear() && expMonth < now.getUTCMonth() + 1));
+      const nextBilledAt = billingSubscription.nextBilledAt;
+      const expiresBeforeNextBilling = expMonth !== undefined && expYear !== undefined && !!nextBilledAt
+        && Date.parse(nextBilledAt) >= 0
+        && new Date(nextBilledAt).getUTCFullYear() * 12 + new Date(nextBilledAt).getUTCMonth() > expYear * 12 + expMonth - 1;
+      const state = billingSubscription.status === 'past_due' ? 'needs_update'
+        : !paymentMethod ? 'needs_update'
+          : expired ? 'expired'
+            : expiresBeforeNextBilling ? 'expiring'
+              : 'ready';
+      const value = {
+        state,
+        ...(card?.brand ? { brand: card.brand } : {}),
+        ...(card?.last4 ? { last4: card.last4 } : {}),
+        ...(expMonth ? { expMonth } : {}),
+        ...(expYear ? { expYear } : {}),
+        ...(card ? { expiresBeforeNextBilling } : {}),
+        ...(nextBilledAt ? { nextBilledAt } : {}),
+      };
+      stripePaymentMethodStatusCache.set(subscriptionId, { value, expiresAt: Date.now() + 180_000 });
+      return value;
+    } catch (error) {
+      log.warn('Stripe payment method status lookup failed', { userId, subscriptionId, error: String(error) });
+      const value = { state: 'unavailable' };
+      stripePaymentMethodStatusCache.set(subscriptionId, { value, expiresAt: Date.now() + 30_000 });
+      return value;
+    }
+  };
   server.get('/v1/billing/usage.csv', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const rows = getDecryptQuotaJournal(userId);
@@ -664,6 +723,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const profile = getAuthProfile(userId);
     const entitlement = getBillingEntitlements(userId);
+    const paymentMethod = await getPaymentMethodStatus(userId, entitlement.provider === 'stripe' ? entitlement.subscriptionId : undefined);
     const quota = getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
     const credits = getDecryptCreditBalance(userId);
     const decryptCreditPriceOffer = entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
@@ -689,6 +749,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       currentPlan: getPlan(entitlement.planId),
       customerId: getBillingCustomerId(userId),
       customerEmail: profile?.email,
+      paymentMethod,
       legacyBilling: hasLegacyBillingRecord(userId),
       entitlement,
       quota,
@@ -855,6 +916,59 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     } catch (error) {
       log.error('Stripe subscription cancellation failed', { userId, subscriptionId: subscription.subscriptionId, error: String(error) });
       return sendBillingError(request, reply, 502, 'could not cancel the subscription');
+    }
+  });
+
+  server.post<BillingPauseRoute>('/v1/billing/pause', { schema: getRouteContract('POST', '/v1/billing/pause'), preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const idempotencyKey = getBillingIdempotencyKey(request, reply, userId, 'pause');
+    if (!idempotencyKey) return;
+    const entitlement = getBillingEntitlements(userId);
+    if (entitlement.provider !== 'stripe' || !entitlement.subscriptionId) return sendBillingError(request, reply, 409, 'Only an active Stripe subscription can be paused');
+    const subscription = getBillingSubscription(userId, entitlement.subscriptionId);
+    if (!subscription || subscription.provider !== 'stripe') return sendBillingError(request, reply, 404, 'subscription does not belong to this account');
+    if (subscription.status === 'past_due') return sendBillingError(request, reply, 409, 'Resolve the overdue Stripe invoice before pausing billing');
+    if (!['active', 'trialing'].includes(subscription.status)) return sendBillingError(request, reply, 409, 'Only an active Stripe subscription can be paused');
+    if (subscription.scheduledChangeAction === 'cancel') return sendBillingError(request, reply, 409, 'Remove the scheduled cancellation before pausing this subscription');
+    const resumeAtMs = Date.parse(request.body.resumeAt);
+    if (!Number.isFinite(resumeAtMs) || resumeAtMs < Date.now() + 86_400_000 || resumeAtMs > Date.now() + 365 * 86_400_000) {
+      return sendBillingError(request, reply, 400, 'Choose a resume date between 1 day and 1 year from now');
+    }
+    if (!requireStripeBilling(request, reply)) return;
+    try {
+      const resumeAt = new Date(Math.floor(resumeAtMs / 1000) * 1000).toISOString();
+      const updated = await callStripe((client) => client.subscriptions.update(subscription.subscriptionId, {
+        pause_collection: { behavior: 'void', resumes_at: Math.floor(resumeAtMs / 1000) },
+      }, { idempotencyKey }));
+      persistStripeSubscription(updated, new Date().toISOString(), userId);
+      stripePaymentMethodStatusCache.delete(subscription.subscriptionId);
+      recordAudit(userId, 'billing.pause', subscription.subscriptionId, `Stripe billing and dkrypt access paused until ${resumeAt}; invoices are voided during the pause`);
+      return reply.send({ success: true, status: updated.status, provider: 'stripe', idempotencyKey, pauseResumesAt: resumeAt });
+    } catch (error) {
+      log.error('Stripe subscription pause failed', { userId, subscriptionId: subscription.subscriptionId, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not pause the subscription');
+    }
+  });
+
+  server.post<BillingCancelRoute>('/v1/billing/resume', { schema: getRouteContract('POST', '/v1/billing/resume'), preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const idempotencyKey = getBillingIdempotencyKey(request, reply, userId, 'resume');
+    if (!idempotencyKey) return;
+    const entitlement = getBillingEntitlements(userId);
+    if (entitlement.provider !== 'stripe' || !entitlement.subscriptionId) return sendBillingError(request, reply, 409, 'No paused Stripe subscription is available to resume');
+    const subscription = getBillingSubscription(userId, entitlement.subscriptionId);
+    if (!subscription || subscription.provider !== 'stripe') return sendBillingError(request, reply, 404, 'subscription does not belong to this account');
+    if (!subscription.paused) return reply.send({ success: true, status: subscription.status, provider: 'stripe', idempotencyKey });
+    if (!requireStripeBilling(request, reply)) return;
+    try {
+      const updated = await callStripe((client) => client.subscriptions.update(subscription.subscriptionId, { pause_collection: '' }, { idempotencyKey }));
+      persistStripeSubscription(updated, new Date().toISOString(), userId);
+      stripePaymentMethodStatusCache.delete(subscription.subscriptionId);
+      recordAudit(userId, 'billing.resume', subscription.subscriptionId, 'Stripe billing resumed; new invoices follow the existing subscription schedule');
+      return reply.send({ success: true, status: updated.status, provider: 'stripe', idempotencyKey });
+    } catch (error) {
+      log.error('Stripe subscription resume failed', { userId, subscriptionId: subscription.subscriptionId, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not resume the subscription');
     }
   });
 

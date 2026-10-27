@@ -59,6 +59,7 @@ export interface BillingSubscription {
   failureReason?: string;
   graceUntil?: string;
   paused?: boolean;
+  pauseResumesAt?: string;
   flagged?: boolean;
   taxAddress?: BillingTaxAddress;
   taxStatus?: BillingTaxStatus;
@@ -123,7 +124,7 @@ export interface BillingEntitlementEvent {
   subscriptionId: string;
   provider: BillingProvider;
   planId: Exclude<PlanId, 'viewer'>;
-  kind: 'grant' | 'renewal' | 'pause' | 'failure' | 'cancellation' | 'revocation';
+  kind: 'grant' | 'renewal' | 'pause' | 'resume' | 'failure' | 'cancellation' | 'revocation';
   status: string;
   at: string;
   detail?: string;
@@ -174,6 +175,8 @@ export interface BillingEntitlements {
   provider?: BillingProvider | 'gift';
   status?: string;
   subscriptionId?: string;
+  paused?: boolean;
+  pauseResumesAt?: string;
   accessCodeId?: string;
   expiresAt?: string;
   nextBilledAt?: string;
@@ -340,7 +343,10 @@ export function planForPrice(priceId: string): Exclude<PlanId, 'viewer'> | undef
 }
 
 export function isBillingSubscriptionActive(subscription: BillingSubscription, now = Date.now()): boolean {
-  if (subscription.provider === 'stripe') return stripeActiveStatuses.has(subscription.status);
+  if (subscription.provider === 'stripe') {
+    if (subscription.paused && (!subscription.pauseResumesAt || Date.parse(subscription.pauseResumesAt) > now)) return false;
+    return stripeActiveStatuses.has(subscription.status);
+  }
   if (subscription.provider !== 'nowpayments') return false;
   if (subscription.status === 'active' && !subscription.flagged && !subscription.paused) return true;
   return subscription.status === 'past_due' && !!subscription.graceUntil && Date.parse(subscription.graceUntil) > now;
@@ -570,8 +576,14 @@ function hashBillingAccessCode(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function hasActiveBillingSubscription(userId: string): boolean {
-  return billingRepository.listSubscriptions({ userId }).some((subscription) => isBillingSubscriptionActive(subscription));
+export function hasActiveBillingSubscription(userId: string, now = Date.now()): boolean {
+  return billingRepository.listSubscriptions({ userId }).some((subscription) => {
+    if (isBillingSubscriptionActive(subscription, now)) return true;
+    return subscription.provider === 'stripe'
+      && subscription.paused === true
+      && (!subscription.pauseResumesAt || Date.parse(subscription.pauseResumesAt) > now)
+      && stripeActiveStatuses.has(subscription.status);
+  });
 }
 
 export function acquireBillingCheckoutLock(userId: string): boolean {
@@ -643,7 +655,23 @@ export function mergeBillingAccounts(targetUserId: string, sourceUserId: string)
 
 export function resolveBillingEntitlements(subscriptions: BillingSubscription[]): BillingEntitlements {
   const activeSubscriptions = subscriptions.filter((subscription) => isBillingSubscriptionActive(subscription));
-  if (activeSubscriptions.length === 0) return { planId: 'viewer', decrypt: false, api: false, priority: 0 };
+  if (activeSubscriptions.length === 0) {
+    const paused = subscriptions
+      .filter((subscription) => subscription.provider === 'stripe' && subscription.paused && (!subscription.pauseResumesAt || Date.parse(subscription.pauseResumesAt) > Date.now()) && stripeActiveStatuses.has(subscription.status))
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+    if (paused) return {
+      planId: paused.planId,
+      decrypt: false,
+      api: false,
+      priority: 0,
+      provider: paused.provider,
+      status: paused.status,
+      subscriptionId: paused.subscriptionId,
+      paused: true,
+      pauseResumesAt: paused.pauseResumesAt,
+    };
+    return { planId: 'viewer', decrypt: false, api: false, priority: 0 };
+  }
 
   const definitions = activeSubscriptions
     .map((subscription) => ({
@@ -668,6 +696,8 @@ export function resolveBillingEntitlements(subscriptions: BillingSubscription[])
     provider: strongest.subscription.provider,
     status: strongest.subscription.status,
     subscriptionId: strongest.subscription.subscriptionId,
+    paused: strongest.subscription.paused === true && !!strongest.subscription.pauseResumesAt && Date.parse(strongest.subscription.pauseResumesAt) > Date.now(),
+    pauseResumesAt: strongest.subscription.pauseResumesAt,
     nextBilledAt: strongest.subscription.nextBilledAt,
     scheduledChangeAction: strongest.subscription.scheduledChangeAction,
     scheduledChangeAt: strongest.subscription.scheduledChangeAt,
@@ -787,6 +817,7 @@ export function replaceBillingSnapshot(snapshot: BillingSnapshot | { customers: 
 
 function entitlementEventKind(previous: BillingSubscription | undefined, next: BillingSubscription): BillingEntitlementEvent['kind'] | undefined {
   if (!previous) return 'grant';
+  if (previous.paused !== next.paused) return next.paused ? 'pause' : 'resume';
   if (previous.status !== next.status) {
     if (next.status === 'cancelled' || next.status === 'canceled') return 'cancellation';
     if (next.status === 'past_due' || next.lastChargeStatus === 'failed') return 'failure';
@@ -864,6 +895,7 @@ function normalizeBillingSnapshot(value: unknown): BillingSnapshot | undefined {
       failureReason: optionalString(record.failureReason),
       graceUntil: optionalString(record.graceUntil),
       paused: optionalBoolean(record.paused),
+      pauseResumesAt: optionalString(record.pauseResumesAt),
       flagged: optionalBoolean(record.flagged),
       taxAddress: taxAddress(record.taxAddress),
       taxStatus: billingTaxStatus(record.taxStatus),
@@ -1015,5 +1047,5 @@ function isBillingEvent(value: unknown): value is BillingEventRecord {
 function isEntitlementEvent(value: unknown): value is BillingEntitlementEvent {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.id === 'string' && typeof record.subscriptionId === 'string' && billingProvider(record.provider) !== undefined && typeof record.planId === 'string' && planDefinitions.some((plan) => plan.id === record.planId) && ['grant', 'renewal', 'pause', 'failure', 'cancellation', 'revocation'].includes(String(record.kind)) && typeof record.status === 'string' && typeof record.at === 'string';
+  return typeof record.id === 'string' && typeof record.subscriptionId === 'string' && billingProvider(record.provider) !== undefined && typeof record.planId === 'string' && planDefinitions.some((plan) => plan.id === record.planId) && ['grant', 'renewal', 'pause', 'resume', 'failure', 'cancellation', 'revocation'].includes(String(record.kind)) && typeof record.status === 'string' && typeof record.at === 'string';
 }

@@ -1,12 +1,75 @@
 import { appendActionOutput, createApiClient, downloadVerifiedArtifact, validateOrigin } from './action-lib.mjs';
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import { publishVerifiedIpaToGitHubRelease } from './github-release.mjs';
 
 const BUNDLE_ID_RE = /^[A-Za-z0-9.-]{3,200}$/;
+
+function parseDkryptLock(contents) {
+  let lock;
+  try {
+    lock = JSON.parse(contents);
+  } catch {
+    throw new Error('dkrypt.lock must contain valid JSON');
+  }
+  if (!lock || lock.version !== 1 || !lock.apps || typeof lock.apps !== 'object' || Array.isArray(lock.apps)) {
+    throw new Error('dkrypt.lock must use version 1 with an apps object');
+  }
+  for (const [bundleId, entry] of Object.entries(lock.apps)) {
+    if (!BUNDLE_ID_RE.test(bundleId) || !entry || typeof entry !== 'object'
+      || !['appstore', 'testflight'].includes(entry.source)
+      || typeof entry.resolvedVersion !== 'string' || !entry.resolvedVersion.trim()
+      || (entry.build !== undefined && typeof entry.build !== 'string')) {
+      throw new Error(`dkrypt.lock has an invalid entry for ${bundleId}`);
+    }
+  }
+  return lock;
+}
+
+async function loadDkryptLock(config) {
+  const file = config.lockfile?.trim();
+  if (!file) {
+    if (isEnabled(config.updateLockfile)) throw new Error('lockfile is required when update-lockfile is enabled');
+    return undefined;
+  }
+  const lockPath = path.resolve(file);
+  try {
+    return { path: lockPath, value: parseDkryptLock(await readFile(lockPath, 'utf8')) };
+  } catch (error) {
+    if (error?.code === 'ENOENT' && isEnabled(config.updateLockfile)) return { path: lockPath, value: { version: 1, apps: {} } };
+    throw error;
+  }
+}
+
+async function writeDkryptLockEntry(config, bundleId, source, resolvedVersion, build) {
+  const loaded = await loadDkryptLock({ ...config, updateLockfile: true });
+  if (!loaded) throw new Error('lockfile is required when update-lockfile is enabled');
+  const apps = { ...loaded.value.apps };
+  apps[bundleId] = { source, resolvedVersion, ...(build ? { build: String(build) } : {}) };
+  const lock = { version: 1, apps: Object.fromEntries(Object.entries(apps).sort(([left], [right]) => left.localeCompare(right))) };
+  const temporaryPath = `${loaded.path}.${process.pid}.${randomUUID()}.tmp`;
+  await mkdir(path.dirname(loaded.path), { recursive: true });
+  await writeFile(temporaryPath, `${JSON.stringify(lock, null, 2)}\n`, { flag: 'wx' });
+  await rename(temporaryPath, loaded.path);
+}
+
+async function resolveLockedRelease(config, bundleId) {
+  const loaded = await loadDkryptLock(config);
+  const updateLockfile = isEnabled(config.updateLockfile);
+  const entry = updateLockfile ? undefined : loaded?.value.apps[bundleId];
+  if (loaded && !entry && !updateLockfile) throw new Error(`dkrypt.lock has no entry for ${bundleId}`);
+  if (entry && config.channel?.trim() && config.channel.trim() !== entry.source) throw new Error(`channel conflicts with the dkrypt.lock entry for ${bundleId}`);
+  if (entry && config.version?.trim() && config.version.trim() !== entry.resolvedVersion) throw new Error(`version conflicts with the dkrypt.lock entry for ${bundleId}`);
+  return {
+    channel: entry?.source ?? config.channel?.trim() ?? 'appstore',
+    version: entry?.resolvedVersion ?? config.version?.trim() ?? '',
+    entry,
+    updateLockfile,
+  };
+}
 
 function validatePositiveInteger(value, label, maximum) {
   const parsed = Number(value);
@@ -118,6 +181,9 @@ async function runSingleAction(config, dependencies = {}) {
   if (artifactModeCount > 0 && (config.bundleId?.trim() || config.version?.trim())) {
     throw new Error('artifact downloads cannot be combined with bundle-id or version');
   }
+  if (artifactModeCount > 0 && (config.lockfile?.trim() || isEnabled(config.updateLockfile))) {
+    throw new Error('lockfile inputs can only be used with a new decrypt or resolve-only request');
+  }
   if (resolveOnly && artifactModeCount > 0) throw new Error('resolve-only cannot be combined with artifact download inputs');
   if (resolveOnly && publishToRelease) throw new Error('publish-to-release requires a downloaded IPA and cannot be combined with resolve-only');
   if (latestCachedChannel && !['appstore', 'testflight'].includes(latestCachedChannel)) {
@@ -152,8 +218,9 @@ async function runSingleAction(config, dependencies = {}) {
   } else {
     const bundleId = (config.bundleId ?? '').trim();
     if (!BUNDLE_ID_RE.test(bundleId)) throw new Error('Provide a valid app bundle ID');
-    const channel = config.channel ?? 'appstore';
-    const version = config.version?.trim();
+    const locked = await resolveLockedRelease(config, bundleId);
+    const channel = locked.channel;
+    const version = locked.version || undefined;
     if (!['appstore', 'testflight'].includes(channel)) throw new Error('channel must be appstore or testflight');
     if (summaryContext) Object.assign(summaryContext, { bundleId, channel, version: version ?? '' });
     if (channel === 'testflight' && version && !version.includes('_')) throw new Error('TestFlight versions must include a build number, or leave version empty to resolve the latest build');
@@ -173,6 +240,10 @@ async function runSingleAction(config, dependencies = {}) {
         throw new Error('dkrypt did not return valid resolved release metadata');
       }
       const build = job.build ?? '';
+      if (locked.entry && (job.resolvedVersion !== locked.entry.resolvedVersion || (locked.entry.build && String(build) !== locked.entry.build))) {
+        throw new Error(`resolved release does not match the dkrypt.lock entry for ${bundleId}`);
+      }
+      if (locked.updateLockfile) await writeDkryptLockEntry(config, bundleId, job.channel, job.resolvedVersion, build);
       const outputs = {
         'job-id': '',
         'artifact-id': job.artifact?.id ?? '',
@@ -238,6 +309,12 @@ async function runSingleAction(config, dependencies = {}) {
     artifact = { ...artifact, ...metadata };
   }
   if (!['appstore', 'testflight'].includes(artifact.channel)) throw new Error('dkrypt returned an invalid artifact channel');
+  if (!artifactModeCount && config.bundleId?.trim()) {
+    const locked = await resolveLockedRelease(config, config.bundleId.trim());
+    if (locked.entry && (artifact.channel !== locked.entry.source || artifact.versionLabel !== locked.entry.resolvedVersion || (locked.entry.build && String(artifact.buildNumber ?? '') !== locked.entry.build))) {
+      throw new Error(`downloaded artifact does not match the dkrypt.lock entry for ${config.bundleId.trim()}`);
+    }
+  }
   if (summaryContext) Object.assign(summaryContext, {
     bundleId: artifact.bundleId,
     version: artifact.versionLabel ?? '',
@@ -266,6 +343,11 @@ async function runSingleAction(config, dependencies = {}) {
     retryBaseMs: dependencies.retryBaseMs,
     retryMaxMs: dependencies.retryMaxMs,
   });
+
+  if (!artifactModeCount && config.bundleId?.trim()) {
+    const locked = await resolveLockedRelease(config, config.bundleId.trim());
+    if (locked.updateLockfile) await writeDkryptLockEntry(config, artifact.bundleId, artifact.channel, artifact.versionLabel, artifact.buildNumber);
+  }
 
   const release = publishToRelease
     ? await (dependencies.publishRelease ?? publishVerifiedIpaToGitHubRelease)({
@@ -471,7 +553,9 @@ async function main() {
     bundleId: process.env.DKRYPT_BUNDLE_ID ?? '',
     bundleIds: process.env.DKRYPT_BUNDLE_IDS ?? '',
     version: process.env.DKRYPT_VERSION ?? '',
-    channel: process.env.DKRYPT_CHANNEL ?? 'appstore',
+    channel: process.env.DKRYPT_CHANNEL ?? '',
+    lockfile: process.env.DKRYPT_LOCKFILE ?? '',
+    updateLockfile: process.env.DKRYPT_UPDATE_LOCKFILE ?? '',
     output: process.env.DKRYPT_OUTPUT ?? '',
     artifactId: process.env.DKRYPT_ARTIFACT_ID ?? '',
     latestCachedChannel: process.env.DKRYPT_LATEST_CACHED_CHANNEL ?? '',

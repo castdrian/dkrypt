@@ -1051,8 +1051,33 @@ export function runBridgeAction(id: string, action: 'open-testflight' | 'open-ap
   return apiAction(`/v1/dashboard/devices/${encodeURIComponent(id)}/bridge-action`, { method: 'POST', body: JSON.stringify({ action }) }, 'Bridge action completed');
 }
 
-export function recoverDevice(id: string): Promise<{ ok: boolean; data?: DeviceHealth }> {
+export interface DeviceRecoveryOperation {
+  id: string;
+  deviceId: string;
+  action: 'springboard-reload';
+  status: 'queued' | 'running' | 'verifying' | 'complete' | 'failed' | 'interrupted';
+  stage: string;
+  stages: Array<{ label: string; at: number; status: 'running' | 'complete' | 'failed' }>;
+  commandExitCode?: number;
+  reachable?: boolean;
+  agentReady?: boolean;
+  springboardReady?: boolean;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export function recoverDevice(id: string): Promise<{ ok: boolean; data?: { ok: true; operation: DeviceRecoveryOperation } }> {
   return apiAction(`/v1/dashboard/devices/${encodeURIComponent(id)}/recover`, { method: 'POST' });
+}
+
+export function fetchDeviceRecoveryOperations(id: string): Promise<{ operations: DeviceRecoveryOperation[] }> {
+  return apiJson(`/v1/dashboard/devices/${encodeURIComponent(id)}/recoveries`);
+}
+
+export function fetchDeviceRecoveryOperation(id: string, operationId: string): Promise<{ ok: true; operation: DeviceRecoveryOperation }> {
+  return apiJson(`/v1/dashboard/devices/${encodeURIComponent(id)}/recoveries/${encodeURIComponent(operationId)}`);
 }
 
 export interface WebhookDeliveryEntry {
@@ -2239,8 +2264,19 @@ export function validateCron(expr: string): Promise<{ valid: boolean }> {
   return apiJson(`/v1/dashboard/settings/validate-cron?expr=${encodeURIComponent(expr)}`);
 }
 
-export function testWebhook(url?: string): Promise<{ ok: boolean; data: { ok: boolean; error?: string } }> {
-  return apiAction('/v1/dashboard/settings/test-webhook', { method: 'POST', body: JSON.stringify({ url }) });
+export interface WebhookTestResult {
+  ok: boolean;
+  error?: string;
+  status?: number;
+  durationMs: number;
+  eventId?: string;
+  targetHost?: string;
+  signatureIncluded?: boolean;
+  signatureAcknowledged?: boolean;
+}
+
+export function testWebhook(url?: string): Promise<{ ok: boolean; data: WebhookTestResult }> {
+  return apiAction('/v1/dashboard/settings/test-webhook', { method: 'POST', body: JSON.stringify({ url }) }, undefined, true);
 }
 
 export interface TestFlightUpdateCheck {

@@ -193,7 +193,7 @@ Public API responses include `X-Dkrypt-API-Version: 1`. The [compatibility polic
 GitHub workflows can use the [dkrypt decrypt action](action.yml) to submit a decrypt, wait for its result, and download the IPA. Pin a released version:
 
 ```yaml
-- uses: castdrian/dkrypt@v1.2.0
+- uses: castdrian/dkrypt@v1.3.0
   id: decrypt
   with:
     api-key: ${{ secrets.DKRYPT_API_KEY }}
@@ -205,6 +205,21 @@ The action verifies the downloaded IPA’s SHA-256 and byte count against dkrypt
 Set `channel: testflight` and omit `version` to resolve the latest available TestFlight build. Set `version` to an exact selector such as `352.0_118977` to request a specific build. To download an existing result without submitting a decrypt, pass `artifact-id` or `latest-cached-channel: testflight` (or `appstore`). These artifact modes are mutually exclusive with each other and with a new decrypt request. Use an API key with decrypt and artifact access, and TestFlight scope when requesting TestFlight builds.
 
 Set `resolve-only: 'true'` to return the matching release version, build, channel, and cache status without creating a job or downloading an IPA. To process several apps in one step, pass `bundle-ids` as a JSON array; the action records per-app outcomes in `results-json`, adds a workflow summary table, and fails the step if any app fails. The output `path` for each successful download is included in that app’s result.
+
+Use `lockfile: dkrypt.lock` to pin each app to its resolved source, version, and build. The file is JSON with a `version` value of `1` and an `apps` object keyed by bundle ID. Run the action with `update-lockfile: 'true'` and `resolve-only: 'true'` to resolve the selected releases and write their exact metadata; check the resulting `dkrypt.lock` into the repository. Later runs read the pin, reject conflicting `channel` or `version` inputs, and verify the resolved artifact’s source, version, and build before downloading it. `bundle-ids` uses the same per-app lock entries.
+
+```json
+{
+  "version": 1,
+  "apps": {
+    "com.example.app": {
+      "source": "testflight",
+      "resolvedVersion": "352.0_118977",
+      "build": "118977"
+    }
+  }
+}
+```
 
 For independent jobs per app, use a GitHub Actions matrix:
 
@@ -222,7 +237,7 @@ jobs:
           - com.example.app
           - com.example.another
     steps:
-      - uses: castdrian/dkrypt@v1.2.0
+      - uses: castdrian/dkrypt@v1.3.0
         id: decrypt
         with:
           api-key: ${{ secrets.DKRYPT_API_KEY }}
@@ -242,7 +257,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: castdrian/dkrypt@v1.2.0
+      - uses: castdrian/dkrypt@v1.3.0
         with:
           api-key: ${{ secrets.DKRYPT_API_KEY }}
           bundle-id: com.example.app

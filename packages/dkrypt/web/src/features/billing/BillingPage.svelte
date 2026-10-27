@@ -49,6 +49,8 @@
     provider?: 'stripe' | 'nowpayments' | 'legacy' | 'gift';
     status?: string;
     subscriptionId?: string;
+    paused?: boolean;
+    pauseResumesAt?: string;
     expiresAt?: string;
     accessCodeId?: string;
     nextBilledAt?: string;
@@ -69,6 +71,15 @@
     currentPlan?: Plan;
     customerId?: string;
     customerEmail?: string;
+    paymentMethod?: {
+      state: 'ready' | 'expiring' | 'expired' | 'needs_update' | 'unavailable';
+      brand?: string;
+      last4?: string;
+      expMonth?: number;
+      expYear?: number;
+      expiresBeforeNextBilling?: boolean;
+      nextBilledAt?: string;
+    };
     legacyBilling: boolean;
     entitlement: Entitlement;
     quota: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number };
@@ -97,6 +108,12 @@
   let openingPlan = $state<PlanId | undefined>();
   let openingPortal = $state(false);
   let cancelling = $state(false);
+  let pausing = $state(false);
+  let resuming = $state(false);
+  let pausePickerOpen = $state(false);
+  let pauseResumeDate = $state(getPauseDateDefault());
+  let pauseIdempotencyKey = $state<string | undefined>();
+  let resumeIdempotencyKey = $state<string | undefined>();
   let accessCode = $state('');
   let redeemingAccessCode = $state(false);
   let cancelIdempotencyKey = $state<string | undefined>();
@@ -265,6 +282,69 @@
       location.assign(data.url);
     } finally {
       openingPortal = false;
+    }
+  }
+
+  function getPauseDateDefault(): string {
+    const date = new Date();
+    date.setDate(date.getDate() + 7);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  function getPauseDateMinimum(): string {
+    const date = new Date();
+    date.setDate(date.getDate() + 2);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  function getPauseDateMaximum(): string {
+    const date = new Date();
+    date.setDate(date.getDate() + 365);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  async function pauseSubscription(): Promise<void> {
+    if (!pauseResumeDate || !billing?.entitlement.subscriptionId) return;
+    const resumeAt = new Date(`${pauseResumeDate}T12:00:00`).toISOString();
+    if (!(await confirmDialog(`Pause access and billing now? Invoices generated during the pause will be voided. Access resumes on ${formatDate(resumeAt)}, and Stripe continues at the next scheduled renewal without catching up for skipped invoices.`, { confirmLabel: 'Pause subscription' }))) return;
+    pausing = true;
+    pauseIdempotencyKey ??= crypto.randomUUID();
+    try {
+      const response = await fetch('/v1/billing/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pauseIdempotencyKey },
+        body: JSON.stringify({ resumeAt }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        showToast(data.error ?? "Couldn't pause the subscription", 'error');
+        return;
+      }
+      pausePickerOpen = false;
+      pauseIdempotencyKey = undefined;
+      showToast('Subscription paused; access will resume on the selected date.', 'success');
+      await refreshAfterCheckout();
+    } finally {
+      pausing = false;
+    }
+  }
+
+  async function resumeSubscription(): Promise<void> {
+    if (!billing?.entitlement.subscriptionId) return;
+    resuming = true;
+    resumeIdempotencyKey ??= crypto.randomUUID();
+    try {
+      const response = await fetch('/v1/billing/resume', { method: 'POST', headers: { 'Idempotency-Key': resumeIdempotencyKey } });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        showToast(data.error ?? "Couldn't resume the subscription", 'error');
+        return;
+      }
+      resumeIdempotencyKey = undefined;
+      showToast('Subscription resumed. Stripe billing follows the existing renewal schedule.', 'success');
+      await refreshAfterCheckout();
+    } finally {
+      resuming = false;
     }
   }
 
@@ -462,12 +542,15 @@
       </div>
       {#if billing}
         <div class="flex flex-wrap items-center gap-2">
-          <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={statusVariant(billing.entitlement.status)} class="mt-1">{billing.entitlement.provider === 'gift' ? 'Prepaid' : statusLabel(billing.entitlement.status)}</Badge></div>
+          <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={billing.entitlement.paused ? 'outline' : statusVariant(billing.entitlement.status)} class="mt-1">{billing.entitlement.paused ? 'Paused' : billing.entitlement.provider === 'gift' ? 'Prepaid' : statusLabel(billing.entitlement.status)}</Badge></div>
           <Button variant="secondary" loading={accessCheckLoading} onclick={() => void checkAccess()}>Check my access</Button>
-          {#if billing.entitlement.provider === 'stripe' && billing.customerId}<Button variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}><ExternalLink class="h-4 w-4" /> Manage billing</Button>{:else if billing.entitlement.provider === 'nowpayments'}<Button variant="secondary" loading={cancelling} onclick={() => void cancelSubscription()}>Stop crypto renewal</Button>{/if}
+          {#if billing.entitlement.provider === 'stripe' && billing.customerId}<Button variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}><ExternalLink class="h-4 w-4" /> Manage billing</Button>{#if billing.entitlement.paused}<Button variant="secondary" loading={resuming} onclick={() => void resumeSubscription()}>Resume now</Button>{:else}<Button variant="secondary" onclick={() => { pauseResumeDate = getPauseDateDefault(); pausePickerOpen = !pausePickerOpen; }}>Pause billing</Button>{/if}{:else if billing.entitlement.provider === 'nowpayments'}<Button variant="secondary" loading={cancelling} onclick={() => void cancelSubscription()}>Stop crypto renewal</Button>{/if}
         </div>
       {/if}
     </div>
+    {#if billing?.entitlement.paused && billing.entitlement.pauseResumesAt}<div class="mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-sm" role="status"><div class="font-medium">Subscription paused</div><p class="mt-1 text-muted">Paid access resumes {formatDate(billing.entitlement.pauseResumesAt)}. Stripe voids invoices generated during the pause; it does not charge for the paused period later.</p></div>{/if}
+    {#if pausePickerOpen && billing?.entitlement.provider === 'stripe'}<div class="mt-3 rounded-lg border border-border bg-bg/50 p-3"><label for="billing-pause-resume-date" class="text-sm font-medium">Resume access and billing on</label><div class="mt-2 flex flex-wrap items-center gap-2"><input id="billing-pause-resume-date" type="date" min={getPauseDateMinimum()} max={getPauseDateMaximum()} bind:value={pauseResumeDate} class="h-9 rounded-md border border-border bg-bg px-2 text-sm" /><Button size="sm" loading={pausing} disabled={!pauseResumeDate} onclick={() => void pauseSubscription()}>Pause subscription</Button><Button size="sm" variant="ghost" onclick={() => { pausePickerOpen = false; }}>Keep active</Button></div><p class="mt-2 text-xs text-muted">Access ends immediately. Stripe voids invoices during the pause, and billing resumes on the next scheduled renewal after the chosen date.</p></div>{/if}
+    {#if billing?.paymentMethod && billing.paymentMethod.state !== 'ready'}<div class="mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-sm" role="status"><div class="font-medium">{billing.paymentMethod.state === 'unavailable' ? 'Payment method status unavailable' : billing.paymentMethod.state === 'expiring' ? 'Card may expire before your next renewal' : billing.paymentMethod.state === 'expired' ? 'Your payment card has expired' : 'Your subscription needs a valid payment method'}</div><p class="mt-1 text-muted">{#if billing.paymentMethod.brand && billing.paymentMethod.last4}{billing.paymentMethod.brand} ending in {billing.paymentMethod.last4}{#if billing.paymentMethod.expMonth && billing.paymentMethod.expYear} · expires {String(billing.paymentMethod.expMonth).padStart(2, '0')}/{billing.paymentMethod.expYear}{/if}. {/if}{#if billing.paymentMethod.state === 'unavailable'}We couldn’t check your saved payment method just now.{:else}Update your payment details in Stripe to avoid a failed renewal.{/if}</p>{#if billing.paymentMethod.state !== 'unavailable'}<Button class="mt-2" size="sm" variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}>Update payment method</Button>{/if}</div>{/if}
     {#if accessCheckLines}<div class="mt-4 grid gap-2 rounded-xl border border-border bg-bg/40 p-3 sm:grid-cols-3" aria-live="polite">{#each accessCheckLines as line (line.label)}<div class="flex items-start gap-2 text-xs"><span class={line.ok ? 'text-ok' : 'text-warn'}>{#if line.ok}<Check class="size-3.5" />{:else}<CircleX class="size-3.5" />{/if}</span><span><span class="font-medium">{line.label}</span><span class="mt-0.5 block text-muted">{line.detail}</span></span></div>{/each}</div>{/if}
     {#if billing && billing.entitlement.planId !== 'viewer'}
       <div class="mt-4 rounded-xl border border-border bg-bg/50 px-3 py-3 text-sm">

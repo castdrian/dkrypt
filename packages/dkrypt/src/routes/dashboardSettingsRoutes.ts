@@ -17,6 +17,7 @@ import { PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { getEffectiveSettings, previewJobHistoryRetention, updateSettings, type DashboardSettings } from '#store/state.js';
 import { sendHttpErrorEnvelope } from '#util/httpResponse.js';
+import { validatePublicWebhookEndpoint } from '#util/webhookEndpoint.js';
 
 const canViewSettings = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation);
 const canManageAutomation = fastifyRequirePermission(PermissionFlag.manageAutomation);
@@ -163,8 +164,15 @@ export const dashboardSettingsRoutes: FastifyPluginAsyncTypebox = async (server)
       sendHttpErrorEnvelope(reply, request.id, 400, 'webhook test request is malformed');
       return;
     }
-    const url = typeof request.body?.url === 'string' && request.body.url.trim() ? request.body.url.trim() : undefined;
-    const result = await sendTestNotification(url);
+    const requestedUrl = typeof request.body?.url === 'string' && request.body.url.trim() ? request.body.url.trim() : getEffectiveSettings().notifyWebhookUrl;
+    if (!requestedUrl) return reply.code(400).send({ ok: false, error: 'Save a webhook URL before testing it.', durationMs: 0 });
+    let endpoint: { url: string; addresses: string[] };
+    try {
+      endpoint = await validatePublicWebhookEndpoint(requestedUrl);
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: error instanceof Error ? error.message : 'Webhook URL is not safe to test.', durationMs: 0 });
+    }
+    const result = await sendTestNotification(endpoint.url, endpoint.addresses);
     reply.code(result.ok ? 200 : 400);
     return result;
   });

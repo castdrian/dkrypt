@@ -1,6 +1,6 @@
 import { config } from '#config.js';
 import { trackBackgroundWork } from '#backgroundWork.js';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { log } from '#logger.js';
 import { sendMailToAllSubscribed, type MailCategory } from '#mail.js';
 import { sendPushToAllSubscribed, type PushCategory } from '#push.js';
@@ -124,14 +124,15 @@ function webhookSigningConfigError(): string | undefined {
   return 'outbound webhook signing rotation is invalid: current and previous secrets must be distinct and at least 16 characters';
 }
 
-function webhookHeaders(event: string, payload: Record<string, unknown>): Record<string, string> {
+function webhookHeaders(event: string, payload: Record<string, unknown>, eventId: string): Record<string, string> {
   const signingConfigError = webhookSigningConfigError();
   if (signingConfigError) throw new Error(signingConfigError);
-  if (!config.outboundWebhookSecret) return {};
+  if (!config.outboundWebhookSecret) return { 'X-Dkrypt-Event': event, 'X-Dkrypt-Event-Id': eventId };
   const timestamp = new Date().toISOString();
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
     'X-Dkrypt-Event': event,
+    'X-Dkrypt-Event-Id': eventId,
     'X-Dkrypt-Timestamp': timestamp,
     'X-Dkrypt-Signature': webhookSignature(config.outboundWebhookSecret, timestamp, body),
   };
@@ -147,6 +148,17 @@ function targetHost(url: string): string {
   } catch {
     return 'invalid-url';
   }
+}
+
+function redactWebhookError(error: string | undefined, url: string): string | undefined {
+  if (!error) return undefined;
+  let redacted = error.replaceAll(url, 'webhook endpoint');
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname !== '/') redacted = redacted.replaceAll(parsed.pathname, '/[redacted]');
+    if (parsed.search) redacted = redacted.replaceAll(parsed.search, '');
+  } catch {}
+  return redacted;
 }
 
 function isWithinQuietHours(now: Date, start: string, end: string): boolean {
@@ -187,10 +199,11 @@ async function postWebhook(
   const payload = buildPayload(embed, format);
   let result;
   try {
-    result = await postJsonWithRetry(url, payload, webhookHeaders(event, payload));
+    result = await postJsonWithRetry(url, payload, webhookHeaders(event, payload, randomUUID()));
   } catch (error) {
     result = { ok: false, error: String(error), durationMs: 0 };
   }
+  result = { ...result, error: redactWebhookError(result.error, url) };
   recordWebhookDelivery({
     kind: event === 'jobCompleted' ? 'job' : 'automation',
     event,
@@ -294,17 +307,34 @@ export async function stopNotificationDigestScheduler(): Promise<void> {
   await flushNotificationDigests();
 }
 
-export async function sendTestNotification(urlOverride?: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendTestNotification(urlOverride?: string, pinnedAddresses?: readonly string[]): Promise<{ ok: boolean; error?: string; status?: number; durationMs: number; eventId?: string; targetHost?: string; signatureIncluded?: boolean; signatureAcknowledged?: boolean }> {
   const settings = getEffectiveSettings();
   const url = urlOverride || settings.notifyWebhookUrl;
-  if (!url) return { ok: false, error: 'no webhook URL configured' };
+  if (!url) return { ok: false, error: 'no webhook URL configured', durationMs: 0 };
 
   const payload = buildPayload(
     { title: 'Test notification', description: 'This is what a notification from dkrypt looks like.', color: EMBED_COLOR.info },
     settings.notifyFormat,
   );
   const signingConfigError = webhookSigningConfigError();
-  if (signingConfigError) return { ok: false, error: signingConfigError };
-  const result = await postJsonWithRetry(url, payload, webhookHeaders('testNotification', payload));
-  return result.ok ? { ok: true } : { ok: false, error: result.error ?? `webhook returned HTTP ${result.status}` };
+  if (signingConfigError) return { ok: false, error: signingConfigError, durationMs: 0, targetHost: targetHost(url) };
+  const eventId = randomUUID();
+  const headers = webhookHeaders('testNotification', payload, eventId);
+  try {
+    const result = await postJsonWithRetry(url, payload, headers, pinnedAddresses);
+    const error = redactWebhookError(result.error, url);
+    recordWebhookDelivery({ kind: 'automation', event: 'testNotification', targetHost: targetHost(url), ok: result.ok, status: result.status, error, durationMs: result.durationMs });
+    return {
+      ok: result.ok,
+      ...(result.ok ? {} : { error: error ?? `webhook returned HTTP ${result.status}` }),
+      status: result.status,
+      durationMs: result.durationMs,
+      eventId,
+      targetHost: targetHost(url),
+      signatureIncluded: Boolean(headers['X-Dkrypt-Signature']),
+      ...(result.signatureAcknowledged ? { signatureAcknowledged: true } : {}),
+    };
+  } catch (error) {
+    return { ok: false, error: redactWebhookError(String(error), url), durationMs: 0, eventId, targetHost: targetHost(url), signatureIncluded: Boolean(headers['X-Dkrypt-Signature']) };
+  }
 }

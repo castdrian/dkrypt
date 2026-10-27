@@ -111,7 +111,25 @@ export const deviceBridgeActionResponseSchema = Type.Object({
   result: Type.Object({}, { additionalProperties: true }),
 }, { additionalProperties: true });
 
-export const deviceRecoveryResponseSchema = Type.Object({ ok: Type.Literal(true) });
+export const deviceRecoveryOperationSchema = Type.Object({
+  id: identifierSchema,
+  deviceId: identifierSchema,
+  action: Type.Literal('springboard-reload'),
+  status: Type.Union([Type.Literal('queued'), Type.Literal('running'), Type.Literal('verifying'), Type.Literal('complete'), Type.Literal('failed'), Type.Literal('interrupted')]),
+  stage: Type.String(),
+  stages: Type.Array(Type.Object({ label: Type.String(), at: Type.Number(), status: Type.Union([Type.Literal('running'), Type.Literal('complete'), Type.Literal('failed')]) })),
+  commandExitCode: Type.Optional(Type.Number()),
+  reachable: Type.Optional(Type.Boolean()),
+  agentReady: Type.Optional(Type.Boolean()),
+  springboardReady: Type.Optional(Type.Boolean()),
+  error: Type.Optional(Type.String()),
+  createdAt: Type.Number(),
+  updatedAt: Type.Number(),
+  completedAt: Type.Optional(Type.Number()),
+}, { additionalProperties: false });
+
+export const deviceRecoveryResponseSchema = Type.Object({ ok: Type.Literal(true), operation: deviceRecoveryOperationSchema });
+export const deviceRecoveryListResponseSchema = Type.Object({ operations: Type.Array(deviceRecoveryOperationSchema) });
 
 export const deviceForceQuerySchema = Type.Object({
   force: Type.Optional(Type.Union([Type.Literal('true'), Type.Literal('false')])),
@@ -155,5 +173,15 @@ export type DashboardDeviceBridgeActionRoute = {
 
 export type DashboardDeviceRecoverRoute = {
   Params: DeviceParams;
+  Reply: { 200: Static<typeof deviceRecoveryResponseSchema> } & DeviceHealthRouteErrors;
+};
+
+export type DashboardDeviceRecoveryListRoute = {
+  Params: DeviceParams;
+  Reply: { 200: Static<typeof deviceRecoveryListResponseSchema> } & DeviceHealthRouteErrors;
+};
+
+export type DashboardDeviceRecoveryStatusRoute = {
+  Params: DeviceParams & { operationId: string };
   Reply: { 200: Static<typeof deviceRecoveryResponseSchema> } & DeviceHealthRouteErrors;
 };

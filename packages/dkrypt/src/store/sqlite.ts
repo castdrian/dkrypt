@@ -912,6 +912,7 @@ const collectionTables = new Set([
   'integration_deliveries',
   'pending_oauth_links',
   'device_setup_operations',
+  'device_recovery_operations',
   'decrypt_quota_ledger',
   'appstore_offline_account',
   'appstore_offline_credential_operations',

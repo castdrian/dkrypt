@@ -18,7 +18,13 @@ inputs:
   channel:
     description: Decrypt source channel
     required: false
-    default: appstore
+  lockfile:
+    description: Optional dkrypt.lock JSON file that pins bundle IDs to exact source, resolved version, and build
+    required: false
+  update-lockfile:
+    description: Resolve the requested release and write its exact source, version, and build into the lockfile
+    required: false
+    default: 'false'
   version:
     description: Optional exact App Store version or TestFlight version_build selector; leave empty for the latest release on the selected channel
     required: false
@@ -142,6 +148,8 @@ runs:
         DKRYPT_BUNDLE_ID: ${{ inputs.bundle-id }}
         DKRYPT_BUNDLE_IDS: ${{ inputs.bundle-ids }}
         DKRYPT_CHANNEL: ${{ inputs.channel }}
+        DKRYPT_LOCKFILE: ${{ inputs.lockfile }}
+        DKRYPT_UPDATE_LOCKFILE: ${{ inputs.update-lockfile }}
         DKRYPT_VERSION: ${{ inputs.version }}
         DKRYPT_RESOLVE_ONLY: ${{ inputs.resolve-only }}
         DKRYPT_ARTIFACT_ID: ${{ inputs.artifact-id }}

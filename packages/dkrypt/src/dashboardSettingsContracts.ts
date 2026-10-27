@@ -40,8 +40,8 @@ export const dashboardSettingsCronQuerySchema = Type.Object({
 }, { additionalProperties: true });
 
 export const dashboardSettingsWebhookTestBodySchema = Type.Object({
-  url: Type.Optional(Type.String({ maxLength: 500 })),
-}, { additionalProperties: true });
+  url: Type.Optional(Type.String({ maxLength: 2048 })),
+}, { additionalProperties: false });
 
 export const dashboardArtifactRetentionQuerySchema = Type.Object({
   maxBytes: Type.Integer({ minimum: 1 }),
@@ -98,6 +98,12 @@ export const dashboardArtifactRetentionPreviewResponseSchema = Type.Object({
 export const dashboardWebhookTestResponseSchema = Type.Object({
   ok: Type.Boolean(),
   error: Type.Optional(Type.String()),
+  status: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
+  durationMs: Type.Number({ minimum: 0 }),
+  eventId: Type.Optional(Type.String()),
+  targetHost: Type.Optional(Type.String()),
+  signatureIncluded: Type.Optional(Type.Boolean()),
+  signatureAcknowledged: Type.Optional(Type.Boolean()),
 }, { additionalProperties: true });
 
 export type DashboardSettingsGetRoute = {

@@ -1,5 +1,5 @@
 export type BackgroundTaskStatus = 'running' | 'complete' | 'failed' | 'interrupted';
-export type BackgroundTaskKind = 'device_setup' | 'device_check' | 'export' | 'bulk';
+export type BackgroundTaskKind = 'device_setup' | 'device_recovery' | 'device_check' | 'export' | 'bulk';
 
 export interface BackgroundTask {
   id: string;
@@ -35,8 +35,8 @@ export function loadBackgroundTasks(ownerId: string): void {
     backgroundTasksState.dismissedIds = Array.isArray(dismissed) ? dismissed.filter((id): id is string => typeof id === 'string').slice(0, 100) : [];
     const parsed = JSON.parse(localStorage.getItem(storageKey(ownerId)) ?? '[]') as unknown;
     backgroundTasksState.items = Array.isArray(parsed) ? parsed.filter((item): item is BackgroundTask =>
-      typeof item === 'object' && item !== null && typeof item.id === 'string' && typeof item.title === 'string' && typeof item.startedAt === 'number' && typeof item.href === 'string' && item.href.startsWith('/') && !item.href.startsWith('//') && ['device_setup', 'device_check', 'export', 'bulk'].includes(item.kind) && ['running', 'complete', 'failed', 'interrupted'].includes(item.status),
-    ).filter((item) => !backgroundTasksState.dismissedIds.includes(item.id)).slice(0, 30).map((item) => item.status === 'running' && item.kind !== 'device_setup' ? { ...item, status: 'interrupted', stage: 'Page reloaded before completion' } : item) : [];
+      typeof item === 'object' && item !== null && typeof item.id === 'string' && typeof item.title === 'string' && typeof item.startedAt === 'number' && typeof item.href === 'string' && item.href.startsWith('/') && !item.href.startsWith('//') && ['device_setup', 'device_recovery', 'device_check', 'export', 'bulk'].includes(item.kind) && ['running', 'complete', 'failed', 'interrupted'].includes(item.status),
+    ).filter((item) => !backgroundTasksState.dismissedIds.includes(item.id)).slice(0, 30).map((item) => item.status === 'running' && !['device_setup', 'device_recovery'].includes(item.kind) ? { ...item, status: 'interrupted', stage: 'Page reloaded before completion' } : item) : [];
   } catch {
     backgroundTasksState.items = [];
     backgroundTasksState.dismissedIds = [];
@@ -59,8 +59,7 @@ export function putBackgroundTask(task: BackgroundTask): void {
   save();
 }
 
-export function startBackgroundTask(kind: BackgroundTaskKind, title: string, stage: string, href: string): string {
-  const id = crypto.randomUUID();
+export function startBackgroundTask(kind: BackgroundTaskKind, title: string, stage: string, href: string, id: string = crypto.randomUUID()): string {
   const now = Date.now();
   putBackgroundTask({ id, kind, title, stage, href, status: 'running', startedAt: now, updatedAt: now });
   return id;

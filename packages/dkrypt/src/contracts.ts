@@ -21,6 +21,7 @@ import {
   billingCheckoutBodySchema,
   billingCheckoutControlBodySchema,
   billingIdempotencyKeyHeadersSchema,
+  billingPauseBodySchema,
   billingProviderStatusQuerySchema,
   billingReconciliationParamsSchema,
   billingReconciliationQuerySchema,
@@ -64,6 +65,7 @@ import {
   deviceInventoryResponseSchema as DeviceInventoryResponse,
   devicePreflightResponseSchema as DevicePreflightResponse,
   deviceRecoveryResponseSchema as DeviceRecoveryResponse,
+  deviceRecoveryListResponseSchema as DeviceRecoveryListResponse,
 } from '#dashboardDeviceOperationContracts.js';
 import { dashboardDoctorResponseSchema, dashboardSyntheticResponseSchema } from '#dashboardDiagnosticsContracts.js';
 import { deploymentReadyBodySchema, deploymentReadyResponseSchema } from '#internalDeploymentContracts.js';
@@ -386,6 +388,15 @@ const BillingResponse = object({
   currentPlan: Type.Optional(object({ id: Identifier, name: Type.String(), description: Type.String(), amount: Type.Number(), currency: Type.String(), api: Type.Boolean(), priority: Type.Number(), legacy: Type.Boolean(), dailyDecryptLimit: Type.Optional(Type.Number()), apiRatePerMinute: Type.Optional(Type.Number()) })),
   customerId: Type.Optional(Type.String()),
   customerEmail: Type.Optional(Type.String()),
+  paymentMethod: Type.Optional(object({
+    state: Type.Union([Type.Literal('ready'), Type.Literal('expiring'), Type.Literal('expired'), Type.Literal('needs_update'), Type.Literal('unavailable')]),
+    brand: Type.Optional(Type.String()),
+    last4: Type.Optional(Type.String()),
+    expMonth: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    expYear: Type.Optional(Type.Integer({ minimum: 2000 })),
+    expiresBeforeNextBilling: Type.Optional(Type.Boolean()),
+    nextBilledAt: Type.Optional(Type.String({ format: 'date-time' })),
+  })),
   legacyBilling: Type.Boolean(),
   entitlement: JsonObject,
   quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
@@ -648,6 +659,7 @@ const BillingCancelResponse = object({
   provider: Type.Union([Type.Literal('stripe'), Type.Literal('nowpayments')]),
   idempotencyKey: Type.Optional(Type.String()),
   cancelAtPeriodEnd: Type.Optional(Type.Boolean()),
+  pauseResumesAt: Type.Optional(Type.String({ format: 'date-time' })),
 });
 const BillingSubscriptionUpdateResponse = object({ success: Type.Boolean(), status: Type.String(), priceId: Type.Union([Type.String(), Type.Null()]) });
 const OkResponse = dashboardOkResponseSchema;
@@ -992,6 +1004,8 @@ register('POST', '/v1/billing/access-codes/redeem', { body: billingAccessCodeRed
 register('POST', '/v1/billing/access-codes/:id/revoke', { params: billingAccessCodeParamsSchema });
 
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema });
+register('POST', '/v1/billing/pause', { headers: billingIdempotencyKeyHeadersSchema, body: billingPauseBodySchema });
+register('POST', '/v1/billing/resume', { headers: billingIdempotencyKeyHeadersSchema });
 register('GET', '/v1/billing', {});
 register('POST', '/v1/billing/portal', {});
 register('GET', '/v1/billing/provider-status', { querystring: billingProviderStatusQuerySchema });
@@ -1076,6 +1090,8 @@ register('GET', '/v1/dashboard/devices/:id/inventory', { params: object({ id: Id
 register('PUT', '/v1/dashboard/devices/:id/dark-mode', { params: object({ id: Identifier }), body: object({ enabled: Type.Boolean() }) });
 register('POST', '/v1/dashboard/devices/:id/bridge-action', { params: object({ id: Identifier }), body: DeviceBridgeActionInput });
 register('POST', '/v1/dashboard/devices/:id/recover', { params: object({ id: Identifier }) });
+register('GET', '/v1/dashboard/devices/:id/recoveries', { params: object({ id: Identifier }) });
+register('GET', '/v1/dashboard/devices/:id/recoveries/:operationId', { params: object({ id: Identifier, operationId: Identifier }) });
 
 register('POST', '/v1/billing/webhooks/inbox/:id/replay', { params: billingWebhookInboxParamsSchema });
 register('POST', '/v1/billing/webhooks/inbox/:id/quarantine', { params: billingWebhookInboxParamsSchema, body: billingWebhookQuarantineBodySchema });
@@ -1231,6 +1247,8 @@ register('GET', '/v1/dashboard/devices/:id/inventory', { params: object({ id: Id
 register('PUT', '/v1/dashboard/devices/:id/dark-mode', { params: object({ id: Identifier }), body: object({ enabled: Type.Boolean() }), response: { 200: DeviceHealthResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 502: ErrorEnvelope } });
 register('POST', '/v1/dashboard/devices/:id/bridge-action', { params: object({ id: Identifier }), body: DeviceBridgeActionInput, response: { 200: DeviceBridgeActionResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 502: ErrorEnvelope } });
 register('POST', '/v1/dashboard/devices/:id/recover', { params: object({ id: Identifier }), response: { 200: DeviceRecoveryResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 502: ErrorEnvelope } });
+register('GET', '/v1/dashboard/devices/:id/recoveries', { params: object({ id: Identifier }), response: { 200: DeviceRecoveryListResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
+register('GET', '/v1/dashboard/devices/:id/recoveries/:operationId', { params: object({ id: Identifier, operationId: Identifier }), response: { 200: DeviceRecoveryResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/jobs/:id/status', { params: dashboardJobParamsSchema, response: { 200: JobSummaryResponse, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/jobs/:id/timeline', { params: dashboardJobParamsSchema, response: { 200: JobTimelineResponse, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/testflight/catalog', { querystring: testFlightCatalogQuerySchema, response: { 200: testFlightCatalogResponseSchema } });
@@ -1290,6 +1308,8 @@ register('POST', '/v1/billing/checkout', {
 });
 register('POST', '/v1/billing/portal', { response: { 200: UrlResponse } });
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema, response: { 200: BillingCancelResponse } });
+register('POST', '/v1/billing/pause', { headers: billingIdempotencyKeyHeadersSchema, body: billingPauseBodySchema, response: { 200: BillingCancelResponse, 400: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 503: ErrorEnvelope } });
+register('POST', '/v1/billing/resume', { headers: billingIdempotencyKeyHeadersSchema, response: { 200: BillingCancelResponse, 400: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 503: ErrorEnvelope } });
 register('POST', '/v1/billing/subscription', { body: billingSubscriptionBodySchema, response: { 200: BillingSubscriptionUpdateResponse } });
 register('GET', '/v1/dashboard/settings', { response: { 200: DashboardSettingsResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
 register('PUT', '/v1/dashboard/settings', {

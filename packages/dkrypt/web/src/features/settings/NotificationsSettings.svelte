@@ -8,7 +8,7 @@
   import Input from '#lib/components/ui/Input.svelte';
   import Label from '#lib/components/ui/Label.svelte';
   import Switch from '#lib/components/ui/Switch.svelte';
-  import { fetchSettings, fetchWebhookDeliveries, previewJobHistoryRetention, saveSettings, testWebhook, type DashboardSettings, type JobHistoryRetentionPreview, type WebhookDeliveryEntry } from '#lib/api';
+  import { fetchSettings, fetchWebhookDeliveries, previewJobHistoryRetention, saveSettings, testWebhook, type DashboardSettings, type JobHistoryRetentionPreview, type WebhookDeliveryEntry, type WebhookTestResult } from '#lib/api';
   import { PermissionFlag } from '#lib/permissions';
   import { sessionHasPermission } from '#lib/session.svelte';
   import { showToast } from '#lib/ui.svelte';
@@ -35,6 +35,7 @@
   let loading = $state(true);
   let saving = $state(false);
   let testing = $state(false);
+  let testResult = $state<WebhookTestResult | null>(null);
   let error = $state('');
 
   async function refresh(): Promise<void> {
@@ -83,7 +84,8 @@
     testing = true;
     try {
       const result = await testWebhook(settings.notifyWebhookUrl || undefined);
-      showToast(result.data.ok ? 'Test notification sent' : result.data.error ?? 'Test notification failed', result.data.ok ? 'success' : 'error');
+      testResult = result.data;
+      showToast(result.data.ok ? `Endpoint accepted the test in ${result.data.durationMs} ms` : result.data.error ?? 'Test notification failed', result.data.ok ? 'success' : 'error');
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : 'Could not send a test notification.', 'error');
     } finally {
@@ -128,7 +130,8 @@
             <div class="space-y-1.5"><Label for="notification-quiet-start">Quiet hours start</Label><Input id="notification-quiet-start" type="time" bind:value={settings.notifyQuietHoursStart} disabled={!canManage} /></div>
             <div class="space-y-1.5"><Label for="notification-quiet-end">Quiet hours end</Label><Input id="notification-quiet-end" type="time" bind:value={settings.notifyQuietHoursEnd} disabled={!canManage} /></div>
           </div>
-          {#if canManage}<div class="flex flex-wrap gap-2"><Button size="sm" loading={saving} onclick={() => void save()}>Save settings</Button><Button size="sm" variant="secondary" loading={testing} disabled={!settings.notifyWebhookUrl} onclick={() => void sendTest()}>Send test</Button></div>{/if}
+          {#if canManage}<div class="flex flex-wrap gap-2"><Button size="sm" loading={saving} onclick={() => void save()}>Save settings</Button><Button size="sm" variant="secondary" loading={testing} disabled={!settings.notifyWebhookUrl} onclick={() => void sendTest()}>Test endpoint</Button></div>{/if}
+          {#if testResult}<div class={`rounded-lg border p-3 text-xs ${testResult.ok ? 'border-ok/30 bg-ok/5' : 'border-err/30 bg-err/5'}`} role="status"><div class="font-medium">{testResult.ok ? 'Endpoint accepted the sample event' : 'Endpoint test failed'}</div><p class="mt-1 text-muted">{testResult.targetHost ?? 'Webhook endpoint'} · {testResult.status ? `HTTP ${testResult.status} · ` : ''}{testResult.durationMs} ms{testResult.error ? ` · ${testResult.error}` : ''}</p>{#if testResult.eventId}<p class="mt-1 font-mono text-[10px] text-muted">Event ID: {testResult.eventId}</p>{/if}<p class="mt-1 text-muted">{#if testResult.signatureIncluded}{#if testResult.signatureAcknowledged}The receiver explicitly acknowledged signature validation.{:else}dkrypt signed this request. The endpoint did not explicitly confirm that it validated the signature.{/if}{:else}This request was unsigned because no outbound signing secret is configured.{/if}</p></div>{/if}
         </div>
         <div class="space-y-1.5">
           <h3 class="text-sm font-medium">Events</h3>

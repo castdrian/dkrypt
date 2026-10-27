@@ -53,6 +53,7 @@ const offlineAppStoreCircuit = new OfflineAppStoreCircuitBreaker(
   config.appStoreOfflineCircuitFailureThreshold,
   config.appStoreOfflineCircuitCooldownSeconds * 1000,
 );
+let deviceWearCache: { expiresAt: number; jobsInLastDay: Map<string, number> } | undefined;
 let offlineCircuitProbeTimer: ReturnType<typeof setTimeout> | undefined;
 let acceptingJobs = true;
 let jobSyncTimer: ReturnType<typeof setInterval> | undefined;
@@ -1275,18 +1276,32 @@ export function notifyDeviceDispatchStateChanged(): void {
 
 setOfflineAppStoreDispatchNotifier(notifyDeviceDispatchStateChanged);
 
-function deviceScore(device: DeviceRecord, primary: DeviceRecord): number {
+function recentDeviceJobCounts(now = Date.now()): Map<string, number> {
+  if (deviceWearCache && deviceWearCache.expiresAt > now) return deviceWearCache.jobsInLastDay;
+  const cutoff = now - 86_400_000;
+  const jobsInLastDay = new Map<string, number>();
+  for (const job of getAllJobHistory()) {
+    if (job.finishedAt < cutoff || !job.deviceId) continue;
+    jobsInLastDay.set(job.deviceId, (jobsInLastDay.get(job.deviceId) ?? 0) + 1);
+  }
+  deviceWearCache = { expiresAt: now + 30_000, jobsInLastDay };
+  return jobsInLastDay;
+}
+
+function deviceScore(device: DeviceRecord, primary: DeviceRecord, jobsInLastDay: Map<string, number>): number {
   const cachedHealth = getCachedDeviceHealth(device.id);
-  if (!cachedHealth) return device.id === primary.id ? 1 : 0;
+  let score = device.id === primary.id ? 10 : 0;
+  score -= Math.min(jobsInLastDay.get(device.id) ?? 0, 20) * 1.5;
+  if (!cachedHealth) return score;
   const health = cachedHealth.value;
   if (!health.reachable) return -10_000;
-
-  let score = device.id === primary.id ? 10 : 0;
   score += Math.min(health.storageFreeBytes ? Math.floor(health.storageFreeBytes / (1024 * 1024 * 1024)) : 0, 100);
   score += health.batteryCharging ? 20 : 0;
   score += health.batteryPercent ? Math.floor(health.batteryPercent / 5) : 0;
   score -= health.batteryTemperatureC && health.batteryTemperatureC >= 40 ? 50 : 0;
   score -= health.storageUsedPercent && health.storageUsedPercent >= 0.9 ? 50 : 0;
+  score -= health.batteryHealthPercent !== undefined && health.batteryHealthPercent < 95 ? Math.min(30, (95 - health.batteryHealthPercent) * 1.5) : 0;
+  score -= health.batteryCycleCount !== undefined ? Math.min(20, Math.floor(health.batteryCycleCount / 100)) : 0;
   return score;
 }
 
@@ -1406,7 +1421,8 @@ function pumpWorkers(): void {
   if (devices.length === 0) return;
   const primary = devices.find((d) => d.isPrimary) ?? devices[0];
 
-  const rankedDevices = [...devices].sort((a, b) => deviceScore(b, primary) - deviceScore(a, primary));
+  const jobsInLastDay = recentDeviceJobCounts();
+  const rankedDevices = [...devices].sort((a, b) => deviceScore(b, primary, jobsInLastDay) - deviceScore(a, primary, jobsInLastDay));
   for (const device of rankedDevices) {
     const resourceId = `device:${device.id}`;
     if (busyDeviceIds.has(device.id) || busyWorkerResourceIds.has(resourceId) || isPersistedWorkerResourceActive(resourceId)) continue;

@@ -24,6 +24,8 @@ import type {
   DashboardDeviceInventoryRoute,
   DashboardDevicePreflightRoute,
   DashboardDeviceRecoverRoute,
+  DashboardDeviceRecoveryListRoute,
+  DashboardDeviceRecoveryStatusRoute,
 } from '#dashboardDeviceOperationContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { serializeDashboardDevice } from '#dashboardDevicePresentation.js';
@@ -60,6 +62,7 @@ import { config } from '#config.js';
 import { isSupportedDeviceHost } from '#deviceHost.js';
 import { openStateCollectionDatabase } from '#store/sqlite.js';
 import { createDeviceSetupOperationRepository, type DeviceSetupOperation } from '#store/deviceSetupOperationRepository.js';
+import { createDeviceRecoveryRepository, type DeviceRecoveryOperation } from '#store/deviceRecoveryRepository.js';
 
 const canViewDevices = fastifyRequirePermission(PermissionFlag.viewDevices, PermissionFlag.manageDevices);
 const canManageDevices = fastifyRequirePermission(PermissionFlag.manageDevices);
@@ -190,17 +193,84 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
   server.addHook('preHandler', fastifyRequireSession);
   server.addHook('preHandler', recordFastifyDashboardActivity);
   const setupOperations = createDeviceSetupOperationRepository(openStateCollectionDatabase({ stateDir: config.stateDir, filename: config.stateDatabaseFile, busyTimeoutMs: config.stateDbBusyTimeoutMs }, ['device_setup_operations']));
+  const recoveryOperations = createDeviceRecoveryRepository(openStateCollectionDatabase({ stateDir: config.stateDir, filename: config.stateDatabaseFile, busyTimeoutMs: config.stateDbBusyTimeoutMs }, ['device_recovery_operations']));
   setupOperations.interruptRunning();
+  recoveryOperations.interruptRunning();
   let closing = false;
   server.addHook('onClose', async () => {
     closing = true;
     setupOperations.interruptRunning();
     setupOperations.close();
+    recoveryOperations.interruptRunning();
+    recoveryOperations.close();
   });
 
   const publicSetupOperation = (operation: DeviceSetupOperation) => {
     const { input: _input, ownerId: _ownerId, ...visible } = operation;
     return visible;
+  };
+
+  const publicRecoveryOperation = (operation: DeviceRecoveryOperation) => {
+    const { ownerId: _ownerId, ...visible } = operation;
+    return visible;
+  };
+
+  const runRecoveryOperation = async (operation: DeviceRecoveryOperation) => {
+    if (closing) return;
+    const device = resolveDevice(operation.deviceId);
+    if (!device) {
+      recoveryOperations.fail(operation.id, 'Device was removed before recovery started.');
+      return;
+    }
+    recoveryOperations.advance(operation.id, 'running', 'Sending SpringBoard reload request');
+    try {
+      const runRecoveryCommand = (connection: Parameters<typeof execCommand>[0]) => execCommand(connection, 'sudo -n /var/jb/usr/bin/sbreload', 30_000);
+      const command = isDirectUsbDeviceAgentConnection(device)
+        ? await withAutoinstallDeviceAgent(device, runRecoveryCommand)
+        : await withSSH(device, runRecoveryCommand);
+      if (closing) return;
+      if (command.code !== 0) {
+        const message = `could not reload SpringBoard: ${command.stderr.trim() || command.stdout.trim() || `exit code ${command.code ?? 'unknown'}`}`;
+        recoveryOperations.fail(operation.id, message, { commandExitCode: command.code ?? undefined });
+        recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message: `SpringBoard recovery failed: ${message}` });
+        return;
+      }
+      recoveryOperations.advance(operation.id, 'verifying', 'Waiting for device and Autoinstall to reconnect');
+      recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message: 'SpringBoard reload requested; waiting to verify device and Autoinstall recovery' });
+      let lastHealth: DeviceHealth | undefined;
+      for (let attempt = 0; attempt < 24 && !closing; attempt += 1) {
+        lastHealth = await getDeviceHealth(device.id, true).catch(() => undefined);
+        if (closing) return;
+        const agentReady = lastHealth?.subsystems?.agent === 'ready' || (lastHealth?.agentHeartbeatAt !== undefined && Date.now() - lastHealth.agentHeartbeatAt < 90_000);
+        const springboardReady = lastHealth?.testFlightBridgeReachable === true || isBridgeHeartbeatFresh(lastHealth?.bridgeHeartbeats?.springboard);
+        if (lastHealth?.reachable && (agentReady || springboardReady)) {
+          recoveryOperations.complete(operation.id, {
+            commandExitCode: command.code ?? 0,
+            reachable: true,
+            agentReady,
+            springboardReady,
+          });
+          recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message: 'SpringBoard recovery verified; device and Autoinstall bridge are reachable' });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
+      const agentReady = lastHealth?.subsystems?.agent === 'ready' || (lastHealth?.agentHeartbeatAt !== undefined && Date.now() - lastHealth.agentHeartbeatAt < 90_000);
+      const springboardReady = lastHealth?.testFlightBridgeReachable === true || isBridgeHeartbeatFresh(lastHealth?.bridgeHeartbeats?.springboard);
+      const message = closing ? 'Recovery was interrupted by a dkrypt restart.' : 'SpringBoard accepted the reload request, but dkrypt did not verify the device and Autoinstall bridge within two minutes.';
+      recoveryOperations.fail(operation.id, message, {
+        commandExitCode: command.code ?? 0,
+        reachable: lastHealth?.reachable ?? false,
+        agentReady,
+        springboardReady,
+      });
+      recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message });
+    } catch (error) {
+      if (closing) return;
+      const message = `device recovery failed: ${getErrorMessage(error)}`;
+      recoveryOperations.fail(operation.id, message);
+      recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message });
+    }
   };
 
   const performDeviceSetup = async (input: NonNullable<ReturnType<typeof parseDeviceConnection>>, userId: string, onStage?: (id: string, label: string) => void) => {
@@ -561,20 +631,39 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
     preHandler: canManageDevices,
   }, async (request, reply) => {
     const device = resolveDevice(request.params.id);
-    if (!device) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'device not found'));
-    try {
-      const runRecoveryCommand = (connection: Parameters<typeof execCommand>[0]) => execCommand(connection, 'sudo -n /var/jb/usr/bin/sbreload', 30_000);
-      const result = isDirectUsbDeviceAgentConnection(device)
-        ? await withAutoinstallDeviceAgent(device, runRecoveryCommand)
-        : await withSSH(device, runRecoveryCommand);
-      if (result.code !== 0) {
-        return reply.code(502).send(createHttpErrorEnvelope(request.id, 502, `could not reload SpringBoard: ${result.stderr.trim() || result.stdout.trim() || `exit code ${result.code ?? 'unknown'}`}`));
-      }
-      recordDeviceActivity({ deviceId: device.id, kind: 'bridge', message: 'SpringBoard reloaded through the device recovery channel' });
-      return { ok: true };
-    } catch (error) {
-      return reply.code(502).send(createHttpErrorEnvelope(request.id, 502, `device recovery failed: ${getErrorMessage(error)}`));
+    if (!device) {
+      reply.code(404);
+      return createHttpErrorEnvelope(request.id, 404, 'device not found');
     }
+    const running = recoveryOperations.list(device.id).find((operation) => ['queued', 'running', 'verifying'].includes(operation.status));
+    if (running) return { ok: true as const, operation: publicRecoveryOperation(running) };
+    const operation = recoveryOperations.create(device.id, getFastifySession(request)!.sub);
+    void runRecoveryOperation(operation);
+    return { ok: true as const, operation: publicRecoveryOperation(operation) };
+  });
+
+  server.get<DashboardDeviceRecoveryListRoute>('/v1/dashboard/devices/:id/recoveries', {
+    schema: getRouteContract('GET', '/v1/dashboard/devices/:id/recoveries'),
+    preHandler: canViewDevices,
+  }, (request, reply) => {
+    const device = resolveDevice(request.params.id);
+    if (!device) {
+      reply.code(404);
+      return createHttpErrorEnvelope(request.id, 404, 'device not found');
+    }
+    return { operations: recoveryOperations.list(device.id).map(publicRecoveryOperation) };
+  });
+
+  server.get<DashboardDeviceRecoveryStatusRoute>('/v1/dashboard/devices/:id/recoveries/:operationId', {
+    schema: getRouteContract('GET', '/v1/dashboard/devices/:id/recoveries/:operationId'),
+    preHandler: canViewDevices,
+  }, (request, reply) => {
+    const operation = recoveryOperations.get(request.params.operationId);
+    if (!operation || operation.deviceId !== request.params.id) {
+      reply.code(404);
+      return createHttpErrorEnvelope(request.id, 404, 'recovery receipt not found');
+    }
+    return { ok: true as const, operation: publicRecoveryOperation(operation) };
   });
 
   server.get<DashboardDeviceListRoute>('/v1/dashboard/devices', {

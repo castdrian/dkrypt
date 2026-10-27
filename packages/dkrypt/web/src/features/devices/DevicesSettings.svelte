@@ -16,6 +16,8 @@
     fetchDeviceHealth,
     fetchDeviceInventory,
     fetchDevicePreflight,
+    fetchDeviceRecoveryOperation,
+    fetchDeviceRecoveryOperations,
     fetchDeviceSetupOperation,
     fetchDeviceSetupOperations,
     fetchDevices,
@@ -34,6 +36,7 @@
     type DeviceRecord,
     type DeviceSetupResult,
     type DeviceSetupOperation,
+    type DeviceRecoveryOperation,
     type DashboardSettings,
   } from '#lib/api';
   import Badge from '#lib/components/ui/Badge.svelte';
@@ -49,7 +52,7 @@
   import { announceScreenReader, confirmDialog, deviceDetailJumpState, homeViewModesState, interfaceLanguageState, showToast, systemLocalesState } from '#lib/ui.svelte';
   import { pushHomeViewMode } from '#lib/session.svelte';
   import { clearFormDraft, clearSyncedFormDraft, readFormDraft, readSyncedFormDraft, setFormUnsaved, writeFormDraft, writeSyncedFormDraft } from '#lib/formDrafts.svelte';
-  import { startBackgroundTask, updateBackgroundTask } from '#lib/backgroundTasks.svelte';
+  import { backgroundTasksState, startBackgroundTask, updateBackgroundTask } from '#lib/backgroundTasks.svelte';
   import { resolveInterfaceLanguage } from '#lib/locale';
   import { translateMessage, type MessageKey } from '#lib/messages';
 
@@ -141,6 +144,9 @@
   }
 
   let health = $state<Record<string, DeviceHealth | undefined>>({});
+  let recoveryReceipts = $state<Record<string, DeviceRecoveryOperation[]>>({});
+  const activeRecoveryPolls = new Set<string>();
+  const recoverySyncDeviceIds = new Set<string>();
   const knownSubsystemStates = new Map<string, DeviceSubsystemState>();
 
   $effect(() => {
@@ -204,6 +210,69 @@
       if (liveState.overview) liveState.overview = { ...liveState.overview, devices: result.devices };
     } catch {}
   }
+
+  function rememberRecoveryOperation(operation: DeviceRecoveryOperation): void {
+    const current = recoveryReceipts[operation.deviceId] ?? [];
+    recoveryReceipts = {
+      ...recoveryReceipts,
+      [operation.deviceId]: [operation, ...current.filter((entry) => entry.id !== operation.id)].slice(0, 10),
+    };
+  }
+
+  async function followRecovery(device: DeviceRecord, initial: DeviceRecoveryOperation): Promise<void> {
+    if (activeRecoveryPolls.has(initial.id)) return;
+    activeRecoveryPolls.add(initial.id);
+    const taskId = startBackgroundTask('device_recovery', `Recover ${device.name}`, initial.stage, '/?tab=settings&stab=devices', initial.id);
+    recoveringId = new Set(recoveringId).add(device.id);
+    let operation = initial;
+    const deadlineAt = Date.now() + 140_000;
+    try {
+      while (Date.now() < deadlineAt && !['complete', 'failed', 'interrupted'].includes(operation.status)) {
+        rememberRecoveryOperation(operation);
+        updateBackgroundTask(taskId, 'running', operation.stage);
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        try {
+          operation = (await fetchDeviceRecoveryOperation(device.id, initial.id)).operation;
+        } catch (error) {
+          updateBackgroundTask(taskId, 'running', 'Waiting for the recovery receipt', error instanceof Error ? error.message : undefined);
+        }
+      }
+      rememberRecoveryOperation(operation);
+      if (operation.status === 'complete') {
+        updateBackgroundTask(taskId, 'complete', 'Device and Autoinstall reconnected', `Command exit ${operation.commandExitCode ?? 'unknown'} · agent ${operation.agentReady ? 'ready' : 'not ready'} · SpringBoard ${operation.springboardReady ? 'ready' : 'not ready'}`);
+        const value = await fetchDeviceHealth(device.id, true).catch(() => undefined);
+        if (value) health = { ...health, [device.id]: value };
+        showToast(`${device.name} recovery was verified`, 'success');
+      } else if (operation.status === 'failed' || operation.status === 'interrupted') {
+        updateBackgroundTask(taskId, 'failed', operation.stage, operation.error);
+        showToast(operation.error ?? `${device.name} recovery could not be verified`, 'error');
+      } else {
+        updateBackgroundTask(taskId, 'interrupted', 'Recovery is still running', 'Open the device again to check its latest recovery receipt.');
+      }
+    } finally {
+      activeRecoveryPolls.delete(initial.id);
+      const next = new Set(recoveringId);
+      next.delete(device.id);
+      recoveringId = next;
+    }
+  }
+
+  $effect(() => {
+    if (!canManageDevices) return;
+    for (const device of devices) {
+      if (recoverySyncDeviceIds.has(device.id)) continue;
+      recoverySyncDeviceIds.add(device.id);
+      void fetchDeviceRecoveryOperations(device.id).then(({ operations }) => {
+        recoveryReceipts = { ...recoveryReceipts, [device.id]: operations };
+        for (const operation of operations) {
+          const localTask = backgroundTasksState.items.find((task) => task.id === operation.id);
+          const active = ['queued', 'running', 'verifying'].includes(operation.status);
+          if (active) void followRecovery(device, operation);
+          else if (localTask?.status === 'running') updateBackgroundTask(operation.id, operation.status === 'complete' ? 'complete' : 'failed', operation.stage, operation.error);
+        }
+      }).catch(() => {});
+    }
+  });
 
   $effect(() => {
     devices;
@@ -280,19 +349,22 @@
 
   async function recover(device: DeviceRecord): Promise<void> {
     recoveringId = new Set(recoveringId).add(device.id);
+    let recoveryStarted = false;
     try {
       const result = await recoverDevice(device.id);
-      if (result.ok) {
-        if (result.data) health = { ...health, [device.id]: result.data };
-        void fetchDeviceHealth(device.id, true).then((value) => (health = { ...health, [device.id]: value })).catch(() => {});
-        showToast(`${device.name} recovery completed`, 'success');
+      if (result.ok && result.data?.operation) {
+        rememberRecoveryOperation(result.data.operation);
+        recoveryStarted = true;
+        void followRecovery(device, result.data.operation);
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Device recovery failed', 'error');
     } finally {
-      const next = new Set(recoveringId);
-      next.delete(device.id);
-      recoveringId = next;
+      if (!recoveryStarted) {
+        const next = new Set(recoveringId);
+        next.delete(device.id);
+        recoveringId = next;
+      }
     }
   }
 
@@ -691,6 +763,10 @@
           {#if device.draining}<div class="mt-2 text-xs text-warn">Draining: no new jobs will start on this device.</div>{/if}
           <AuditRibbon target={device.id} />
           {#if device.isPrimary && h?.reachable && h.darkEnabled !== undefined}<div class="border-border/70 mt-3 flex items-center justify-between gap-3 border-t pt-3"><div class="min-w-0"><div class="text-sm">Keep display dark</div><div class="text-xs text-muted">autoinstall keeps the device awake while the display is blacked out.</div></div><Switch checked={h.darkEnabled} disabled={!canManageDevices || updatingDarkModeId.has(device.id)} onCheckedChange={(enabled) => void toggleDarkMode(device, enabled)} aria-label="Keep display dark" /></div>{/if}
+          {#if recoveryReceipts[device.id]?.[0]}
+            {@const recovery = recoveryReceipts[device.id][0]}
+            <div class="border-border/70 mt-3 rounded-lg border-t pt-3"><div class="flex flex-wrap items-center gap-2"><span class="text-xs font-medium">SpringBoard recovery receipt</span><Badge variant={recovery.status === 'complete' ? 'success' : recovery.status === 'failed' || recovery.status === 'interrupted' ? 'destructive' : 'secondary'}>{recovery.status}</Badge><span class="text-[10px] text-muted"><RelativeTime ms={recovery.updatedAt} /></span></div><p class="mt-1 text-xs text-muted">{recovery.stage}. Command exit: {recovery.commandExitCode ?? 'pending'} · Device: {recovery.reachable ? 'reachable' : recovery.reachable === false ? 'unreachable' : 'checking'} · Agent: {recovery.agentReady ? 'ready' : recovery.agentReady === false ? 'not ready' : 'checking'} · SpringBoard: {recovery.springboardReady ? 'ready' : recovery.springboardReady === false ? 'not ready' : 'checking'}</p>{#if recovery.error}<p class="mt-1 break-words text-xs text-err">{recovery.error}</p>{/if}<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">{#each recovery.stages as stage (stage.at)}<span>{stage.label} · <RelativeTime ms={stage.at} /></span>{/each}</div></div>
+          {/if}
           {#if activity[device.id]?.length}
             <div class="border-border/70 mt-3 border-t pt-3">
               <div class="mb-1.5 flex items-center justify-between gap-2 text-xs"><span class="text-muted">Recent activity</span>{#if activityNextCursor[device.id]}<Button size="sm" variant="link" class="h-auto p-0 text-xs" loading={loadingActivity.has(device.id)} onclick={() => void loadMoreActivity(device.id)}>Load older ({Math.max(0, activityTotals[device.id] - activity[device.id].length)})</Button>{/if}</div>

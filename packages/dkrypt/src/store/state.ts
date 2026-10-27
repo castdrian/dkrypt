@@ -617,6 +617,8 @@ export type AuditAction =
   | 'billing.charge-failed'
   | 'billing.refund'
   | 'billing.cancel'
+  | 'billing.pause'
+  | 'billing.resume'
   | 'billing.webhook'
   | 'billing.webhook.sync'
   | 'billing.webhook.replay'
