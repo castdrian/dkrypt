@@ -15,6 +15,8 @@ export interface TrackedDecrypt {
   createdAt: number;
   artifactId?: string;
   artifactUrl?: string;
+  freeTierResult?: boolean;
+  temporaryResultExpiresAt?: number;
   executionPath?: 'appstore_offline' | 'device' | 'device_fallback';
   attempt?: number;
   finishedAt?: string;

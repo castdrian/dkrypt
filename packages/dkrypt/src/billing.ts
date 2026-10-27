@@ -7,6 +7,12 @@ import { config } from '#config.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { emitBillingChanged } from '#events.js';
 
+let billingEntitlementChangeHandler: ((userId: string) => void) | undefined;
+
+export function setBillingEntitlementChangeHandler(handler: ((userId: string) => void) | undefined): void {
+  billingEntitlementChangeHandler = handler;
+}
+
 export type BillingProvider = 'stripe' | 'nowpayments' | 'legacy';
 export type PlanId = 'viewer' | 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
 export type BillingChargeStatus = 'pending' | 'succeeded' | 'failed' | 'refunded';
@@ -382,6 +388,7 @@ export function upsertBillingSubscription(subscription: BillingSubscription): bo
   const existing = state.subscriptions.find((item) => item.provider === subscription.provider && item.subscriptionId === subscription.subscriptionId);
   if (existing && Date.parse(existing.occurredAt) > Date.parse(subscription.occurredAt)) return false;
   const previous = existing ? { ...existing } : undefined;
+  const ownerId = subscription.userId ?? existing?.userId ?? state.customers.find((item) => item.provider === subscription.provider && item.customerId === subscription.customerId)?.userId;
   if (existing) Object.assign(existing, subscription, { userId: subscription.userId ?? existing.userId });
   else {
     const customer = state.customers.find((item) => item.provider === subscription.provider && item.customerId === subscription.customerId);
@@ -396,6 +403,7 @@ export function upsertBillingSubscription(subscription: BillingSubscription): bo
   }
   persist();
   emitBillingChanged();
+  if (ownerId) billingEntitlementChangeHandler?.(ownerId);
   return true;
 }
 

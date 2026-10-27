@@ -32,6 +32,8 @@ import { dashboardNotificationRoutes } from '#routes/dashboardNotificationRoutes
 import { dashboardJobRoutes } from '#routes/dashboardJobRoutes.js';
 import { dashboardJobActionRoutes } from '#routes/dashboardJobActionRoutes.js';
 import { dashboardDecryptPreflightRoutes } from '#routes/dashboardDecryptPreflightRoutes.js';
+import { artifactPickupRoutes } from '#routes/artifactPickupRoutes.js';
+import { publicRequestCheckRoutes } from '#routes/publicRequestCheckRoutes.js';
 import { dashboardJobAnalyticsRoutes } from '#routes/dashboardJobAnalyticsRoutes.js';
 import { dashboardJobHistoryRoutes } from '#routes/dashboardJobHistoryRoutes.js';
 import { dashboardReportingRoutes } from '#routes/dashboardReportingRoutes.js';
@@ -331,7 +333,7 @@ export async function buildServer(options: {
       .replaceAll('__PUBLIC_BASE_URL__', config.publicBaseUrl)
       .replaceAll('__OG_IMAGE_VERSION__', ogImageVersion);
 
-    for (const route of ['/', '/pricing', '/terms', '/privacy', '/refund-policy', '/contact', '/status']) {
+    for (const route of ['/', '/request', '/pricing', '/terms', '/privacy', '/refund-policy', '/contact', '/status']) {
       server.get(route, (request, reply) => reply.type('text/html').send(renderPublicPage(indexHtml, request.url)));
     }
 
@@ -372,6 +374,8 @@ export async function buildServer(options: {
   await server.register(dashboardJobRoutes);
   await server.register(dashboardJobActionRoutes);
   await server.register(dashboardDecryptPreflightRoutes);
+  await server.register(artifactPickupRoutes);
+  await server.register(publicRequestCheckRoutes);
   await server.register(dashboardJobAnalyticsRoutes);
   await server.register(dashboardJobHistoryRoutes);
   await server.register(dashboardReportingRoutes);

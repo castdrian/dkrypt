@@ -141,8 +141,8 @@ async function lookupMetadata(params: Record<string, string>, signal?: AbortSign
   };
 }
 
-export function lookupAppMetadata(bundleId: string): Promise<ItunesAppMetadata> {
-  return lookupMetadata({ bundleId });
+export function lookupAppMetadata(bundleId: string, signal?: AbortSignal): Promise<ItunesAppMetadata> {
+  return lookupMetadata({ bundleId }, signal);
 }
 
 export function lookupAppMetadataByTrackId(trackId: number, country?: string, signal?: AbortSignal): Promise<ItunesAppMetadata> {
@@ -178,9 +178,9 @@ interface ItunesSearchResponse {
   }>;
 }
 
-export async function searchApps(term: string, limit = 10): Promise<ItunesSearchResult[]> {
+export async function searchApps(term: string, limit = 10, signal?: AbortSignal): Promise<ItunesSearchResult[]> {
   const url = await buildItunesUrl('search', { entity: 'software', limit: String(limit), term });
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(describeHttpError('itunes search failed', res));
 
   const body = (await res.json()) as ItunesSearchResponse;

@@ -43,6 +43,7 @@
 	import TabIcon from "#components/TabIcon.svelte";
 	import NotificationPreferences from "#features/notifications/NotificationPreferences.svelte";
 	import PublicPricing from "#components/PublicPricing.svelte";
+	import PublicRequestCheck from "#components/PublicRequestCheck.svelte";
 	import PublicStatus from "#components/PublicStatus.svelte";
 	import SessionExpiryBanner from "#components/SessionExpiryBanner.svelte";
 	import FreeTierBanner from "#components/FreeTierBanner.svelte";
@@ -125,6 +126,7 @@
 		screenReaderAnnouncementState,
 		artifactDetailJumpState,
 		jobDetailJumpState,
+		signupDecryptContinuationState,
 		showToast,
 		soundEnabledState,
 		highContrastState,
@@ -137,6 +139,7 @@
 		themeState,
 		type TabId,
 	} from "#lib/ui.svelte";
+	import { takeSignupRequestContinuation } from "#lib/requestContinuation";
 	import { isFormattingLocalePreference, isInterfaceLanguagePreference, resolveInterfaceLanguage } from "#lib/locale";
 	import { translateMessage, translatePermissionLabel, type MessageKey } from "#lib/messages";
 	import { createVisitedTabs } from "#lib/visitedTabs.svelte";
@@ -174,6 +177,7 @@ initDensity();
 	const accentLabel = (id: string) => msg(accentMessageKeys[id] ?? "appearance.accentColor");
 
 	const publicPage = {
+		"/request": "request",
 		"/pricing": "pricing",
 		"/terms": "terms",
 		"/privacy": "privacy",
@@ -181,6 +185,7 @@ initDensity();
 		"/contact": "contact",
 		"/status": "status",
 	}[location.pathname] as
+		| "request"
 		| "pricing"
 		| "terms"
 		| "privacy"
@@ -519,6 +524,19 @@ initDensity();
 		const deepLinkKey = `${sessionState.sub}:${location.search}`;
 		if (deepLinkKey === appliedDeepLink) return;
 		appliedDeepLink = deepLinkKey;
+		const query = new URLSearchParams(location.search);
+		if (query.get("continue") === "decrypt") {
+			const continuation = takeSignupRequestContinuation();
+			if (continuation) {
+				signupDecryptContinuationState.request = continuation;
+				setActiveTab("home");
+			} else {
+				showToast("That app request expired. Check the link again to continue.", "error");
+			}
+			query.delete("continue");
+			const nextSearch = query.toString();
+			history.replaceState(null, "", `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash}`);
+		}
 		const jobId = getQueryParam('job');
 		const artifactId = getQueryParam('artifact');
 		if (jobId) {
@@ -548,6 +566,7 @@ initDensity();
 	$effect(() => {
 		if (publicPage) {
 			const title = {
+				request: "Check an app",
 				pricing: "Pricing",
 				terms: "Terms of Service",
 				privacy: "Privacy Notice",
@@ -686,7 +705,9 @@ initDensity();
 
 <Toaster theme={themeState.value} richColors position="bottom-right" />
 
-{#if publicPage === "pricing"}
+{#if publicPage === "request"}
+	<PublicRequestCheck />
+{:else if publicPage === "pricing"}
 	<PublicPricing />
 {:else if publicPage === "terms"}
 	<LegalPage document="terms" />

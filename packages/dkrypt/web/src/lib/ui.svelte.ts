@@ -3,6 +3,7 @@ import { getQueryParam, setQueryParams } from '#lib/urlState';
 import { normalizeFormattingLocalePreference, normalizeInterfaceLanguagePreference, type FormattingLocalePreference, type InterfaceLanguagePreference } from '#lib/locale';
 import { DEFAULT_HOME_LAYOUT, DEFAULT_HOME_VIEW_MODES, type HomeLayout, type HomeViewModes } from '#lib/homeLayouts';
 import { clearUnsavedFormWarnings, unsavedFormsState } from '#lib/formDrafts.svelte';
+import type { SignupRequestContinuation } from '#lib/requestContinuation';
 
 export type Theme = 'dark' | 'light';
 export type ThemePref = Theme | 'auto';
@@ -481,6 +482,7 @@ export const jobDetailJumpState = $state<{ id: string | null }>({ id: null });
 export const artifactDetailJumpState = $state<{ id: string | null }>({ id: null });
 export const appDetailJumpState = $state<{ bundleId: string | null }>({ bundleId: null });
 export const decryptSearchJumpState = $state<{ bundleId: string | null }>({ bundleId: null });
+export const signupDecryptContinuationState = $state<{ request: SignupRequestContinuation | null }>({ request: null });
 export const deviceDetailJumpState = $state<{ id: string | null }>({ id: null });
 export const logSearchJumpState = $state<{ value: { query: string; scope?: string } | null }>({ value: null });
 

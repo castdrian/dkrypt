@@ -5,7 +5,7 @@ import { resolveJobNotificationChannels } from '#appNotificationPreferences.js';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '#config.js';
-import { getBillingEntitlements } from '#billing.js';
+import { getBillingEntitlements, setBillingEntitlementChangeHandler } from '#billing.js';
 import { emitJobsChanged } from '#events.js';
 import { scopedLogger } from '#logger.js';
 
@@ -1224,6 +1224,31 @@ export function prioritizeQueuedJob(id: string, projectId?: string): boolean {
   emitJobsChanged();
   return true;
 }
+
+function applyBillingPriorityToQueuedJobs(userId: string): void {
+  const entitlement = getBillingEntitlements(userId);
+  if (entitlement.freeTier) return;
+  const accountId = userId.toLowerCase();
+  let changed = false;
+  for (const id of [...queue]) {
+    const job = jobs.get(id);
+    if (!job || job.status !== 'queued' || job.pausedAt !== undefined) continue;
+    if ((job.billingOwnerId ?? job.queuedBy)?.toLowerCase() !== accountId) continue;
+    const upgradedPriority = Math.max(job.priority, entitlement.priority);
+    if (upgradedPriority <= job.priority) continue;
+    removeQueuedJob(job.id);
+    job.priority = upgradedPriority;
+    appendJobTimelineEvent(job, 'Paid plan priority applied while queued', 'queued');
+    insertByPriority(job.id, upgradedPriority);
+    changed = true;
+  }
+  if (!changed) return;
+  persistActiveJobs();
+  emitJobsChanged();
+  pumpWorkers();
+}
+
+setBillingEntitlementChangeHandler(applyBillingPriorityToQueuedJobs);
 
 export function reorderQueue(orderedIds: string[], projectId?: string): boolean {
   const known = new Set(queue.filter((id) => !projectId || (jobs.get(id)?.projectId ?? DEFAULT_PROJECT_ID) === projectId));

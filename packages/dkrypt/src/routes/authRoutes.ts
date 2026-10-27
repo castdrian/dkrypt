@@ -532,7 +532,8 @@ function oauthReturnPath(value: unknown): string | undefined {
     const target = new URL(value, config.publicBaseUrl);
     const origin = new URL(config.publicBaseUrl).origin;
     if (target.origin !== origin || target.username || target.password || target.hash) return undefined;
-    if (target.pathname !== '/oauth/authorize' && !/^\/mcp\/approval\/[A-Za-z0-9_-]{20,128}$/.test(target.pathname)) return undefined;
+    const decryptContinuation = target.pathname === '/' && target.search === '?continue=decrypt';
+    if (target.pathname !== '/oauth/authorize' && !/^\/mcp\/approval\/[A-Za-z0-9_-]{20,128}$/.test(target.pathname) && !decryptContinuation) return undefined;
     return `${target.pathname}${target.search}`;
   } catch {
     return undefined;

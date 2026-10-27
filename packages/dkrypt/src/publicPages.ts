@@ -5,6 +5,7 @@ const contactAddress = 'contact<span>@</span>dylib.dev';
 const navigation = `
   <nav aria-label="Public pages">
     <a href="/pricing">Pricing</a>
+    <a href="/request">Check an app</a>
     <a href="/terms">Terms</a>
     <a href="/privacy">Privacy</a>
     <a href="/refund-policy">Refund policy</a>
@@ -26,7 +27,14 @@ const pageContent: Record<string, string> = {
       <h1>dkrypt</h1>
       <p>dkrypt is a subscription service for authorized iOS application decryption workflows, request tracking, downloadable results, and optional API access.</p>
       <p>Free accounts include 3 new decrypts per rolling 30 days, read-only IPA Library metadata, and a 30-minute download window for each result. Paid plans include persistent IPA downloads and higher decrypt allowances.</p>
-      <p><a href="/pricing">View pricing</a> or <a href="/#sign-in">sign in</a>.</p>
+      <p><a href="/request">Check an app before signing up</a>, <a href="/pricing">view pricing</a>, or <a href="/#sign-in">sign in</a>.</p>
+    </main>
+  `,
+  '/request': `
+    <main>
+      <h1>Check an app</h1>
+      <p>See whether dkrypt can resolve an App Store app or public TestFlight link before creating an account.</p>
+      <p>After signing in, you can review the app and choose whether to submit a decrypt request or TestFlight link.</p>
     </main>
   `,
   '/terms': `

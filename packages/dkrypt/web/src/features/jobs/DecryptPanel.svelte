@@ -45,7 +45,7 @@ import { pushAppFavoritesPref, sessionCanViewOperationalDashboard, sessionHasPer
 		formatSearchResultMeta,
 		shouldShowSearchResultStatus,
 	} from "#lib/searchResultPresentation";
-import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
+import { decryptSearchJumpState, signupDecryptContinuationState, showToast } from "#lib/ui.svelte";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { cn } from "#lib/utils";
 	import TestFlightPickerDialog from "#features/testflight/TestFlightPickerDialog.svelte";
@@ -185,6 +185,8 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 				queue: data.queue,
 				artifactId: data.artifactId,
 				artifactUrl: data.artifactUrl,
+				freeTierResult: data.freeTierResult,
+				temporaryResultExpiresAt: data.temporaryResultExpiresAt,
 			});
 			pushRecentBundleId(request.bundleId);
 			showToast(`Queued ${request.trackName}${request.versionLabel ? ` (${request.versionLabel})` : ""}`, "success");
@@ -238,6 +240,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	let testflightTrackName = $state("");
 	let testflightDevices = $state<Array<{ id: string; name: string }>>([]);
 	let inviteDialogOpen = $state(false);
+	let inviteInitialUrl = $state('');
 
 	function openTestFlight(
 		bundleId: string,
@@ -358,6 +361,18 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 		decryptSearchJumpState.bundleId = null;
 		term = bundleId;
 		void runSearch(bundleId);
+	});
+
+	$effect(() => {
+		const request = signupDecryptContinuationState.request;
+		if (!request) return;
+		signupDecryptContinuationState.request = null;
+		term = request.bundleId;
+		void runSearch(request.bundleId);
+		if (request.channel === 'testflight' && request.inviteUrl) {
+			inviteInitialUrl = request.inviteUrl;
+			inviteDialogOpen = true;
+		}
 	});
 
 	$effect(() => {
@@ -839,7 +854,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	onDecrypt={decryptTestFlightBuild}
 />
 
-<TestFlightInviteDialog open={inviteDialogOpen} onOpenChange={(value) => (inviteDialogOpen = value)} />
+<TestFlightInviteDialog open={inviteDialogOpen} initialInviteUrl={inviteInitialUrl} onOpenChange={(value) => (inviteDialogOpen = value)} />
 
 <BatchDecryptDialog open={batchOpen} onOpenChange={(v) => (batchOpen = v)} />
 

@@ -1355,6 +1355,25 @@ export function dashboardArtifactDownloadUrl(id: string): string {
   return `/v1/dashboard/artifacts/${encodeURIComponent(id)}/file`;
 }
 
+export interface PublicRequestCheckResult {
+  requestable: boolean;
+  channel: 'appstore' | 'testflight';
+  bundleId: string;
+  displayName: string;
+  iconUrl?: string;
+  latestVersion?: string;
+  inviteUrl?: string;
+  nextStep: string;
+}
+
+export function checkPublicDecryptRequest(input: string): Promise<PublicRequestCheckResult> {
+  return apiJson('/v1/public/request-check', { method: 'POST', body: JSON.stringify({ input }) });
+}
+
+export function createPickupLink(input: { artifactId?: string; jobId?: string }): Promise<{ url: string; expiresAt: number; resultExpiresAt?: number; fileName: string }> {
+  return apiJson('/v1/dashboard/pickup-link', { method: 'POST', body: JSON.stringify(input) });
+}
+
 export function artifactDownloadUrl(id: string): string {
   return `/v1/artifacts/${encodeURIComponent(id)}/file`;
 }

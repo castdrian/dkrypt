@@ -11,10 +11,11 @@
 
   interface Props {
     open: boolean;
+    initialInviteUrl?: string;
     onOpenChange: (open: boolean) => void;
   }
 
-  let { open, onOpenChange }: Props = $props();
+  let { open, initialInviteUrl, onOpenChange }: Props = $props();
   let inviteUrl = $state('');
   let subscriptions = $state<TestFlightSubscription[]>([]);
   let nextCursor = $state<string | undefined>(undefined);
@@ -22,6 +23,13 @@
   let loadingMore = $state(false);
   let loading = $state(false);
   let submitting = $state(false);
+  let lastInitialInviteUrl = '';
+
+  $effect(() => {
+    if (!open || !initialInviteUrl || initialInviteUrl === lastInitialInviteUrl) return;
+    inviteUrl = initialInviteUrl;
+    lastInitialInviteUrl = initialInviteUrl;
+  });
 
   $effect(() => {
     if (open) void ensureAppCatalog(subscriptions.flatMap((subscription) => subscription.bundleId ? [subscription.bundleId] : []));

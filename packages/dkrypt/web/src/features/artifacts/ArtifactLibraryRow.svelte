@@ -2,6 +2,7 @@
   import { Archive, ArchiveRestore, Download, FileSearch, Pin, PinOff } from 'lucide-svelte';
   import AppIcon from '#components/AppIcon.svelte';
   import RevealText from '#components/RevealText.svelte';
+  import PickupQrButton from '#components/PickupQrButton.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import { buttonVariants } from '#lib/components/ui/variants';
@@ -97,6 +98,7 @@
       {/if}
       {#if allowBinaryActions}
         <Button data-list-primary-action variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={onDetails} aria-label="Artifact details" title="Artifact details"><FileSearch class="h-4 w-4" /></Button>
+        <PickupQrButton artifactId={artifact.id} compact />
         <a href={artifact.fileUrl} download class="{buttonVariants('secondary', 'sm')} w-8 shrink-0 !px-0" aria-label="Download {appDisplayName(artifact.bundleId)} {artifactVersion}" title="Download IPA"><Download class="h-4 w-4" /></a>
       {/if}
     </div>

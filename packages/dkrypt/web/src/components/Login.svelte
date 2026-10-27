@@ -88,6 +88,12 @@
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter') void submit();
   }
+
+  function oauthLoginUrl(provider: 'github' | 'discord'): string {
+    const continueRequest = new URLSearchParams(location.search).get('continue') === 'decrypt';
+    const returnTo = continueRequest ? `?return_to=${encodeURIComponent('/?continue=decrypt')}` : '';
+    return `/v1/auth/${provider}/login${returnTo}`;
+  }
 </script>
 
 <div
@@ -105,7 +111,7 @@
 
     {#if sessionState.githubOauthEnabled}
       <a
-        href="/v1/auth/github/login"
+        href={oauthLoginUrl('github')}
         class={cn(buttonVariants('github'), 'w-full')}
       >
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -118,7 +124,7 @@
     {/if}
     {#if sessionState.discordOauthEnabled}
       <a
-        href="/v1/auth/discord/login"
+        href={oauthLoginUrl('discord')}
         class={cn(buttonVariants('discord'), 'mt-3 w-full')}
       >
         <svg width="20" height="15" viewBox="0 0 64 48" fill="none" aria-hidden="true">

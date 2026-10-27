@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Download } from 'lucide-svelte';
   import CopyButton from '#components/CopyButton.svelte';
   import Alert from '#lib/components/ui/Alert.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
@@ -12,10 +13,15 @@
   import { playChime, vibrateCompletion } from '#lib/sound';
   import { showToast, soundEnabledState } from '#lib/ui.svelte';
   import { fmtDurationApprox } from '#lib/format.svelte';
+  import PickupQrButton from '#components/PickupQrButton.svelte';
 
   interface CompletedDecrypt {
     label: string;
     url: string;
+    jobId: string;
+    artifactId?: string;
+    temporaryResultExpiresAt?: number;
+    freeTierResult?: boolean;
     warnings?: string[];
     executionPath?: TrackedDecrypt['executionPath'];
     durationMs?: number;
@@ -31,20 +37,21 @@
     return d.versionLabel ? `${name} (${d.versionLabel})` : name;
   }
 
-  function presentCompletion(d: TrackedDecrypt, artifactId: string | undefined): void {
+  function presentCompletion(d: TrackedDecrypt, artifactId: string | undefined, freeTierResult?: boolean, temporaryResultExpiresAt?: number): void {
     const label = decryptLabel(d);
     const warningText = d.warnings?.length ? ` Completed with warnings: ${d.warnings.join(' ')}` : '';
+    const isTemporary = freeTierResult ?? d.freeTierResult ?? false;
 
-    if (!artifactId) {
+    if (!artifactId && !isTemporary) {
       const message = `${label} finished, but its artifact is unavailable.${warningText}`;
       showToast(message, 'error', { track: true });
       notifyJobFinished(d.warnings?.length ? 'Decrypt finished with warnings' : 'Decrypt finished', message);
       return;
     }
 
-    const url = dashboardArtifactDownloadUrl(artifactId);
+    const url = isTemporary ? `/v1/dashboard/jobs/${encodeURIComponent(d.id)}/file` : dashboardArtifactDownloadUrl(artifactId!);
     const durationMs = d.finishedAt ? Math.max(0, Date.parse(d.finishedAt) - d.createdAt) : undefined;
-    completed = [...completed, { label, url, warnings: d.warnings, executionPath: d.executionPath, durationMs, attempt: d.attempt }];
+    completed = [...completed, { label, url, jobId: d.id, artifactId, freeTierResult: isTemporary, temporaryResultExpiresAt, warnings: d.warnings, executionPath: d.executionPath, durationMs, attempt: d.attempt }];
     notifyJobFinished(d.warnings?.length ? 'Decrypt finished with warnings' : 'Decrypt finished', `${label} is ready to download.${warningText}`, url);
     showToast(`${label} is ready to download.${warningText}`, 'success', {
       track: true,
@@ -76,6 +83,8 @@
           error: data.error,
           artifactId: data.artifactId,
           artifactUrl: data.artifactUrl,
+          freeTierResult: data.freeTierResult,
+          temporaryResultExpiresAt: data.temporaryResultExpiresAt,
           executionPath: data.executionPath,
           attempt: data.attempt,
           finishedAt: data.finishedAt,
@@ -85,7 +94,7 @@
           playChime();
           vibrateCompletion(data.status === 'done');
         }
-        if (data.status === 'done') presentCompletion({ ...d, warnings: data.warnings, executionPath: data.executionPath, attempt: data.attempt, finishedAt: data.finishedAt }, data.artifactId);
+        if (data.status === 'done') presentCompletion({ ...d, warnings: data.warnings, executionPath: data.executionPath, attempt: data.attempt, finishedAt: data.finishedAt, freeTierResult: data.freeTierResult, temporaryResultExpiresAt: data.temporaryResultExpiresAt }, data.artifactId, data.freeTierResult, data.temporaryResultExpiresAt);
         else {
           const label = decryptLabel(d);
           const message = `${label} failed: ${data.error ?? 'unknown error'}`;
@@ -118,14 +127,10 @@
 
 <Dialog open={Boolean(current)} {onOpenChange} class="max-w-md">
   {#if current}
-    <div class="mb-1 text-sm font-medium">Decrypt ready</div>
-    <div class="mb-3 text-xs text-muted">
-      {current.label} has an artifact ready for download.
-    </div>
-    <div class="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
-      {#if current.executionPath === 'appstore_offline'}<Badge variant="secondary">Server-side</Badge>{:else if current.executionPath === 'device_fallback'}<Badge variant="secondary">Device fallback</Badge>{:else if current.executionPath === 'device'}<Badge variant="secondary">On device</Badge>{/if}
-      {#if current.durationMs !== undefined}<span>Total time {fmtDurationApprox(current.durationMs)}</span>{/if}
-      {#if current.attempt && current.attempt > 1}<span>· {current.attempt} attempts</span>{/if}
+    <div class="mb-4 text-center">
+      <div class="text-xs font-medium uppercase tracking-[0.12em] text-ok">Decrypt complete</div>
+      <h2 class="mt-1 text-lg font-semibold">Your IPA is ready</h2>
+      <div class="mt-1 text-sm text-muted">{current.label}</div>
     </div>
     {#if current.warnings?.length}
       <Alert variant="warning" class="mb-4">
@@ -133,14 +138,24 @@
         <div class="mt-1 text-xs">{current.warnings.join(' ')}</div>
       </Alert>
     {/if}
-    <div class="bg-panel-muted mb-4 flex items-center gap-2 rounded-lg p-2">
-      <code class="min-w-0 flex-1 truncate" title={current.url}>{current.url}</code>
-      <CopyButton text={current.url} label="Copy" />
+    {#if current.freeTierResult && current.temporaryResultExpiresAt}
+      <div class="mb-4 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">Temporary download · available until {new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(current.temporaryResultExpiresAt)}</div>
+    {/if}
+    <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+      <a href={current.url} class={buttonVariants('default', 'sm') + ' justify-center'}><Download class="h-4 w-4" />Download IPA</a>
+      <PickupQrButton artifactId={current.artifactId} jobId={current.freeTierResult ? current.jobId : undefined} label="QR code" />
     </div>
-    <div class="mb-4 text-xs text-muted">The download remains available while the artifact is stored.</div>
-    <div class="flex gap-2">
-      <a href={current.url} class={buttonVariants('default', 'sm') + ' flex-1'}>Download</a>
-      <Button variant="secondary" class="flex-1" onclick={() => onOpenChange(false)}>Close</Button>
-    </div>
+    <div class="mt-2 flex justify-end"><Button variant="ghost" size="sm" onclick={() => onOpenChange(false)}>Done</Button></div>
+    <details class="mt-4 border-t border-border pt-3">
+      <summary class="cursor-pointer text-xs text-muted">Job details and link</summary>
+      <div class="mt-2 flex flex-col gap-2 text-xs text-muted">
+        <div class="flex flex-wrap items-center gap-2">
+          {#if current.executionPath === 'appstore_offline'}<Badge variant="secondary">Server-side</Badge>{:else if current.executionPath === 'device_fallback'}<Badge variant="secondary">Device fallback</Badge>{:else if current.executionPath === 'device'}<Badge variant="secondary">On device</Badge>{/if}
+          {#if current.durationMs !== undefined}<span>Total time {fmtDurationApprox(current.durationMs)}</span>{/if}
+          {#if current.attempt && current.attempt > 1}<span>{current.attempt} attempts</span>{/if}
+        </div>
+        <div class="bg-panel-muted flex items-center gap-2 rounded-lg p-2"><code class="min-w-0 flex-1 truncate" title={current.url}>{current.url}</code><CopyButton text={current.url} label="Copy" /></div>
+      </div>
+    </details>
   {/if}
 </Dialog>

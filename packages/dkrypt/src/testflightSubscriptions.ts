@@ -118,9 +118,9 @@ function chooseItunesResult(results: ItunesSearchResult[], displayName: string):
     ?? results[0];
 }
 
-export async function resolveTestFlightInvite(url: string): Promise<ResolvedTestFlightInvite> {
+export async function resolveTestFlightInvite(url: string, signal?: AbortSignal): Promise<ResolvedTestFlightInvite> {
   const normalized = normalizeTestFlightInvite(url);
-  const response = await fetch(normalized.url, { redirect: 'follow' });
+  const response = await fetch(normalized.url, { redirect: 'follow', signal });
   if (!response.ok) throw new Error(`TestFlight invite could not be resolved (${response.status})`);
   if (response.url) {
     const finalUrl = new URL(response.url);
@@ -136,7 +136,7 @@ export async function resolveTestFlightInvite(url: string): Promise<ResolvedTest
   if (queryCandidates.length === 0) throw new Error('TestFlight invite did not include app metadata');
   let result: ItunesSearchResult | undefined;
   for (const candidate of queryCandidates) {
-    result = chooseItunesResult(await searchApps(candidate), candidate);
+    result = chooseItunesResult(await searchApps(candidate, 10, signal), candidate);
     if (result) break;
   }
   if (!result) throw new Error(`could not resolve ${parsed.displayName ?? 'the TestFlight app'} in the App Store`);
