@@ -15,6 +15,7 @@ import type {
   BillingReconciliationSyncRoute,
   BillingRevenueRoute,
   BillingSubscriptionRoute,
+  BillingSubscriptionPreviewRoute,
   BillingSubscriptionsRoute,
   BillingWebhookInboxParamsRoute,
   BillingWebhookInboxRoute,
@@ -28,6 +29,7 @@ import {
   getBillingSubscriptionById,
   getBillingEntitlements,
   getBillingSubscription,
+  getBillingSubscriptionsForUser,
   getBillingUserId,
   listBillingAccessCodes,
   getPlan,
@@ -39,6 +41,7 @@ import {
   hasLegacyBillingRecord,
   linkBillingCustomer,
   listBillingSubscriptions,
+  listBillingEntitlementHistory,
   listCryptoCheckouts,
   listPlans,
   planForPrice,
@@ -57,6 +60,7 @@ import {
   CryptoBillingError,
   listManagerBillingSubscriptions,
   processNowPaymentsEvent,
+  refreshCryptoBillingForUser,
   verifyNowPaymentsEvent,
 } from '#cryptoBilling.js';
 import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpayments.js';
@@ -81,6 +85,7 @@ function metadataUserId(metadata: unknown): string | undefined {
 }
 
 const stripePaymentMethodStatusCache = new Map<string, { expiresAt: number; value: Record<string, unknown> }>();
+const billingSelfRefreshLastAt = new Map<string, number>();
 
 function sendBillingError(request: FastifyRequest, reply: FastifyReply, statusCode: number, message: string, code?: string) {
   return reply.code(statusCode).send({
@@ -770,6 +775,80 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     });
   });
 
+  server.get('/v1/billing/entitlement-history', { schema: getRouteContract('GET', '/v1/billing/entitlement-history'), preHandler: fastifyRequireSession }, (request) => {
+    const userId = getFastifySession(request)!.sub;
+    const ownedSubscriptionIds = new Set(getBillingSubscriptionsForUser(userId).map((subscription) => subscription.subscriptionId));
+    const events = listBillingEntitlementHistory()
+      .filter((event) => event.userId === userId || (!event.userId && ownedSubscriptionIds.has(event.subscriptionId)))
+      .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))
+      .slice(0, 100)
+      .map(({ id, provider, planId, kind, status, at }) => ({ id, provider, planId, kind, status, at }));
+    return { events };
+  });
+
+  server.post('/v1/billing/refresh', { schema: getRouteContract('POST', '/v1/billing/refresh'), preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const now = Date.now();
+    const previousRefresh = billingSelfRefreshLastAt.get(userId) ?? 0;
+    if (now - previousRefresh < 5_000) {
+      reply.header('Retry-After', '5');
+      return sendBillingError(request, reply, 429, 'wait a few seconds before checking billing again', 'billing_refresh_rate_limited');
+    }
+    billingSelfRefreshLastAt.set(userId, now);
+    if (billingSelfRefreshLastAt.size > 5000) {
+      for (const [id, refreshedAt] of billingSelfRefreshLastAt) if (now - refreshedAt > 60 * 60_000) billingSelfRefreshLastAt.delete(id);
+    }
+
+    return runKeyedSerial(`billing-self-refresh:${userId}`, async () => {
+      let providerCheck: 'succeeded' | 'unavailable' | 'not_needed' = 'not_needed';
+      let message = 'Your current billing and access status is up to date.';
+      try {
+        const ownedSubscriptions = getBillingSubscriptionsForUser(userId);
+        const stripeSubscriptions = ownedSubscriptions.filter((subscription) => subscription.provider === 'stripe');
+        const customerId = getBillingCustomerId(userId) ?? stripeSubscriptions[0]?.customerId;
+
+        if (stripeEnabled && customerId) {
+          const currentStripeSubscriptions = await callStripe((client) => client.subscriptions.list({ customer: customerId, status: 'all', limit: 20 }));
+          const seen = new Set<string>();
+          const providerSubscriptions = currentStripeSubscriptions.data.filter((subscription) => stripeObjectId(subscription.customer) === customerId);
+          for (const subscription of providerSubscriptions) seen.add(subscription.id);
+          const missingSubscriptions = stripeSubscriptions.filter((subscription) => !seen.has(subscription.subscriptionId));
+          const reconciledSubscriptions = await Promise.all(missingSubscriptions.map((subscription) =>
+            callStripe((client) => client.subscriptions.retrieve(subscription.subscriptionId)),
+          ));
+          for (const subscription of [...providerSubscriptions, ...reconciledSubscriptions]) {
+            await runKeyedSerial(`stripe:${subscription.id}`, () => {
+              persistStripeSubscription(subscription, new Date().toISOString(), userId);
+            });
+            seen.add(subscription.id);
+          }
+          providerCheck = 'succeeded';
+          message = 'Stripe was checked and your access was updated from its current subscription status.';
+        } else if (stripeSubscriptions.length > 0) {
+          providerCheck = 'unavailable';
+          message = 'Stripe could not be reached. Your current access has not been changed by this check.';
+        }
+
+        const currentEntitlement = getBillingEntitlements(userId);
+        const hasPendingCryptoCheckout = listCryptoCheckouts().some((checkout) => checkout.provider === 'nowpayments' && checkout.userId === userId && checkout.status === 'pending' && checkout.providerPaymentId);
+        if (currentEntitlement.provider === 'nowpayments' || hasPendingCryptoCheckout) {
+          const checked = await refreshCryptoBillingForUser(userId);
+          if (checked) {
+            providerCheck = 'succeeded';
+            message = 'NOWPayments was checked and your access was updated from the latest payment status.';
+          }
+        }
+      } catch (error) {
+        providerCheck = 'unavailable';
+        message = 'The payment provider check could not finish. Review the displayed access status; this result may be unchanged.';
+        log.warn('account billing refresh failed', { userId, error: String(error) });
+      }
+
+      recordAudit(userId, 'billing.entitlement.refresh', getBillingEntitlements(userId).subscriptionId ?? userId, `provider check ${providerCheck}`);
+      return reply.send({ refreshedAt: new Date().toISOString(), providerCheck, entitlement: getBillingEntitlements(userId), message });
+    });
+  });
+
   const billingIdempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,200}$/;
 
   function getBillingIdempotencyKey(request: FastifyRequest, reply: FastifyReply, userId: string, operation: string): string | undefined {
@@ -1299,19 +1378,35 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const subscription = getBillingSubscription(userId, entitlement.subscriptionId);
     if (!subscription) return sendBillingError(request, reply, 403, 'subscription does not belong to this account');
     if (subscription.provider !== 'stripe') return sendBillingError(request, reply, 409, 'crypto plan changes require cancellation and a new checkout');
+    if (request.body.expectedCurrentPlanId && request.body.expectedCurrentPlanId !== subscription.planId) return sendBillingError(request, reply, 409, 'your subscription changed after the preview; review the updated amount before switching', 'plan_change_preview_expired');
     const current = getPlan(subscription.planId);
     if (current?.legacy && request.body.acknowledgeLegacyLoss !== true) return sendBillingError(request, reply, 409, 'confirm that switching will permanently end your legacy plan', 'legacy_plan_confirmation_required');
+    if (request.body.prorationDate !== undefined && !request.body.expectedCurrentPlanId) return sendBillingError(request, reply, 409, 'review a current invoice preview before switching plans', 'plan_change_preview_required');
+    if (request.body.prorationDate !== undefined && (request.body.prorationDate > Math.floor(Date.now() / 1000) + 60 || Math.floor(Date.now() / 1000) - request.body.prorationDate > 600)) {
+      return sendBillingError(request, reply, 409, 'the plan-change preview expired; review the updated amount before switching', 'plan_change_preview_expired');
+    }
 
     try {
-      const stripeSubscription = await callStripe((client) => client.subscriptions.retrieve(subscription.subscriptionId));
-      const item = stripeSubscription.items.data.find((candidate) => candidate.id === subscription.subscriptionItemId) ?? stripeSubscription.items.data[0];
-      if (!item) return sendBillingError(request, reply, 502, 'subscription has no billable item');
-      const updated = await callStripe((client) => client.subscriptions.update(subscription.subscriptionId, {
-        items: [{ id: item.id, price: target.priceId, quantity: item.quantity ?? 1 }],
-        proration_behavior: current && target.amount > current.amount ? 'always_invoice' : 'create_prorations',
-        payment_behavior: 'error_if_incomplete',
-      }));
-      persistStripeSubscription(updated, new Date().toISOString(), userId);
+      const updated = await runKeyedSerial(`stripe:${subscription.subscriptionId}`, async () => {
+        const latestLocalSubscription = getBillingSubscription(userId, subscription.subscriptionId);
+        if (request.body.expectedCurrentPlanId && latestLocalSubscription?.planId !== request.body.expectedCurrentPlanId) return undefined;
+        const stripeSubscription = await callStripe((client) => client.subscriptions.retrieve(subscription.subscriptionId));
+        const item = stripeSubscription.items.data.find((candidate) => candidate.id === subscription.subscriptionItemId) ?? stripeSubscription.items.data[0];
+        if (!item) throw new Error('subscription has no billable item');
+        const currentPriceId = typeof item.price === 'string' ? item.price : item.price.id;
+        const currentPlanId = planForPrice(currentPriceId) ?? latestLocalSubscription?.planId;
+        if (request.body.expectedCurrentPlanId && currentPlanId !== request.body.expectedCurrentPlanId) return undefined;
+        const liveCurrentPlan = currentPlanId ? getPlan(currentPlanId) : current;
+        const updatedSubscription = await callStripe((client) => client.subscriptions.update(subscription.subscriptionId, {
+          items: [{ id: item.id, price: target.priceId, quantity: item.quantity ?? 1 }],
+          proration_behavior: liveCurrentPlan && target.amount > liveCurrentPlan.amount ? 'always_invoice' : 'create_prorations',
+          proration_date: request.body.prorationDate,
+          payment_behavior: 'error_if_incomplete',
+        }));
+        persistStripeSubscription(updatedSubscription, new Date().toISOString(), userId);
+        return updatedSubscription;
+      });
+      if (!updated) return sendBillingError(request, reply, 409, 'your subscription changed after the preview; review the updated amount before switching', 'plan_change_preview_expired');
       return reply.send({
         success: true,
         status: updated.status,
@@ -1323,6 +1418,53 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         return sendBillingError(request, reply, 402, 'payment confirmation is required; use Manage billing to complete the change');
       }
       return sendBillingError(request, reply, 502, 'subscription update failed; your existing plan was not changed');
+    }
+  });
+
+  server.post<BillingSubscriptionPreviewRoute>('/v1/billing/subscription/preview', { schema: getRouteContract('POST', '/v1/billing/subscription/preview'), preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const target = getPurchasablePlan(request.body.planId, userId);
+    if (!target) return sendBillingError(request, reply, 400, 'unknown plan');
+    const entitlement = getBillingEntitlements(userId);
+    if (!entitlement.subscriptionId) return sendBillingError(request, reply, 409, 'a current Stripe subscription is required to preview a plan change');
+    const subscription = getBillingSubscription(userId, entitlement.subscriptionId);
+    if (!subscription) return sendBillingError(request, reply, 403, 'subscription does not belong to this account');
+    if (subscription.provider !== 'stripe') return sendBillingError(request, reply, 409, 'crypto plan changes require cancellation and a new checkout');
+    if (!requireStripeBilling(request, reply)) return;
+
+    try {
+      const prorationDate = Math.floor(Date.now() / 1000);
+      const stripeSubscription = await callStripe((client) => client.subscriptions.retrieve(subscription.subscriptionId));
+      const item = stripeSubscription.items.data.find((candidate) => candidate.id === subscription.subscriptionItemId) ?? stripeSubscription.items.data[0];
+      const customerId = stripeObjectId(stripeSubscription.customer);
+      if (!item || !customerId) return sendBillingError(request, reply, 502, 'subscription is missing the details required for an invoice preview');
+      const currentPriceId = typeof item.price === 'string' ? item.price : item.price.id;
+      const currentPlanId = planForPrice(currentPriceId) ?? subscription.planId;
+      const currentPlan = getPlan(currentPlanId);
+      const prorationBehavior = currentPlan && target.amount > currentPlan.amount ? 'always_invoice' : 'create_prorations';
+      const preview = await callStripe((client) => client.invoices.createPreview({
+        customer: customerId,
+        subscription: stripeSubscription.id,
+        subscription_details: {
+          items: [{ id: item.id, price: target.priceId, quantity: item.quantity ?? 1 }],
+          proration_behavior: prorationBehavior,
+          proration_date: prorationDate,
+        },
+      }));
+      return reply.send({
+        planId: target.id,
+        currentPlanId,
+        currency: (preview.currency ?? target.currency.toLowerCase()).toUpperCase(),
+        chargeTiming: prorationBehavior === 'always_invoice' ? 'now' : 'next_invoice',
+        amountDueMinor: preview.amount_due,
+        totalMinor: preview.total ?? preview.amount_due,
+        prorationBehavior,
+        prorationDate,
+        ...(subscription.nextBilledAt ? { nextBilledAt: subscription.nextBilledAt } : {}),
+      });
+    } catch (error) {
+      log.warn('Stripe subscription change preview failed', { userId, planId: target.id, error: String(error) });
+      return sendBillingError(request, reply, 502, 'Stripe could not calculate the plan-change preview. Your current plan is unchanged.', 'plan_change_preview_unavailable');
     }
   });
 };

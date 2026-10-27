@@ -28,6 +28,7 @@ import {
   billingReconciliationSyncBodySchema,
   billingRevenueQuerySchema,
   billingSubscriptionBodySchema,
+  billingSubscriptionPreviewBodySchema,
   billingSubscriptionsQuerySchema,
   billingWebhookInboxParamsSchema,
   billingWebhookInboxQuerySchema,
@@ -662,6 +663,24 @@ const BillingCancelResponse = object({
   pauseResumesAt: Type.Optional(Type.String({ format: 'date-time' })),
 });
 const BillingSubscriptionUpdateResponse = object({ success: Type.Boolean(), status: Type.String(), priceId: Type.Union([Type.String(), Type.Null()]) });
+const BillingSubscriptionPreviewResponse = object({
+  planId: Identifier,
+  currentPlanId: Identifier,
+  currency: Type.String({ minLength: 3, maxLength: 3 }),
+  chargeTiming: Type.Union([Type.Literal('now'), Type.Literal('next_invoice')]),
+  amountDueMinor: Type.Number(),
+  totalMinor: Type.Number(),
+  prorationBehavior: Type.Union([Type.Literal('always_invoice'), Type.Literal('create_prorations')]),
+  prorationDate: Type.Integer({ minimum: 1 }),
+  nextBilledAt: Type.Optional(Type.String({ format: 'date-time' })),
+});
+const BillingEntitlementHistoryResponse = object({ events: Type.Array(object({ id: Type.String(), provider: Type.String(), planId: Type.String(), kind: Type.String(), status: Type.String(), at: Type.String({ format: 'date-time' }) })) });
+const BillingRefreshResponse = object({
+  refreshedAt: Type.String({ format: 'date-time' }),
+  providerCheck: Type.Union([Type.Literal('succeeded'), Type.Literal('unavailable'), Type.Literal('not_needed')]),
+  entitlement: JsonObject,
+  message: Type.String(),
+});
 const OkResponse = dashboardOkResponseSchema;
 const AuthTokenResponse = object({ ok: Type.Boolean(), expiresAt: Type.Optional(Type.Integer()) });
 const AuthLoginResponse = object({ ok: Type.Boolean() });
@@ -1006,6 +1025,9 @@ register('POST', '/v1/billing/access-codes/:id/revoke', { params: billingAccessC
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema });
 register('POST', '/v1/billing/pause', { headers: billingIdempotencyKeyHeadersSchema, body: billingPauseBodySchema });
 register('POST', '/v1/billing/resume', { headers: billingIdempotencyKeyHeadersSchema });
+register('POST', '/v1/billing/refresh', {});
+register('GET', '/v1/billing/entitlement-history', {});
+register('POST', '/v1/billing/subscription/preview', { body: billingSubscriptionPreviewBodySchema });
 register('GET', '/v1/billing', {});
 register('POST', '/v1/billing/portal', {});
 register('GET', '/v1/billing/provider-status', { querystring: billingProviderStatusQuerySchema });
@@ -1310,6 +1332,9 @@ register('POST', '/v1/billing/portal', { response: { 200: UrlResponse } });
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema, response: { 200: BillingCancelResponse } });
 register('POST', '/v1/billing/pause', { headers: billingIdempotencyKeyHeadersSchema, body: billingPauseBodySchema, response: { 200: BillingCancelResponse, 400: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 503: ErrorEnvelope } });
 register('POST', '/v1/billing/resume', { headers: billingIdempotencyKeyHeadersSchema, response: { 200: BillingCancelResponse, 400: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 503: ErrorEnvelope } });
+register('POST', '/v1/billing/refresh', { response: { 200: BillingRefreshResponse, 429: ErrorEnvelope, 503: ErrorEnvelope } });
+register('GET', '/v1/billing/entitlement-history', { response: { 200: BillingEntitlementHistoryResponse } });
+register('POST', '/v1/billing/subscription/preview', { body: billingSubscriptionPreviewBodySchema, response: { 200: BillingSubscriptionPreviewResponse, 400: ErrorEnvelope, 403: ErrorEnvelope, 409: ErrorEnvelope, 502: ErrorEnvelope, 503: ErrorEnvelope } });
 register('POST', '/v1/billing/subscription', { body: billingSubscriptionBodySchema, response: { 200: BillingSubscriptionUpdateResponse } });
 register('GET', '/v1/dashboard/settings', { response: { 200: DashboardSettingsResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
 register('PUT', '/v1/dashboard/settings', {

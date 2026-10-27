@@ -11,12 +11,14 @@
   import { confirmDialog, decryptUsageAlertThresholdsState, showToast } from '#lib/ui.svelte';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
-  import { fetchBillingInvoices, fetchBillingQuotaHistory, redeemBillingAccessCode, type BillingInvoice, type BillingQuotaHistoryEntry } from '#lib/api';
+  import { fetchBillingEntitlementHistory, fetchBillingInvoices, fetchBillingQuotaHistory, redeemBillingAccessCode, type BillingEntitlementEvent, type BillingInvoice, type BillingQuotaHistoryEntry } from '#lib/api';
 
   type PlanId = 'viewer' | 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
   type CheckoutState = 'success' | 'cancelled' | undefined;
   type ActivationStatus = 'idle' | 'checking' | 'active' | 'pending';
   type PaymentProvider = 'stripe' | 'crypto';
+  const attentionBillingStatuses = new Set(['failed', 'past_due', 'refunded', 'revoked', 'canceled', 'cancelled', 'unpaid']);
+  const successfulBillingStatuses = new Set(['active', 'paid', 'completed', 'finished', 'succeeded']);
 
   interface Plan {
     id: Exclude<PlanId, 'viewer'>;
@@ -92,17 +94,45 @@
     };
   }
 
+  interface PlanChangePreview {
+    planId: string;
+    currentPlanId: PlanId;
+    currency: string;
+    chargeTiming: 'now' | 'next_invoice';
+    amountDueMinor: number;
+    totalMinor: number;
+    prorationBehavior: 'always_invoice' | 'create_prorations';
+    prorationDate: number;
+    nextBilledAt?: string;
+  }
+
+  interface BillingHistoryEntry {
+    id: string;
+    at: string;
+    title: string;
+    detail: string;
+    status: string;
+    provider: 'stripe' | 'nowpayments' | 'legacy';
+    amount?: string;
+    invoiceUrl?: string;
+    reference?: string;
+  }
+
   let billing = $state<BillingData | undefined>();
   let invoices = $state<BillingInvoice[]>([]);
+  let entitlementEvents = $state<BillingEntitlementEvent[]>([]);
   let invoiceWarnings = $state<string[]>([]);
-  let receiptQuery = $state('');
-  let receiptProvider = $state<'all' | 'stripe' | 'nowpayments'>('all');
-  let receiptStatus = $state('all');
+  let entitlementHistoryWarning = $state<string | undefined>();
+  let historyQuery = $state('');
+  let historyProvider = $state<'all' | 'stripe' | 'nowpayments' | 'legacy'>('all');
+  let historyStatus = $state('all');
   let quotaHistory = $state<BillingQuotaHistoryEntry[] | null>(null);
   let quotaHistoryOpen = $state(false);
   let quotaHistoryLoading = $state(false);
   let accessCheckLoading = $state(false);
   let accessCheckLines = $state<Array<{ label: string; ok: boolean; detail: string }> | null>(null);
+  let accessRefreshMessage = $state<string | undefined>();
+  let accessRefreshState = $state<'succeeded' | 'unavailable' | 'not_needed' | undefined>();
   let loading = $state(true);
   let loadError = $state(false);
   let openingPlan = $state<PlanId | undefined>();
@@ -126,16 +156,41 @@
   let creditCheckoutIdempotencyKey = $state<string | undefined>();
   let planChangeOpen = $state(false);
   let pendingPlanChange = $state<Plan | undefined>();
+  let planChangePreview = $state<PlanChangePreview | undefined>();
+  let planChangePreviewLoading = $state(false);
+  let planChangePreviewError = $state<string | undefined>();
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
   let creditCheckoutState = $state<CheckoutState>(checkoutParams.get('credits') as CheckoutState);
-  const visibleInvoices = $derived.by(() => invoices.filter((invoice) => {
-    const query = receiptQuery.trim().toLowerCase();
-    return (receiptProvider === 'all' || invoice.provider === receiptProvider)
-      && (receiptStatus === 'all' || invoice.status === receiptStatus)
-      && (!query || `${invoice.id} ${invoice.paymentId ?? ''} ${invoice.planId} ${invoice.provider}`.toLowerCase().includes(query));
-  }));
+  const billingTimeline = $derived.by(() => {
+    const accessItems: BillingHistoryEntry[] = entitlementEvents.map((event) => ({
+      id: `access:${event.id}`,
+      at: event.at,
+      title: ({ grant: 'Access granted', renewal: 'Access renewed', pause: 'Access paused', resume: 'Access resumed', failure: 'Payment issue', cancellation: 'Subscription cancelled', revocation: 'Access revoked' } as const)[event.kind],
+      detail: `${planLabel(event.planId as PlanId)} · ${event.provider === 'nowpayments' ? 'Crypto' : event.provider === 'stripe' ? 'Stripe' : 'Legacy'}`,
+      status: event.status,
+      provider: event.provider,
+    }));
+    const paymentItems: BillingHistoryEntry[] = invoices.map((invoice) => ({
+      id: `payment:${invoice.id}`,
+      at: invoice.createdAt,
+      title: ['paid', 'completed', 'finished'].includes(invoice.status.toLowerCase()) ? 'Payment received' : 'Payment record',
+      detail: `${planLabel(invoice.planId as PlanId)} · ${invoice.provider === 'nowpayments' ? 'Crypto' : 'Stripe'} · ${invoice.status}`,
+      status: invoice.status,
+      provider: invoice.provider,
+      amount: fmtCurrency(invoice.amountMinor / 100, invoice.currency),
+      invoiceUrl: invoice.invoiceUrl,
+      reference: invoice.provider === 'stripe' ? invoice.id : invoice.paymentId ?? invoice.id,
+    }));
+    const query = historyQuery.trim().toLowerCase();
+    return [...accessItems, ...paymentItems]
+      .filter((entry) => (historyProvider === 'all' || entry.provider === historyProvider)
+        && (historyStatus === 'all' || entry.status === historyStatus)
+        && (!query || `${entry.title} ${entry.detail} ${entry.reference ?? ''} ${entry.provider}`.toLowerCase().includes(query)))
+      .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))
+      .slice(0, 100);
+  });
   const planFit = $derived.by(() => {
     if (!billing || billing.usageForecast.jobsInSample < 3) return null;
     if (billing.entitlement.legacy) return { legacy: true as const, plan: undefined, expectedDaily: 0 };
@@ -153,13 +208,13 @@
     const response = await fetch('/v1/billing');
     if (!response.ok) throw new Error('billing unavailable');
     billing = (await response.json()) as BillingData;
-    try {
-      const history = await fetchBillingInvoices();
-      invoices = history.invoices;
-      invoiceWarnings = history.warnings;
-    } catch {
-      invoiceWarnings = ['Payment history is temporarily unavailable'];
-    }
+    const [invoiceResult, entitlementResult] = await Promise.allSettled([fetchBillingInvoices(), fetchBillingEntitlementHistory()]);
+    if (invoiceResult.status === 'fulfilled') {
+      invoices = invoiceResult.value.invoices;
+      invoiceWarnings = invoiceResult.value.warnings;
+    } else invoiceWarnings = ['Payment history is temporarily unavailable'];
+    entitlementEvents = entitlementResult.status === 'fulfilled' ? entitlementResult.value.events : [];
+    entitlementHistoryWarning = entitlementResult.status === 'rejected' ? 'Account access history is temporarily unavailable.' : undefined;
     if (billing.entitlement.provider === 'nowpayments' || (!billing.providers.stripe.enabled && billing.providers.crypto.enabled)) paymentProvider = 'crypto';
   }
 
@@ -207,7 +262,14 @@
 
   async function checkAccess(): Promise<void> {
     accessCheckLoading = true;
+    accessRefreshMessage = undefined;
+    accessRefreshState = undefined;
     try {
+      const refreshResponse = await fetch('/v1/billing/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const refreshResult = await refreshResponse.json().catch(() => ({})) as { message?: string; providerCheck?: 'succeeded' | 'unavailable' | 'not_needed'; error?: string };
+      if (!refreshResponse.ok) throw new Error(refreshResult.message ?? refreshResult.error ?? 'Could not refresh billing access.');
+      accessRefreshMessage = refreshResult.message;
+      accessRefreshState = refreshResult.providerCheck;
       await Promise.all([loadBilling(), refreshSession()]);
       if (!billing) return;
       const decryptReady = billing.entitlement.decrypt && sessionHasPermission(PermissionFlag.requestDecrypt);
@@ -218,7 +280,9 @@
         { label: 'API keys', ok: apiReady, detail: apiReady ? 'Your plan and account permission allow API access.' : billing.entitlement.api ? 'Your plan includes API access, but your account role does not allow it.' : 'Your plan does not include API access.' },
       ];
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Could not check account access.', 'error');
+      accessRefreshMessage = error instanceof Error ? error.message : 'Could not refresh account access.';
+      accessRefreshState = 'unavailable';
+      showToast(accessRefreshMessage, 'error');
     } finally {
       accessCheckLoading = false;
     }
@@ -411,32 +475,65 @@
     }
   }
 
-  async function changePlan(plan: Plan): Promise<void> {
+  async function loadPlanChangePreview(planId: string): Promise<void> {
+    planChangePreview = undefined;
+    planChangePreviewError = undefined;
+    planChangePreviewLoading = true;
+    try {
+      const response = await fetch('/v1/billing/subscription/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId }),
+      });
+      const result = await response.json().catch(() => ({})) as PlanChangePreview & { error?: string; message?: string };
+      if (!response.ok) {
+        planChangePreviewError = result.message ?? result.error ?? 'Stripe could not calculate this plan-change preview.';
+        return;
+      }
+      if (billing && result.currentPlanId !== billing.entitlement.planId) {
+        await loadBilling();
+        if (billing?.entitlement.planId !== result.currentPlanId) {
+          planChangePreviewError = 'Your subscription changed while the preview was loading. Refresh the preview before confirming.';
+          return;
+        }
+      }
+      planChangePreview = result;
+    } catch {
+      planChangePreviewError = 'Could not reach Stripe to calculate the plan-change preview.';
+    } finally {
+      planChangePreviewLoading = false;
+    }
+  }
+
+  async function changePlan(plan: Plan, prorationDate?: number): Promise<boolean> {
     if (billing?.entitlement.provider === 'nowpayments' && billing.entitlement.status === 'past_due') {
       if (plan.id !== billing.entitlement.planId) {
         showToast('Cancel the current crypto plan before choosing a different tier.', 'error');
-        return;
+        return false;
       }
-      return void startCheckout(plan);
+      await startCheckout(plan);
+      return true;
     }
     if (billing?.entitlement.provider === 'nowpayments') {
       showToast('Crypto plan changes require cancellation and a new checkout.', 'error');
-      return;
+      return false;
     }
     openingPlan = plan.id;
     try {
       const response = await fetch('/v1/billing/subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id, acknowledgeLegacyLoss: billing?.entitlement.legacy === true }),
+        body: JSON.stringify({ planId: plan.id, acknowledgeLegacyLoss: billing?.entitlement.legacy === true, ...(prorationDate ? { prorationDate, expectedCurrentPlanId: planChangePreview?.currentPlanId } : {}) }),
       });
-      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      const data = (await response.json().catch(() => ({}))) as { error?: string; message?: string; code?: string };
       if (!response.ok) {
-        showToast(data.error ?? 'Plan change failed', 'error');
-        return;
+        showToast(data.message ?? data.error ?? 'Plan change failed', 'error');
+        if (data.code === 'plan_change_preview_expired') await loadPlanChangePreview(plan.id);
+        return false;
       }
       showToast('Plan updated. Your access is refreshing…', 'success');
       await refreshAfterCheckout();
+      return true;
     } finally {
       openingPlan = undefined;
     }
@@ -450,7 +547,9 @@
         return;
       }
       pendingPlanChange = plan;
+      planChangePreview = undefined;
       planChangeOpen = true;
+      void loadPlanChangePreview(plan.id);
       return;
     }
     void startCheckout(plan);
@@ -458,9 +557,13 @@
 
   async function confirmPlanChange(): Promise<void> {
     const plan = pendingPlanChange;
-    planChangeOpen = false;
-    pendingPlanChange = undefined;
-    if (plan) await changePlan(plan);
+    if (!plan || !planChangePreview || planChangePreviewLoading) return;
+    const changed = await changePlan(plan, planChangePreview.prorationDate);
+    if (changed) {
+      planChangeOpen = false;
+      pendingPlanChange = undefined;
+      planChangePreview = undefined;
+    }
   }
 
   function fallbackPrice(plan: Plan): string {
@@ -543,7 +646,7 @@
       {#if billing}
         <div class="flex flex-wrap items-center gap-2">
           <div class="rounded-xl border border-border bg-bg/60 px-3 py-2 text-right"><div class="text-xs text-muted">Current plan</div><div class="font-semibold capitalize">{planLabel(billing.entitlement.planId)}</div><Badge variant={billing.entitlement.paused ? 'outline' : statusVariant(billing.entitlement.status)} class="mt-1">{billing.entitlement.paused ? 'Paused' : billing.entitlement.provider === 'gift' ? 'Prepaid' : statusLabel(billing.entitlement.status)}</Badge></div>
-          <Button variant="secondary" loading={accessCheckLoading} onclick={() => void checkAccess()}>Check my access</Button>
+          <Button variant="secondary" loading={accessCheckLoading} onclick={() => void checkAccess()}>Refresh access</Button>
           {#if billing.entitlement.provider === 'stripe' && billing.customerId}<Button variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}><ExternalLink class="h-4 w-4" /> Manage billing</Button>{#if billing.entitlement.paused}<Button variant="secondary" loading={resuming} onclick={() => void resumeSubscription()}>Resume now</Button>{:else}<Button variant="secondary" onclick={() => { pauseResumeDate = getPauseDateDefault(); pausePickerOpen = !pausePickerOpen; }}>Pause billing</Button>{/if}{:else if billing.entitlement.provider === 'nowpayments'}<Button variant="secondary" loading={cancelling} onclick={() => void cancelSubscription()}>Stop crypto renewal</Button>{/if}
         </div>
       {/if}
@@ -551,6 +654,7 @@
     {#if billing?.entitlement.paused && billing.entitlement.pauseResumesAt}<div class="mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-sm" role="status"><div class="font-medium">Subscription paused</div><p class="mt-1 text-muted">Paid access resumes {formatDate(billing.entitlement.pauseResumesAt)}. Stripe voids invoices generated during the pause; it does not charge for the paused period later.</p></div>{/if}
     {#if pausePickerOpen && billing?.entitlement.provider === 'stripe'}<div class="mt-3 rounded-lg border border-border bg-bg/50 p-3"><label for="billing-pause-resume-date" class="text-sm font-medium">Resume access and billing on</label><div class="mt-2 flex flex-wrap items-center gap-2"><input id="billing-pause-resume-date" type="date" min={getPauseDateMinimum()} max={getPauseDateMaximum()} bind:value={pauseResumeDate} class="h-9 rounded-md border border-border bg-bg px-2 text-sm" /><Button size="sm" loading={pausing} disabled={!pauseResumeDate} onclick={() => void pauseSubscription()}>Pause subscription</Button><Button size="sm" variant="ghost" onclick={() => { pausePickerOpen = false; }}>Keep active</Button></div><p class="mt-2 text-xs text-muted">Access ends immediately. Stripe voids invoices during the pause, and billing resumes on the next scheduled renewal after the chosen date.</p></div>{/if}
     {#if billing?.paymentMethod && billing.paymentMethod.state !== 'ready'}<div class="mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-sm" role="status"><div class="font-medium">{billing.paymentMethod.state === 'unavailable' ? 'Payment method status unavailable' : billing.paymentMethod.state === 'expiring' ? 'Card may expire before your next renewal' : billing.paymentMethod.state === 'expired' ? 'Your payment card has expired' : 'Your subscription needs a valid payment method'}</div><p class="mt-1 text-muted">{#if billing.paymentMethod.brand && billing.paymentMethod.last4}{billing.paymentMethod.brand} ending in {billing.paymentMethod.last4}{#if billing.paymentMethod.expMonth && billing.paymentMethod.expYear} · expires {String(billing.paymentMethod.expMonth).padStart(2, '0')}/{billing.paymentMethod.expYear}{/if}. {/if}{#if billing.paymentMethod.state === 'unavailable'}We couldn’t check your saved payment method just now.{:else}Update your payment details in Stripe to avoid a failed renewal.{/if}</p>{#if billing.paymentMethod.state !== 'unavailable'}<Button class="mt-2" size="sm" variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}>Update payment method</Button>{/if}</div>{/if}
+    {#if accessRefreshMessage}<div class={accessRefreshState === 'unavailable' ? 'mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs text-muted' : 'mt-3 rounded-lg border border-ok/30 bg-ok/5 p-3 text-xs text-muted'} role="status">{accessRefreshMessage}</div>{/if}
     {#if accessCheckLines}<div class="mt-4 grid gap-2 rounded-xl border border-border bg-bg/40 p-3 sm:grid-cols-3" aria-live="polite">{#each accessCheckLines as line (line.label)}<div class="flex items-start gap-2 text-xs"><span class={line.ok ? 'text-ok' : 'text-warn'}>{#if line.ok}<Check class="size-3.5" />{:else}<CircleX class="size-3.5" />{/if}</span><span><span class="font-medium">{line.label}</span><span class="mt-0.5 block text-muted">{line.detail}</span></span></div>{/each}</div>{/if}
     {#if billing && billing.entitlement.planId !== 'viewer'}
       <div class="mt-4 rounded-xl border border-border bg-bg/50 px-3 py-3 text-sm">
@@ -579,18 +683,32 @@
     {/if}
   </Card>
 
-  {#if billing && (invoices.length > 0 || invoiceWarnings.length > 0)}
+  {#if billing}
     <Card>
-      <div><h3 class="text-sm font-semibold">Invoices and payment receipts</h3><p class="mt-1 text-xs text-muted">Recent Stripe invoices and dkrypt crypto payment records for this account.</p></div>
-      {#if invoiceWarnings.length}<div class="mt-3 text-xs text-muted">{invoiceWarnings.join(' · ')}</div>{/if}
-      <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_10rem_10rem]"><label class="relative"><Search class="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" /><input class="h-9 w-full rounded-lg border border-border bg-bg pl-9 pr-3 text-xs" bind:value={receiptQuery} placeholder="Search receipts" aria-label="Search receipts" /></label><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={receiptProvider} aria-label="Filter by payment provider"><option value="all">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option></select><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={receiptStatus} aria-label="Filter by payment status"><option value="all">All statuses</option>{#each [...new Set(invoices.map((invoice) => invoice.status))].sort() as status (status)}<option value={status}>{status}</option>{/each}</select></div>
-      {#if visibleInvoices.length}
-        <ul class="mt-3 divide-y divide-border/70">
-          {#each visibleInvoices as invoice (invoice.id)}
-            <li class="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div class="min-w-0"><div class="font-medium">{planLabel(invoice.planId as PlanId)} · {invoice.provider === 'stripe' ? 'Stripe' : 'Crypto'}</div><div class="mt-1 text-xs text-muted">{formatDate(invoice.createdAt)} · {invoice.status}</div><div class="mt-1 max-w-full truncate font-mono text-[10px] text-muted" data-sensitive="true">{invoice.provider === 'stripe' ? invoice.id : invoice.paymentId ?? invoice.id}</div></div><div class="flex items-center gap-3"><span class="font-medium">{fmtCurrency(invoice.amountMinor / 100, invoice.currency)}</span>{#if invoice.invoiceUrl}<a class="rounded-md border border-border p-2" href={invoice.invoiceUrl} target="_blank" rel="noreferrer" aria-label="Open invoice"><ExternalLink class="h-4 w-4" /></a>{/if}</div></li>
+      <div><h3 class="text-sm font-semibold">Payment and access history</h3><p class="mt-1 text-xs text-muted">One timeline for payment receipts and changes to your account access.</p></div>
+      {#if invoiceWarnings.length}<div class="mt-3 text-xs text-muted" role="status">{invoiceWarnings.join(' · ')}</div>{/if}
+      {#if entitlementHistoryWarning}<div class="mt-2 text-xs text-muted" role="status">{entitlementHistoryWarning}</div>{/if}
+      <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_10rem_10rem]"><label class="relative"><Search class="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" /><input class="h-9 w-full rounded-lg border border-border bg-bg pl-9 pr-3 text-xs" bind:value={historyQuery} placeholder="Search history" aria-label="Search payment and access history" /></label><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={historyProvider} aria-label="Filter by provider"><option value="all">All providers</option><option value="stripe">Stripe</option><option value="nowpayments">Crypto</option><option value="legacy">Legacy</option></select><select class="h-9 rounded-lg border border-border bg-bg px-2 text-xs" bind:value={historyStatus} aria-label="Filter by status"><option value="all">All statuses</option>{#each [...new Set([...invoices.map((invoice) => invoice.status), ...entitlementEvents.map((event) => event.status)])].sort() as status (status)}<option value={status}>{status}</option>{/each}</select></div>
+      {#if billingTimeline.length}
+        <ol class="mt-3 divide-y divide-border/70">
+          {#each billingTimeline as entry (entry.id)}
+            {@const normalizedStatus = entry.status.toLowerCase()}
+            {@const statusNeedsAttention = attentionBillingStatuses.has(normalizedStatus)}
+            {@const statusIsSuccess = successfulBillingStatuses.has(normalizedStatus)}
+            {@const stateClass = statusNeedsAttention ? 'text-warn' : statusIsSuccess ? 'text-ok' : 'text-muted'}
+            <li class="flex flex-wrap items-center gap-3 py-3">
+              <span class={stateClass}>{#if statusNeedsAttention}<CircleX class="size-4" />{:else if statusIsSuccess}<CircleCheck class="size-4" />{:else}<span class="text-xs font-medium uppercase">{entry.status}</span>{/if}</span>
+              <span class="min-w-0 flex-1"><span class="block text-sm font-medium">{entry.title}</span><span class="mt-0.5 block text-xs text-muted">{entry.detail}</span>{#if entry.reference}<span class="mt-1 block max-w-full truncate font-mono text-[10px] text-muted" data-sensitive="true">{entry.reference}</span>{/if}</span>
+              {#if entry.amount}<span class="shrink-0 text-sm font-medium tabular-nums">{entry.amount}</span>{/if}
+              <span class="flex shrink-0 items-center gap-2"><time class="text-xs text-muted" datetime={entry.at}>{formatDate(entry.at)}</time>{#if entry.invoiceUrl}<a class="rounded-md border border-border p-1.5 text-muted hover:text-foreground" href={entry.invoiceUrl} target="_blank" rel="noreferrer" aria-label="Open invoice"><ExternalLink class="size-3.5" /></a>{/if}</span>
+            </li>
           {/each}
-        </ul>
-      {:else if invoices.length}<p class="mt-3 text-sm text-muted">No receipts match these filters.</p>{:else if !invoiceWarnings.length}<p class="mt-3 text-sm text-muted">No payments have been recorded yet.</p>{/if}
+        </ol>
+      {:else if historyQuery || historyProvider !== 'all' || historyStatus !== 'all'}
+        <p class="mt-3 text-sm text-muted">No payment or access records match these filters.</p>
+      {:else}
+        <p class="mt-3 text-sm text-muted">No payments or access changes have been recorded yet.</p>
+      {/if}
     </Card>
   {/if}
 
@@ -610,10 +728,11 @@
   {/if}
 
   {#if planChangeOpen && pendingPlanChange && billing}
+    {@const previewPlanId = pendingPlanChange.id}
     {@const currentPlan = billing.currentPlan}
     {@const newRemaining = pendingPlanChange.dailyDecryptLimit === undefined ? null : Math.max(0, pendingPlanChange.dailyDecryptLimit - billing.quota.used)}
     {@const priceChange = currentPlan?.currency === pendingPlanChange.currency ? pendingPlanChange.amount - currentPlan.amount : undefined}
-    <Dialog open={planChangeOpen} onOpenChange={(open) => (planChangeOpen = open)} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
+    <Dialog open={planChangeOpen} onOpenChange={(open) => { planChangeOpen = open; if (!open) { pendingPlanChange = undefined; planChangePreview = undefined; } }} title="Review plan change" class="max-h-[85vh] max-w-lg overflow-y-auto">
       <div class="flex items-start justify-between gap-3"><div><h2 class="text-base font-semibold">Review your plan change</h2><p class="mt-1 text-xs text-muted">Nothing changes until you confirm.</p></div><Button size="icon" variant="ghost" aria-label="Close plan review" onclick={() => (planChangeOpen = false)}><X class="h-4 w-4" /></Button></div>
       <div class="mt-4 grid gap-3 sm:grid-cols-2">
         <div class="rounded-lg border border-border p-3"><div class="text-[11px] text-muted">Current</div><div class="mt-1 font-medium">{currentPlan?.name ?? planLabel(billing.entitlement.planId)}</div><div class="mt-1 text-sm">{currentPlan ? fallbackPrice(currentPlan) : 'Current price'}<span class="text-xs text-muted"> / month</span></div><div class="mt-2 text-xs text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.limit} new decrypts per rolling 24 hours`}</div></div>
@@ -628,10 +747,23 @@
           <li>{billing.entitlement.nextBilledAt ? `Next billing date: ${formatDate(billing.entitlement.nextBilledAt)}.` : 'The plan price will apply through Stripe billing.'} {priceChange === undefined ? 'Stripe will apply the selected price through your billing schedule.' : priceChange > 0 ? 'Stripe may invoice the prorated increase immediately.' : priceChange < 0 ? 'Stripe applies a prorated credit for the price decrease.' : 'The monthly price is unchanged; no price adjustment is expected.'} If payment cannot complete, the current plan remains unchanged.</li>
         </ul>
       </div>
+      <div class="mt-3 rounded-lg border border-accent/30 bg-accent/5 p-3" aria-live="polite">
+        <div class="text-xs font-medium">Stripe invoice preview</div>
+        {#if planChangePreviewLoading}
+          <div class="mt-2 flex items-center gap-2 text-xs text-muted" role="status"><LoaderCircle class="size-3.5 animate-spin" />Calculating the amount and billing timing…</div>
+        {:else if planChangePreview}
+          <div class="mt-2 flex flex-wrap items-baseline justify-between gap-2"><span class="text-xs text-muted">{planChangePreview.chargeTiming === 'now' ? 'Estimated amount due now' : 'Estimated next invoice'}</span><span class="text-lg font-semibold tabular-nums">{fmtCurrency(planChangePreview.amountDueMinor / 100, planChangePreview.currency)}</span></div>
+          {#if planChangePreview.nextBilledAt}<p class="mt-1 text-xs text-muted">Next billing date: {formatDate(planChangePreview.nextBilledAt)}.</p>{/if}
+          <p class="mt-1 text-xs text-muted">Includes Stripe’s current tax, credits, and proration calculation. This estimate is held for 10 minutes.</p>
+        {:else if planChangePreviewError}
+          <p class="mt-2 text-xs text-warn">{planChangePreviewError}</p>
+          <Button class="mt-2" size="sm" variant="secondary" onclick={() => void loadPlanChangePreview(previewPlanId)}>Refresh preview</Button>
+        {/if}
+      </div>
       {#if billing.entitlement.legacy}
         <div class="mt-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs"><div class="font-medium">Grandfathered benefits will end</div><p class="mt-1 text-muted">This switch permanently ends your current legacy plan. Its price and benefits cannot be restored later.</p></div>
       {/if}
-      <div class="mt-4 flex flex-wrap justify-end gap-2"><Button variant="secondary" onclick={() => (planChangeOpen = false)}>Keep current plan</Button><Button loading={openingPlan === pendingPlanChange.id} onclick={() => void confirmPlanChange()}>{billing.entitlement.legacy ? 'Switch and end legacy plan' : `Confirm switch to ${pendingPlanChange.name}`}</Button></div>
+      <div class="mt-4 flex flex-wrap justify-end gap-2"><Button variant="secondary" onclick={() => (planChangeOpen = false)}>Keep current plan</Button><Button disabled={!planChangePreview || planChangePreviewLoading || Boolean(planChangePreviewError)} loading={openingPlan === pendingPlanChange.id} onclick={() => void confirmPlanChange()}>{billing.entitlement.legacy ? 'Switch and end legacy plan' : `Confirm switch to ${pendingPlanChange.name}`}</Button></div>
     </Dialog>
   {/if}
 

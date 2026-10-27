@@ -18,15 +18,15 @@ const [command, ...args] = cliArgs;
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt mcp <login|logout|stdio> [--url <origin>] [--scope <scopes>]\ndkrypt doctor [--json]\ndkrypt tui\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt mcp <login|logout|stdio> [--url <origin>] [--scope <scopes>]\ndkrypt doctor [--bundle-id <id>] [--channel appstore|testflight] [--json]\ndkrypt tui\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
 if (command === 'completion') {
   const completions = {
-    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    profile) COMPREPLY=( $(compgen -W "list use delete" -- "$cur") ); return ;;\n    mcp) COMPREPLY=( $(compgen -W "login logout stdio" -- "$cur") ); return ;;\n    --profile) COMPREPLY=(); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor|--url|--scope) COMPREPLY=(); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
-    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    profile) _values "action" list use delete ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
-    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from profile" -a "list use delete"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -l profile -r\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
+    bash: '_dkrypt() {\n  local cur prev\n  cur="${COMP_WORDS[COMP_CWORD]}"\n  prev="${COMP_WORDS[COMP_CWORD-1]}"\n  case "$prev" in\n    completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;\n    profile) COMPREPLY=( $(compgen -W "list use delete" -- "$cur") ); return ;;\n    mcp) COMPREPLY=( $(compgen -W "login logout stdio" -- "$cur") ); return ;;\n    --profile) COMPREPLY=(); return ;;\n    --version|--output|--idempotency-key|--limit|--cursor|--url|--scope|--bundle-id) COMPREPLY=(); return ;;\n    --channel) COMPREPLY=( $(compgen -W "appstore testflight" -- "$cur") ); return ;;\n    proxy-config) if (( COMP_CWORD <= 2 )); then COMPREPLY=( $(compgen -W "caddy nginx traefik" -- "$cur") ); else COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ); fi; return ;;\n    --upstream) COMPREPLY=(); return ;;\n  esac\n  case "${COMP_WORDS[1]}" in\n    proxy-config) COMPREPLY=( $(compgen -W "--upstream" -- "$cur") ) ;;\n    doctor) COMPREPLY=( $(compgen -W "--bundle-id --channel --json" -- "$cur") ) ;;\n    decrypt) COMPREPLY=( $(compgen -W "--version --output --idempotency-key" -- "$cur") ) ;;\n    artifacts) COMPREPLY=( $(compgen -W "--limit --cursor" -- "$cur") ) ;;\n    *) COMPREPLY=( $(compgen -W "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download" -- "$cur") ) ;;\n  esac\n}\ncomplete -F _dkrypt dkrypt\n',
+    zsh: '_dkrypt() {\n  local context state state_descr line\n  _arguments \\\n    "1:command:(login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download)" \\\n    "*::argument:->args"\n  case "$words[2]" in\n    completion) _values "shell" bash zsh fish ;;\n    profile) _values "action" list use delete ;;\n    proxy-config) _arguments "1:proxy:(caddy nginx traefik)" "--upstream[Upstream origin]:url:" ;;\n    doctor) _arguments "--bundle-id[Bundle ID]:bundle:" "--channel[Release channel]:channel:(appstore testflight)" "--json[Machine-readable output]" ;;\n    decrypt) _arguments "--version[App version]:version:" "--output[Output IPA]:file:_files" "--idempotency-key[Request key]:key:" ;;\n    artifacts) _arguments "--limit[Page size]:limit:" "--cursor[Page cursor]:cursor:" ;;\n    download) _files -g "*.ipa" ;;\n  esac\n}\ncompdef _dkrypt dkrypt\n',
+    fish: 'complete -c dkrypt -f -n "__fish_use_subcommand" -a "login logout profile completion proxy-config mcp doctor tui decrypt status wait follow artifacts download"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from profile" -a "list use delete"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from proxy-config" -a "caddy nginx traefik"\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from doctor" -l bundle-id -r\ncomplete -c dkrypt -f -n "__fish_seen_subcommand_from doctor" -l channel -r -a "appstore testflight"\ncomplete -c dkrypt -l profile -r\ncomplete -c dkrypt -l version -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l output -r -F -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l idempotency-key -r -n "__fish_seen_subcommand_from decrypt"\ncomplete -c dkrypt -l limit -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l cursor -r -n "__fish_seen_subcommand_from artifacts"\ncomplete -c dkrypt -l upstream -r -n "__fish_seen_subcommand_from proxy-config"\n',
   };
   if (!args[0] || !(args[0] in completions)) throw new Error('Choose bash, zsh, or fish');
   process.stdout.write(completions[args[0]]);
@@ -216,23 +216,62 @@ async function send(path, options = {}) {
     try {
       response = await fetch(buildUrl(path), { ...options, redirect: 'error', headers });
     } catch (error) {
-      if (!canRetry || attempt >= 2) throw error;
+      if (!canRetry || attempt >= 2) {
+        const recovery = canRetry ? ' Retry with the same idempotency key if this was a submission.' : '';
+        throw new Error(`Network request to dkrypt failed: ${error instanceof Error ? error.message : String(error)}.${recovery}`);
+      }
       await wait(250 * (2 ** attempt));
       continue;
     }
     if (response.ok || response.status === 202) return response;
-    if (canRetry && attempt < 2 && [429, 502, 503, 504].includes(response.status)) {
-      const retryAfter = Number(response.headers.get('retry-after'));
-      await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 30_000) : 250 * (2 ** attempt));
+    if (canRetry && attempt < 2 && [429, 500, 502, 503, 504].includes(response.status)) {
+      const retryAfterHeader = response.headers.get('retry-after');
+      const retryAfterSeconds = Number(retryAfterHeader);
+      const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : retryAfterHeader ? Math.max(0, Date.parse(retryAfterHeader) - Date.now()) : 0;
+      await wait(retryAfterMs > 0 ? Math.min(retryAfterMs, 30_000) : 250 * (2 ** attempt));
       continue;
     }
     const payload = await response.json().catch(() => undefined);
-    throw new Error(payload?.message ?? payload?.error ?? `dkrypt request failed with HTTP ${response.status}`);
+    throw new Error(explainApiError(payload, response));
   }
 }
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function explainApiError(payload, response) {
+  const message = payload?.message ?? payload?.error ?? `dkrypt request failed with HTTP ${response.status}`;
+  const code = payload?.code;
+  const hints = {
+    unauthorized: 'Create or rotate the API key, then update the key used by this client.',
+    bundle_scope_denied: 'Add this bundle ID to the API key’s allowed bundle IDs.',
+    daily_decrypt_limit: 'Wait until the next available allowance slot. Retry-After and remediation.nextAvailableAt show when.',
+    idempotency_conflict: 'Reuse the original key with the exact same request, or use a new key for changed details.',
+    testflight_lookup_failed: 'Retry when TestFlight lookup is available. Reuse the same idempotency key if submitting again.',
+  };
+  const hint = hints[code]
+    ?? (response.status === 410 ? 'The stored result expired. Submit again with a new idempotency key.'
+      : /idempotency/i.test(message) && /no longer retained/i.test(message) ? 'The stored result expired. Submit again with a new idempotency key.'
+        : /idempotency/i.test(message) ? 'Reuse the original key with the exact same request, or use a new key for changed request details.'
+          : /not scoped to this bundle/i.test(message) ? 'Add this bundle ID to the API key’s allowed bundle IDs.' : undefined)
+    ?? (response.status === 401 ? 'Check that the API key is valid and has not been revoked.'
+      : response.status === 403 ? 'Check the API key’s bundle ID and TestFlight scopes.'
+        : response.status === 404 ? 'Check the bundle, version, job, or artifact ID; finished jobs are retained for a limited time.'
+          : response.status === 409 ? 'The request conflicts with the current job or idempotency record. Keep the same key and request for safe retries.'
+            : response.status === 429 ? 'Wait for the allowance or rate limit to reset before retrying.'
+              : response.status >= 500 ? 'Retry only with the same idempotency key, and keep the request ID for support.'
+                : 'Check the request fields and the API error message.');
+  const retryAfter = response.headers.get('retry-after');
+  const requestId = payload?.requestId ?? response.headers.get('x-request-id');
+  return [
+    `dkrypt API error${code ? ` (${code})` : ''} · HTTP ${response.status}: ${message}`,
+    hint ? `Recovery: ${hint}` : '',
+    retryAfter ? `Retry-After: ${retryAfter}` : '',
+    requestId ? `Request ID: ${requestId}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 async function downloadToFile(response, output) {
@@ -252,12 +291,38 @@ async function printJson(response) {
 
 async function runDoctor() {
   const checks = [];
+  const bundleId = optionValue('--bundle-id');
+  const channel = optionValue('--channel') ?? 'appstore';
+  if (args.includes('--bundle-id') && !bundleId) throw new Error('--bundle-id requires an app bundle ID');
+  if (args.includes('--channel') && !optionValue('--channel')) throw new Error('--channel requires appstore or testflight');
+  if (!['appstore', 'testflight'].includes(channel)) throw new Error('--channel must be appstore or testflight');
+  if (bundleId && !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId)) throw new Error('Provide a valid app bundle ID');
+  if (!bundleId && args.includes('--channel')) throw new Error('--channel requires --bundle-id');
   try {
     const artifacts = await send('/v1/artifacts?limit=1').then((response) => response.json());
     const validPage = Array.isArray(artifacts.artifacts) && Number.isSafeInteger(artifacts.total);
     checks.push({ name: 'API key and IPA library', status: validPage ? 'ok' : 'error', detail: validPage ? `API key accepted · ${artifacts.total} artifact(s) visible` : 'The public API returned an invalid artifact page' });
   } catch (error) {
     checks.push({ name: 'API key and IPA library', status: 'error', detail: error instanceof Error ? error.message : String(error) });
+  }
+  if (bundleId) {
+    try {
+      const response = await send('/v1/decrypts', {
+        method: 'POST',
+        body: JSON.stringify({ bundleId, channel, resolveOnly: true }),
+      });
+      const result = await response.json();
+      const validResult = result.resolveOnly === true && typeof result.resolvedVersion === 'string' && result.channel === channel;
+      checks.push({
+        name: `${channel === 'testflight' ? 'TestFlight' : 'App Store'} release resolution`,
+        status: validResult ? 'ok' : 'error',
+        detail: validResult ? `Resolved ${result.resolvedVersion}${result.cacheHit ? ' · exact artifact is cached' : ''} · no job submitted and no allowance used` : 'The public API returned an invalid release-resolution response',
+      });
+    } catch (error) {
+      checks.push({ name: `${channel === 'testflight' ? 'TestFlight' : 'App Store'} release resolution`, status: 'error', detail: error instanceof Error ? error.message : String(error) });
+    }
+  } else {
+    checks.push({ name: 'Release resolution', status: 'info', detail: 'Not checked · pass --bundle-id <id> to resolve a release without submitting a decrypt job' });
   }
   if (args.includes('--json')) process.stdout.write(`${JSON.stringify({ checkedAt: new Date().toISOString(), checks }, null, 2)}\n`);
   else for (const check of checks) process.stdout.write(`[${check.status.toUpperCase()}] ${check.name}: ${check.detail}\n`);

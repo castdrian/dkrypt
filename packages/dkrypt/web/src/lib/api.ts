@@ -2813,6 +2813,19 @@ export function fetchBillingInvoices(): Promise<{ invoices: BillingInvoice[]; wa
   return apiJson('/v1/billing/invoices');
 }
 
+export interface BillingEntitlementEvent {
+  id: string;
+  provider: 'stripe' | 'nowpayments' | 'legacy';
+  planId: string;
+  kind: 'grant' | 'renewal' | 'pause' | 'resume' | 'failure' | 'cancellation' | 'revocation';
+  status: string;
+  at: string;
+}
+
+export function fetchBillingEntitlementHistory(): Promise<{ events: BillingEntitlementEvent[] }> {
+  return apiJson('/v1/billing/entitlement-history');
+}
+
 export interface BillingQuotaHistoryEntry {
   jobId: string;
   at: number;

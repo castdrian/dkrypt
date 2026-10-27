@@ -86,7 +86,8 @@ export const billingWebhookInboxQuerySchema = Type.Object(
 
 export const billingWebhookInboxParamsSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }) }, { additionalProperties: true });
 export const billingWebhookQuarantineBodySchema = Type.Object({ reason: Type.Optional(Type.String({ maxLength: 500 })) }, { additionalProperties: true });
-export const billingSubscriptionBodySchema = Type.Object({ planId: Type.String({ minLength: 1, maxLength: 200 }), acknowledgeLegacyLoss: Type.Optional(Type.Boolean()) }, { additionalProperties: true });
+export const billingSubscriptionPreviewBodySchema = Type.Object({ planId: Type.String({ minLength: 1, maxLength: 200 }) }, { additionalProperties: false });
+export const billingSubscriptionBodySchema = Type.Object({ planId: Type.String({ minLength: 1, maxLength: 200 }), acknowledgeLegacyLoss: Type.Optional(Type.Boolean()), prorationDate: Type.Optional(Type.Integer({ minimum: 1 })), expectedCurrentPlanId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })) }, { additionalProperties: true });
 export const billingPauseBodySchema = Type.Object({ resumeAt: Type.String({ format: 'date-time' }) }, { additionalProperties: false });
 
 export type BillingCheckoutRoute = {
@@ -149,6 +150,10 @@ export type BillingWebhookQuarantineRoute = BillingWebhookInboxParamsRoute & {
 
 export type BillingSubscriptionRoute = {
   Body: Static<typeof billingSubscriptionBodySchema>;
+};
+
+export type BillingSubscriptionPreviewRoute = {
+  Body: Static<typeof billingSubscriptionPreviewBodySchema>;
 };
 
 export type BillingPauseRoute = BillingCancelRoute & {

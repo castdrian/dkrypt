@@ -4,7 +4,7 @@ The API key SDKs use dkrypt's public decrypt, job status, and IPA artifact route
 
 ## Go
 
-Import the source from the Go client folder or download the Go SDK archive. Create a client with the instance URL and API key, then call `Decrypt`, `GetJob`, `ListArtifacts`, or `DownloadArtifact`.
+Import the source from the Go client folder or download the Go SDK archive. The Go client supports App Store and TestFlight decrypts, latest-release resolution without creating a job, long polling, job status batches, event streams, artifact search, and downloads verified against the reported size and SHA-256. API failures include typed status, error code, request ID, retry timing, and a recovery hint. Downloads are verified before their bytes are returned.
 
 ## Swift
 

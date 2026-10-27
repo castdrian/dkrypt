@@ -69,6 +69,21 @@
         <div><dt class="font-medium">Artifact</dt><dd class="mt-0.5 text-muted">The verified IPA produced by a completed job.</dd></div>
       </dl>
     </details>
+    <details class="mt-3 rounded-lg border border-border/60 bg-background p-3 text-xs">
+      <summary class="cursor-pointer font-medium">API errors and recovery</summary>
+      <p class="mt-2 text-muted">Errors include a message, code, request ID, and retryable flag. Rate-limited responses may also include <code>Retry-After</code> and a next-available time.</p>
+      <dl class="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-[4rem_minmax(0,1fr)]">
+        <dt class="font-medium">400</dt><dd class="text-muted">Check the bundle ID, version, channel, and required fields.</dd>
+        <dt class="font-medium">401</dt><dd class="text-muted">The API key is missing, invalid, or revoked. Create or rotate a key and update your secret.</dd>
+        <dt class="font-medium">403</dt><dd class="text-muted">The key does not allow this bundle ID or TestFlight access. Update its scopes in dkrypt.</dd>
+        <dt class="font-medium">404</dt><dd class="text-muted">The app release, job, or artifact was not found. Finished jobs are retained for a limited time.</dd>
+        <dt class="font-medium">409</dt><dd class="text-muted">The request conflicts with its idempotency key or current state. Reuse the same key and request for a safe retry; use a new key only for changed request details.</dd>
+        <dt class="font-medium">410</dt><dd class="text-muted">The result for an older idempotency key has expired. Submit again with a new key.</dd>
+        <dt class="font-medium">429</dt><dd class="text-muted">A decrypt allowance or request limit was reached. Wait for <code>Retry-After</code> or the returned next-available time.</dd>
+        <dt class="font-medium">5xx</dt><dd class="text-muted">dkrypt or a provider is temporarily unavailable. Retry with the same idempotency key and include the request ID when contacting support.</dd>
+      </dl>
+      <p class="mt-3 text-muted">To check what would be selected without submitting a job, send <code>POST /v1/decrypts</code> with <code>resolveOnly: true</code>. This does not use decrypt allowance.</p>
+    </details>
   </div>
   <DkryptWorkflowGenerator />
   <div class="flex min-w-0 items-center justify-between gap-3">

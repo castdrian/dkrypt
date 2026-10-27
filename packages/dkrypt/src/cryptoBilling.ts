@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { trackBackgroundWork } from '#backgroundWork.js';
 import { config, cryptoBillingEnabled, nowpaymentsConfigured } from '#config.js';
 import {
@@ -242,6 +242,29 @@ export async function reconcileCryptoBilling(): Promise<void> {
       await markSubscriptionPastDue(subscription, 'crypto renewal is due; a new payment is required');
     }
   }
+}
+
+export async function refreshCryptoBillingForUser(userId: string): Promise<boolean> {
+  const ownedSubscriptions = getBillingSubscriptionsForUser(userId).filter((subscription) => subscription.provider === 'nowpayments');
+  const subscriptionCheckoutIds = new Set(ownedSubscriptions.map((subscription) => subscription.checkoutId).filter((checkoutId): checkoutId is string => Boolean(checkoutId)));
+  const checkouts = listCryptoCheckouts()
+    .filter((checkout) => checkout.provider === 'nowpayments'
+      && checkout.userId === userId
+      && Boolean(checkout.providerPaymentId)
+      && (checkout.status === 'pending' || subscriptionCheckoutIds.has(checkout.checkoutId)))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, 5);
+  if (checkouts.length === 0) return false;
+  const client = new NowPaymentsClient();
+  for (const expectedCheckout of checkouts) {
+    const payment = await client.getPaymentStatus(expectedCheckout.providerPaymentId!);
+    const checkout = findCheckoutForPayment(payment);
+    if (!checkout || checkout.userId !== userId || checkout.checkoutId !== expectedCheckout.checkoutId) throw new Error('NOWPayments payment does not match this account checkout');
+    const revision = payment.updated_at ?? payment.created_at ?? payment.payment_status ?? 'unknown';
+    const eventId = `self-refresh:${createHash('sha256').update(`${payment.payment_id}:${revision}`).digest('hex')}`;
+    await processNowPaymentsEvent({ id: eventId, payment }, client);
+  }
+  return true;
 }
 
 let cryptoBillingTimer: NodeJS.Timeout | undefined;
