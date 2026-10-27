@@ -94,7 +94,7 @@ test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned ag
     code_challenge_method: 'S256',
     state,
     resource,
-    scope: 'decrypt:plan jobs:read',
+    scope: 'decrypt:plan decrypt:submit jobs:read',
   });
 
   try {
@@ -110,10 +110,11 @@ test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned ag
       resource,
       code_challenge: challenge,
       state,
-      requested_scope: 'decrypt:plan jobs:read',
+      requested_scope: 'decrypt:plan decrypt:submit jobs:read',
       consent: 'approve',
     });
     submission.append('scope', 'decrypt:plan');
+    submission.append('scope', 'decrypt:submit');
     submission.append('scope', 'jobs:read');
     const approved = await server.inject({ method: 'POST', url: '/oauth/authorize', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, payload: submission.toString() });
     expect(approved.statusCode).toBe(302);
@@ -124,7 +125,7 @@ test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned ag
     const tokenResponse = await server.inject({ method: 'POST', url: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, payload: tokenForm.toString() });
     expect(tokenResponse.statusCode).toBe(200);
     const tokens = tokenResponse.json();
-    expect(tokens).toMatchObject({ token_type: 'Bearer', scope: 'decrypt:plan jobs:read' });
+    expect(tokens).toMatchObject({ token_type: 'Bearer', scope: 'decrypt:plan decrypt:submit jobs:read' });
     expect(tokens.access_token).toEqual(expect.any(String));
     expect(tokens.refresh_token).toEqual(expect.any(String));
 
@@ -146,10 +147,43 @@ test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned ag
     expect(listedJobs.body).not.toContain('com.example.hidden');
 
     const agents = await server.inject({ method: 'GET', url: '/v1/dashboard/mcp/clients', headers: { cookie } });
-    expect(agents.json().agents).toContainEqual(expect.objectContaining({ clientId, active: true, scopes: ['decrypt:plan', 'jobs:read'] }));
+    expect(agents.json().agents).toContainEqual(expect.objectContaining({ clientId, active: true, scopes: ['decrypt:plan', 'decrypt:submit', 'jobs:read'] }));
+    const autopilot = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/mcp/clients/autopilot',
+      headers: { cookie },
+      payload: { clientId, enabled: true, bundleIds: ['com.example.App', 'com.example.other'], channels: ['appstore', 'testflight'], maximumPer24Hours: 7 },
+    });
+    expect(autopilot.statusCode).toBe(200);
+    expect(autopilot.json().autopilot).toMatchObject({ enabled: true, bundleIds: ['com.example.app', 'com.example.other'], channels: ['appstore', 'testflight'], maximumPer24Hours: 7 });
+
+    const invalidAutopilot = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/mcp/clients/autopilot',
+      headers: { cookie },
+      payload: { clientId, enabled: true, bundleIds: ['com.example.*'], channels: ['appstore'], maximumPer24Hours: 7 },
+    });
+    expect(invalidAutopilot.statusCode).toBe(400);
+
+    const otherUserId = `mcp-other-${randomBytes(8).toString('hex')}@example.test`;
+    addAllowedUser(otherUserId, [role.id], 'test setup');
+    const otherOwnerAttempt = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/mcp/clients/autopilot',
+      headers: { cookie: createSessionCookie(otherUserId) },
+      payload: { clientId, enabled: true, bundleIds: ['com.example.app'], channels: ['appstore'], maximumPer24Hours: 7 },
+    });
+    expect(otherOwnerAttempt.statusCode).toBe(404);
+
+    const backup = await server.inject({ method: 'GET', url: '/v1/dashboard/backup/export', headers: { cookie } });
+    expect(backup.statusCode).toBe(200);
+    expect(backup.json().mcpRecords).toContainEqual(expect.objectContaining({ type: 'autopilot_policy', enabled: true, bundleIds: ['com.example.app', 'com.example.other'] }));
+
     const revoked = await server.inject({ method: 'POST', url: '/v1/dashboard/mcp/clients/revoke', headers: { cookie }, payload: { clientId } });
     expect(revoked.statusCode).toBe(200);
     expect(revoked.json()).toMatchObject({ ok: true, revoked: 1 });
+    const afterRevocation = await server.inject({ method: 'GET', url: '/v1/dashboard/mcp/clients', headers: { cookie } });
+    expect(afterRevocation.json().agents).toContainEqual(expect.objectContaining({ clientId, active: false, autopilot: expect.objectContaining({ enabled: false }) }));
 
     const mcpResponse = await server.inject({ method: 'POST', url: '/v1/mcp', headers: { authorization: `Bearer ${tokens.access_token}` }, payload: initializePayload });
     expect(mcpResponse.statusCode).toBe(401);

@@ -22,6 +22,8 @@ let foregroundRequests = 0;
 let listingPrice = 0;
 let listingBundleId = '';
 let deviceLocale = 'en_US';
+let deviceLocaleReadError = false;
+let localizedLookupError = false;
 let localizedListingPrice = 0;
 let localizedListingBundleId = '';
 const originalSetTimeout = globalThis.setTimeout;
@@ -36,7 +38,10 @@ mock.module('#idevice.js', () => ({
   armAppStoreAutoConfirm: async () => calls.push('arm'),
   clearAppStoreAutoConfirm: async () => calls.push('clear'),
   execCommand: async (_conn: object, command: string) => {
-    if (command.includes('AppleLocale')) return { stdout: deviceLocale, stderr: '', code: 0 };
+    if (command.includes('AppleLocale')) {
+      if (deviceLocaleReadError) throw new Error('locale unavailable');
+      return { stdout: deviceLocale, stderr: '', code: 0 };
+    }
     calls.push('restart');
     return { stdout: '', stderr: '', code: 0 };
   },
@@ -95,7 +100,10 @@ mock.module('#appStoreMetadata.js', () => ({
     listingBundleId = bundleId;
     return { trackId: 123, version: '338.0' };
   },
-  lookupAppMetadataByTrackId: async (_trackId: number, country?: string) => ({ trackId: 123, bundleId: country === 'AU' && localizedListingBundleId ? localizedListingBundleId : listingBundleId, trackName: country === 'AU' ? 'Localized Example App' : 'Example App', price: country === 'AU' ? localizedListingPrice : listingPrice }),
+  lookupAppMetadataByTrackId: async (_trackId: number, country?: string) => {
+    if (country === 'AU' && localizedLookupError) throw new Error('localized listing unavailable');
+    return { trackId: 123, bundleId: country === 'AU' && localizedListingBundleId ? localizedListingBundleId : listingBundleId, trackName: country === 'AU' ? 'Localized Example App' : 'Example App', price: country === 'AU' ? localizedListingPrice : listingPrice };
+  },
 }));
 
 mock.module('#store/state.js', () => ({
@@ -140,6 +148,8 @@ describe('installFromAppStore', () => {
     listingPrice = 0;
     listingBundleId = '';
     deviceLocale = 'en_US';
+    deviceLocaleReadError = false;
+    localizedLookupError = false;
     localizedListingPrice = 0;
     localizedListingBundleId = '';
   });
@@ -167,6 +177,18 @@ describe('installFromAppStore', () => {
     expect(calls).toEqual([]);
   });
 
+  test('refuses a pinned release without an expected version before contacting the device', async () => {
+    await expect(installFromAppStore('com.example.app', { externalVersionId: '123456789' })).rejects.toThrow('without its expected version');
+    expect(calls).toEqual([]);
+  });
+
+  test('does not continue when the device storefront cannot be identified', async () => {
+    deviceLocaleReadError = true;
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the device App Store storefront');
+    expect(calls).toEqual([]);
+    expect(installRequest).toBeUndefined();
+  });
+
   test('sends only verified local and US names for a device with a localized App Store title', async () => {
     deviceLocale = 'en_AU@rg=uszzzz';
     await installFromAppStore('com.example.app');
@@ -183,6 +205,14 @@ describe('installFromAppStore', () => {
     localizedListingBundleId = 'com.example.other';
     await expect(installFromAppStore('com.example.app')).rejects.toThrow('requires a verified free AU listing');
     expect(calls).toEqual([]);
+  });
+
+  test('does not continue when a localized App Store listing cannot be verified', async () => {
+    deviceLocale = 'en_AU';
+    localizedLookupError = true;
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the free AU App Store listing');
+    expect(calls).toEqual([]);
+    expect(installRequest).toBeUndefined();
   });
 
   test('does not demand human action while App Store authorization remains pending', async () => {
@@ -470,6 +500,32 @@ describe('installFromAppStore', () => {
     expect(calls).toEqual(['restart', 'status', 'arm', 'request', 'status', 'clear']);
     expect(progress).toContain('waiting for App Store version 338.0; version 337.0 is currently installed');
     expect(progress.at(-1)).toBe('install verified: 338.0 build 106000 in 0s');
+  });
+
+  test('does not treat a different installed version as a timed-out pinned release', async () => {
+    let now = 0;
+    Date.now = () => now;
+    globalThis.setTimeout = ((handler: () => void) => {
+      now += 5_000;
+      handler();
+      return 0;
+    }) as unknown as typeof setTimeout;
+    installedBundles = [
+      undefined,
+      { path: '/apps/Discord.app', shortVersion: '337.0' },
+      { path: '/apps/Discord.app', shortVersion: '337.0' },
+    ];
+
+    try {
+      await expect(installFromAppStore('com.hammerandchisel.discord', {
+        externalVersionId: '123456789',
+        expectedVersion: '338.0',
+        waitTimeoutMs: 10_000,
+      })).rejects.toThrow('version 337.0 remained installed');
+    } finally {
+      Date.now = originalDateNow;
+      globalThis.setTimeout = originalSetTimeout;
+    }
   });
 
   test('stops before contacting the App Store when cancelled', async () => {

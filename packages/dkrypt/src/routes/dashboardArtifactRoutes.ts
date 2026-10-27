@@ -6,21 +6,21 @@ import path from 'node:path';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ErrorEnvelope } from '#contracts.js';
-import type { DashboardArtifactAnalysisRoute, DashboardArtifactArchiveRoute, DashboardArtifactAssetPreviewRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactContentsRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactNoteRoute, DashboardArtifactNoteUpdateRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute } from '#dashboardArtifactContracts.js';
-import { dashboardArtifactAssetPreviewQuerySchema, dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactNoteBodySchema, dashboardArtifactNoteResponseSchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema, dashboardIpaAnalysisResponseSchema, dashboardIpaAnalysisUploadResponseSchema } from '#dashboardArtifactContracts.js';
+import type { DashboardArtifactAnalysisRoute, DashboardArtifactArchiveRoute, DashboardArtifactAssetPreviewRoute, DashboardArtifactBulkArchiveRoute, DashboardArtifactBulkPinRoute, DashboardArtifactBulkQueryArchiveRoute, DashboardArtifactBulkQueryPinRoute, DashboardArtifactCompareRoute, DashboardArtifactContentsRoute, DashboardArtifactDetailRoute, DashboardArtifactFileRoute, DashboardArtifactListRoute, DashboardArtifactNoteRoute, DashboardArtifactNoteUpdateRoute, DashboardArtifactPinRoute, DashboardArtifactUndoRoute, DashboardArtifactOptimizeRoute } from '#dashboardArtifactContracts.js';
+import { dashboardArtifactAssetPreviewQuerySchema, dashboardArtifactBulkArchiveResponseSchema, dashboardArtifactBulkPinResponseSchema, dashboardArtifactBulkQueryArchiveBodySchema, dashboardArtifactBulkQueryPinBodySchema, dashboardArtifactCompareBodySchema, dashboardArtifactCompareResponseSchema, dashboardArtifactContentsQuerySchema, dashboardArtifactContentsResponseSchema, dashboardArtifactDetailQuerySchema, dashboardArtifactNoteBodySchema, dashboardArtifactNoteResponseSchema, dashboardArtifactParamsSchema, dashboardArtifactResponseSchema, dashboardArtifactUndoBodySchema, dashboardArtifactUndoResponseSchema, dashboardArtifactZipBodySchema, dashboardArtifactOptimizeQuerySchema, dashboardIpaAnalysisResponseSchema, dashboardIpaAnalysisUploadResponseSchema } from '#dashboardArtifactContracts.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactById, listArtifacts, setArtifactArchived, setArtifactPinned, setArtifactsArchived, setArtifactsPinned, touchArtifact, undoArtifactStateChanges } from '#artifacts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
 import { streamFilePath } from '#jobs/http.js';
 import { PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
-import { DEFAULT_PROJECT_ID, recordAudit } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, getDevice, recordAudit } from '#store/state.js';
 import { Response } from '#http.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { streamArtifactZip } from '#artifactZip.js';
 import type { ArtifactRecord } from '#artifactTypes.js';
 import { compareIpaStructures, readIpaStructure } from '#ipaStructure.js';
-import { analyzeIpaInIsolatedProcess, IpaInspectionCapacityError, readIpaAssetPreviewInIsolatedProcess } from '#jobs/ipaInspection.js';
+import { analyzeIpaInIsolatedProcess, IpaInspectionCapacityError, optimizeIpaForDeviceInIsolatedProcess, readIpaAssetPreviewInIsolatedProcess } from '#jobs/ipaInspection.js';
 import { formatArtifactFilename } from '#artifactFilename.js';
 import { getUserPrefs, updateUserPrefs } from '#store/state.js';
 
@@ -166,6 +166,37 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
         warnings: artifact.warnings,
         fileUrl: `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
       };
+    });
+
+    server.get<DashboardArtifactOptimizeRoute>('/v1/dashboard/artifacts/:id/optimized', {
+      schema: { hide: true, params: dashboardArtifactParamsSchema, querystring: dashboardArtifactOptimizeQuerySchema },
+      preHandler: canRequestDecrypt,
+    }, async (request, reply) => {
+      const artifact = services.getArtifactById(request.params.id);
+      if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(DEFAULT_PROJECT_ID)) {
+        return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'artifact not found'));
+      }
+      const device = getDevice(request.query.deviceId);
+      const iosMajor = Number.parseInt(device?.iosVersion?.split('.')[0] ?? '', 10);
+      if (!device?.enabled || device.draining || !/^iPad\d+,\d+$/.test(device.productType ?? '') || !Number.isFinite(iosMajor) || iosMajor < 11) {
+        return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'choose an enabled iPad running a 64-bit iOS version'));
+      }
+      const session = getFastifySession(request)!;
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'dkrypt-optimized-ipa-'));
+      const optimizedPath = path.join(directory, 'optimized.ipa');
+      try {
+        const result = await optimizeIpaForDeviceInIsolatedProcess(artifact.filePath, optimizedPath, 'arm64');
+        const filename = formatArtifactFilename(getUserPrefs(session.sub).artifactFilenameTemplate, artifact).replace(/\.ipa$/i, '-arm64.ipa');
+        await streamFilePath(optimizedPath, request.raw, new Response(reply), filename, result.optimization.optimizedBytes, artifact.id, result.sha256);
+        return;
+      } catch (error) {
+        if (error instanceof IpaInspectionCapacityError) return reply.code(429).send(createHttpErrorEnvelope(request.id, 429, error.message));
+        const message = error instanceof Error ? error.message : String(error);
+        const status = /size limit|expands beyond/i.test(message) ? 413 : /no removable non-device architecture slices/i.test(message) ? 409 : 422;
+        return reply.code(status).send(createHttpErrorEnvelope(request.id, status, message));
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
     });
 
     server.get<DashboardArtifactContentsRoute>('/v1/dashboard/artifacts/:id/contents', {
@@ -535,7 +566,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       }
       await services.touchArtifact(artifact);
       const filename = formatArtifactFilename(getUserPrefs(session.sub).artifactFilenameTemplate, artifact);
-      await streamFilePath(artifact.filePath, request.raw, new Response(reply), filename, artifact.fileSizeBytes, artifact.id);
+      await streamFilePath(artifact.filePath, request.raw, new Response(reply), filename, artifact.fileSizeBytes, artifact.id, artifact.sha256);
       return;
     });
 

@@ -4,6 +4,7 @@ import { config } from '#config.js';
 import type { ExtractedIpaMetadata } from '#util/ipaMetadata.js';
 import type { FairPlayVerificationResult } from '#util/ipaFairPlay.js';
 import type { IpaAnalysisReport, IpaAssetReport } from '#ipaAnalysis.js';
+import type { IpaDeviceOptimizationResult } from '#ipaAnalysis.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { commandWithResourceLimits } from '#jobs/resourceLimits.js';
 
@@ -90,14 +91,14 @@ export class IpaInspectionCapacity {
 
 const ipaAnalysisCapacity = new IpaInspectionCapacity(1, 2);
 
-function workerCommand(ipaPath: string, mode: 'inspect' | 'analysis' | 'asset-preview', extraArgs: string[] = []): string[] {
+function workerCommand(ipaPath: string, mode: 'inspect' | 'analysis' | 'asset-preview' | 'optimize', extraArgs: string[] = []): string[] {
   const limited = commandWithResourceLimits(process.execPath, [workerPath, ipaPath, mode, ...extraArgs], config.appStoreOfflineWorkerMemoryMb, config.appStoreOfflineInspectTimeoutSeconds);
   return [limited.command, ...limited.args];
 }
 
 function runIpaWorker(
   ipaPath: string,
-  mode: 'inspect' | 'analysis' | 'asset-preview',
+  mode: 'inspect' | 'analysis' | 'asset-preview' | 'optimize',
   extraArgs: string[] = [],
   signal?: AbortSignal,
   onChildProcess?: (child: ChildProcess | undefined) => void,
@@ -108,7 +109,7 @@ function runIpaWorker(
 
 function runIpaWorkerProcess(
   ipaPath: string,
-  mode: 'inspect' | 'analysis' | 'asset-preview',
+  mode: 'inspect' | 'analysis' | 'asset-preview' | 'optimize',
   extraArgs: string[] = [],
   signal?: AbortSignal,
   onChildProcess?: (child: ChildProcess | undefined) => void,
@@ -223,5 +224,20 @@ export function readIpaAssetPreviewInIsolatedProcess(
     const result = value as { data?: unknown; mimeType?: unknown };
     if (typeof result.data !== 'string' || !/^(?:image\/png|image\/jpeg|image\/gif|image\/webp)$/.test(String(result.mimeType))) throw new Error('IPA asset preview worker returned an invalid result');
     return { data: Buffer.from(result.data, 'base64'), mimeType: result.mimeType as IpaAssetReport['mimeType'] };
+  });
+}
+
+export function optimizeIpaForDeviceInIsolatedProcess(
+  ipaPath: string,
+  outputPath: string,
+  architecture: string,
+  signal?: AbortSignal,
+): Promise<{ optimization: IpaDeviceOptimizationResult; sha256: string }> {
+  return runIpaWorker(ipaPath, 'optimize', [outputPath, architecture], signal).then((value) => {
+    const result = value as { optimization?: IpaDeviceOptimizationResult; sha256?: unknown };
+    if (!result.optimization || result.optimization.architecture !== architecture || result.optimization.binariesThinned < 1 || typeof result.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(result.sha256)) {
+      throw new Error('optimized IPA worker returned an invalid result');
+    }
+    return { optimization: result.optimization, sha256: result.sha256 };
   });
 }

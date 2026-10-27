@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import { parseBuffer as parseBinaryPlist } from 'bplist-parser';
 import { parse as parseXmlPlist } from 'plist';
+import { statSync } from 'node:fs';
 
 export interface IpaExecutableSlice {
   architecture: string;
@@ -168,6 +169,121 @@ function parseMachOSlices(buffer: Buffer): MachOSlice[] {
   }
   const slice = parseThinMachO(buffer, 0, buffer.length);
   return slice ? [slice] : [];
+}
+
+interface FatMachOSlice {
+  architecture: string;
+  platform?: string;
+  cpuType: number;
+  cpuSubtype: number;
+  offset: number;
+  size: number;
+  align: number;
+}
+
+function parseFatMachOSlices(buffer: Buffer): FatMachOSlice[] | undefined {
+  if (buffer.length < 8) return undefined;
+  const magic = buffer.readUInt32BE(0);
+  if (![0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic)) return undefined;
+  const littleEndian = magic === 0xbebafeca || magic === 0xbfbafeca;
+  const is64 = magic === 0xcafebabf || magic === 0xbfbafeca;
+  const count = readUInt32(buffer, 4, littleEndian);
+  const stride = is64 ? 32 : 20;
+  if (count === undefined || count < 1 || count > 4_096 || 8 + count * stride > buffer.length) return [];
+  const slices: FatMachOSlice[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const recordOffset = 8 + index * stride;
+    const cpuType = readUInt32(buffer, recordOffset, littleEndian);
+    const cpuSubtype = readUInt32(buffer, recordOffset + 4, littleEndian);
+    const offset = is64
+      ? Number(littleEndian ? buffer.readBigUInt64LE(recordOffset + 8) : buffer.readBigUInt64BE(recordOffset + 8))
+      : readUInt32(buffer, recordOffset + 8, littleEndian);
+    const size = is64
+      ? Number(littleEndian ? buffer.readBigUInt64LE(recordOffset + 16) : buffer.readBigUInt64BE(recordOffset + 16))
+      : readUInt32(buffer, recordOffset + 12, littleEndian);
+    const align = readUInt32(buffer, recordOffset + (is64 ? 24 : 16), littleEndian);
+    if (cpuType === undefined || cpuSubtype === undefined || offset === undefined || size === undefined || align === undefined
+      || !Number.isSafeInteger(offset) || !Number.isSafeInteger(size) || size <= 0 || offset < 8 + count * stride || offset + size > buffer.length) return [];
+    const parsed = parseThinMachO(buffer, offset, offset + size);
+    if (!parsed) return [];
+    slices.push({ architecture: parsed.architecture, platform: parsed.platform, cpuType, cpuSubtype, offset, size, align });
+  }
+  const ordered = [...slices].sort((left, right) => left.offset - right.offset);
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1]!;
+    if (previous.offset + previous.size > ordered[index]!.offset) return [];
+  }
+  return slices;
+}
+
+function alignOffset(value: number, power: number): number {
+  const alignment = 2 ** Math.min(Math.max(power, 0), 20);
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function thinFatMachO(buffer: Buffer, architecture: string): Buffer | undefined {
+  const slices = parseFatMachOSlices(buffer);
+  if (!slices || slices.length === 0) return undefined;
+  const retained = slices.filter((slice) => slice.architecture === architecture && slice.platform === 'iOS');
+  if (retained.length === 0 || retained.length === slices.length) return undefined;
+  if (retained.length === 1) {
+    const slice = retained[0]!;
+    return Buffer.from(buffer.subarray(slice.offset, slice.offset + slice.size));
+  }
+  const headerSize = 8 + retained.length * 20;
+  let cursor = headerSize;
+  const placements = retained.map((slice) => {
+    cursor = alignOffset(cursor, slice.align);
+    const placement = { slice, offset: cursor };
+    cursor += slice.size;
+    return placement;
+  });
+  if (cursor > 0xffffffff) return undefined;
+  const output = Buffer.alloc(cursor);
+  output.writeUInt32BE(0xcafebabe, 0);
+  output.writeUInt32BE(placements.length, 4);
+  for (const [index, placement] of placements.entries()) {
+    const recordOffset = 8 + index * 20;
+    output.writeUInt32BE(placement.slice.cpuType, recordOffset);
+    output.writeUInt32BE(placement.slice.cpuSubtype, recordOffset + 4);
+    output.writeUInt32BE(placement.offset, recordOffset + 8);
+    output.writeUInt32BE(placement.slice.size, recordOffset + 12);
+    output.writeUInt32BE(Math.min(placement.slice.align, 20), recordOffset + 16);
+    buffer.copy(output, placement.offset, placement.slice.offset, placement.slice.offset + placement.slice.size);
+  }
+  return output;
+}
+
+export interface IpaDeviceOptimizationResult {
+  architecture: string;
+  binariesThinned: number;
+  bytesSaved: number;
+  originalBytes: number;
+  optimizedBytes: number;
+}
+
+export function optimizeIpaForArchitecture(ipaPath: string, outputPath: string, architecture: string): IpaDeviceOptimizationResult {
+  if (architecture !== 'arm64') throw new Error('only arm64 iOS device optimization is supported');
+  const originalBytes = statSync(ipaPath).size;
+  if (originalBytes > 512 * 1024 * 1024) throw new Error('IPA exceeds the safe device-optimization size limit');
+  const archive = new AdmZip(ipaPath);
+  const entries = archive.getEntries();
+  if (entries.length > maxArchiveEntries) throw new Error('IPA contains too many files to optimize safely');
+  const totalExpandedBytes = entries.reduce((total, entry) => total + (entry.header.size ?? 0), 0);
+  if (totalExpandedBytes > 384 * 1024 * 1024) throw new Error('IPA expands beyond the safe device-optimization limit');
+  let binariesThinned = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory || !entry.entryName.startsWith('Payload/')) continue;
+    const original = entry.getData();
+    if (original.length < 8) continue;
+    const optimized = thinFatMachO(original, architecture);
+    if (!optimized || optimized.length >= original.length) continue;
+    entry.setData(optimized);
+    binariesThinned += 1;
+  }
+  archive.writeZip(outputPath);
+  const optimizedBytes = statSync(outputPath).size;
+  return { architecture, binariesThinned, bytesSaved: originalBytes - optimizedBytes, originalBytes, optimizedBytes };
 }
 
 function executableKind(filePath: string): IpaExecutableReport['kind'] {

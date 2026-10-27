@@ -24,8 +24,11 @@ const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const APPROVAL_TTL_MS = 10 * 60 * 1000;
 const DOWNLOAD_LINK_TTL_MS = 5 * 60 * 1000;
 const OAUTH_RATE_LIMIT_MS = 60_000;
+const MCP_AUTOPILOT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MCP_AUTOPILOT_BUNDLE_ID_RE = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 const supportedScopes = ['decrypt:plan', 'decrypt:submit', 'jobs:read', 'jobs:control', 'artifacts:read', 'ipa:analyze', 'devices:read'] as const;
 type SupportedScope = typeof supportedScopes[number];
+type McpDecryptChannel = 'appstore' | 'testflight';
 
 interface McpClientRecord {
   id: string;
@@ -80,13 +83,39 @@ interface DecryptPlanRecord {
   clientId: string;
   bundleId: string;
   versionLabel: string;
-  channel: 'appstore' | 'testflight';
+  channel: McpDecryptChannel;
   externalVersionId?: string;
   testflight?: { appId: number; build: TFBuild };
   minimumOsVersion?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'submitted';
+  status: 'pending' | 'approved' | 'rejected' | 'submitting' | 'submitted';
+  autopilotPolicyId?: string;
   createdAt: number;
   expiresAt: number;
+  jobId?: string;
+}
+
+interface McpAutopilotPolicyRecord {
+  id: string;
+  type: 'autopilot_policy';
+  userId: string;
+  clientId: string;
+  enabled: boolean;
+  bundleIds: string[];
+  channels: McpDecryptChannel[];
+  maximumPer24Hours: number;
+  updatedAt: number;
+}
+
+interface McpAutopilotUseRecord {
+  id: string;
+  type: 'autopilot_use';
+  policyId: string;
+  userId: string;
+  clientId: string;
+  planId: string;
+  bundleId: string;
+  channel: McpDecryptChannel;
+  createdAt: number;
   jobId?: string;
 }
 
@@ -131,6 +160,54 @@ function writeRecord<T extends { id: string }>(value: T): void {
 
 function deleteRecord(id: string): void {
   database.query('DELETE FROM mcp_records WHERE id = ?').run(id);
+}
+
+function autopilotPolicyId(userId: string, clientId: string): string {
+  return recordId('autopilot_policy', `${userId.toLowerCase()}:${clientId}`);
+}
+
+function readAutopilotPolicy(userId: string, clientId: string): McpAutopilotPolicyRecord | undefined {
+  const policy = readRecord<McpAutopilotPolicyRecord>(autopilotPolicyId(userId, clientId));
+  return policy?.type === 'autopilot_policy' ? policy : undefined;
+}
+
+function policyAllowsTarget(policy: McpAutopilotPolicyRecord | undefined, userId: string, clientId: string, bundleId: string, channel: McpDecryptChannel): boolean {
+  return Boolean(policy?.enabled
+    && policy.userId.toLowerCase() === userId.toLowerCase()
+    && policy.clientId === clientId
+    && policy.bundleIds.includes(bundleId.toLowerCase())
+    && policy.channels.includes(channel));
+}
+
+function reserveMcpPlanSubmission(planId: string, userId: string, clientId: string): DecryptPlanRecord {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const plan = readRecord<DecryptPlanRecord>(recordId('decrypt_plan', planId));
+    if (!plan || plan.type !== 'decrypt_plan' || plan.userId.toLowerCase() !== userId.toLowerCase() || plan.clientId !== clientId) throw new Error('The decrypt plan was not found for this connected agent');
+    if (plan.status === 'submitted' && plan.jobId) {
+      database.exec('COMMIT');
+      return plan;
+    }
+    if (!['approved', 'submitting'].includes(plan.status) || plan.expiresAt <= Date.now()) throw new Error('This decrypt has not been approved or its approval expired');
+    if (plan.autopilotPolicyId) {
+      const policy = readAutopilotPolicy(userId, clientId);
+      if (!policy || policy.id !== plan.autopilotPolicyId || !policyAllowsTarget(policy, userId, clientId, plan.bundleId, plan.channel)) throw new Error('This MCP autopilot policy no longer allows the requested app or channel');
+      const usageId = recordId('autopilot_use', plan.id);
+      if (!readRecord<McpAutopilotUseRecord>(usageId)) {
+        const row = database.query("SELECT COUNT(*) AS count FROM mcp_records WHERE json_extract(payload, '$.type') = 'autopilot_use' AND json_extract(payload, '$.policyId') = ? AND json_extract(payload, '$.createdAt') > ?").get(policy.id, Date.now() - MCP_AUTOPILOT_WINDOW_MS) as { count: number };
+        if (row.count >= policy.maximumPer24Hours) throw new Error(`MCP autopilot reached its limit of ${policy.maximumPer24Hours} decrypts in 24 hours`);
+        const usage: McpAutopilotUseRecord = { id: usageId, type: 'autopilot_use', policyId: policy.id, userId, clientId, planId: plan.id, bundleId: plan.bundleId, channel: plan.channel, createdAt: Date.now() };
+        writeRecord(usage);
+      }
+    }
+    const submitting = { ...plan, status: 'submitting' as const };
+    writeRecord(submitting);
+    database.exec('COMMIT');
+    return submitting;
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 const oauthAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -303,7 +380,7 @@ function makeMcpServer(authInfo?: AuthInfo): McpServer {
 
   registerMcpTool(server, 'plan_decrypt', {
     title: 'Plan a decrypt',
-    description: 'Resolve an exact App Store release or TestFlight build and ask the signed-in user to approve it before submission.',
+    description: 'Resolve an exact App Store release or TestFlight build. A user-configured, tightly scoped MCP autopilot policy can skip per-job approval.',
     inputSchema: jsonSchema<{ bundleId: string; channel?: 'appstore' | 'testflight'; version?: string }>({ bundleId: { type: 'string', minLength: 3, maxLength: 200 }, channel: { type: 'string', enum: ['appstore', 'testflight'] }, version: { type: 'string', maxLength: 64 } }, ['bundleId']),
   }, async ({ bundleId, channel, version }) => {
     try {
@@ -313,6 +390,8 @@ function makeMcpServer(authInfo?: AuthInfo): McpServer {
         ? await resolveLatestTestFlightTarget(bundleId)
         : await resolveDecryptTarget(bundleId, version);
       if (channel && target.channel !== channel) throw new Error(`The requested ${channel} release could not be resolved`);
+      const policy = readAutopilotPolicy(userId, authInfo!.clientId);
+      const autoApproved = policyAllowsTarget(policy, userId, authInfo!.clientId, target.bundleId, target.channel);
       const id = randomBytes(24).toString('base64url');
       const plan: DecryptPlanRecord = {
         id,
@@ -325,12 +404,14 @@ function makeMcpServer(authInfo?: AuthInfo): McpServer {
         externalVersionId: target.externalVersionId,
         testflight: target.testflight,
         minimumOsVersion: target.minimumOsVersion,
-        status: 'pending',
+        status: autoApproved ? 'approved' : 'pending',
+        ...(autoApproved && policy ? { autopilotPolicyId: policy.id } : {}),
         createdAt: Date.now(),
         expiresAt: Date.now() + APPROVAL_TTL_MS,
       };
       writeRecord(plan);
-      return textResult({ planId: id, bundleId: target.bundleId, version: target.versionLabel, channel: target.channel, approvalUrl: new URL(`/mcp/approval/${encodeURIComponent(id)}`, config.publicBaseUrl).toString(), expiresAt: plan.expiresAt, requiresUserApproval: true });
+      if (autoApproved) recordAudit(userId, 'mcp.decrypt.auto_approve', authInfo!.clientId, `${target.bundleId} ${target.versionLabel}`);
+      return textResult({ planId: id, bundleId: target.bundleId, version: target.versionLabel, channel: target.channel, ...(autoApproved ? {} : { approvalUrl: new URL(`/mcp/approval/${encodeURIComponent(id)}`, config.publicBaseUrl).toString() }), expiresAt: plan.expiresAt, requiresUserApproval: !autoApproved });
     } catch (error) {
       return errorResult(error instanceof Error ? error.message : String(error));
     }
@@ -338,29 +419,39 @@ function makeMcpServer(authInfo?: AuthInfo): McpServer {
 
   registerMcpTool(server, 'submit_approved_decrypt', {
     title: 'Submit an approved decrypt',
-    description: 'Submit a decrypt that the signed-in account owner approved in dkrypt.',
+    description: 'Submit a decrypt approved by the account owner or by an active, scoped MCP autopilot policy.',
     inputSchema: jsonSchema<{ planId: string }>({ planId: { type: 'string', minLength: 20, maxLength: 128 } }, ['planId']),
   }, async ({ planId }) => {
     try {
       const userId = requireScope(authInfo, 'decrypt:submit');
-      const plan = readRecord<DecryptPlanRecord>(recordId('decrypt_plan', planId));
-      if (!plan || plan.type !== 'decrypt_plan' || plan.userId.toLowerCase() !== userId.toLowerCase() || plan.clientId !== authInfo!.clientId) return errorResult('The decrypt plan was not found for this connected agent');
+      const initialPlan = readRecord<DecryptPlanRecord>(recordId('decrypt_plan', planId));
+      if (!initialPlan || initialPlan.type !== 'decrypt_plan' || initialPlan.userId.toLowerCase() !== userId.toLowerCase() || initialPlan.clientId !== authInfo!.clientId) return errorResult('The decrypt plan was not found for this connected agent');
+      const plan = initialPlan;
       if (plan.status === 'submitted' && plan.jobId) {
         const existingJob = ownedJob(userId, plan.jobId);
         return existingJob ? textResult(jobMetadata(existingJob)) : errorResult('The submitted job is no longer available');
       }
-      if (plan.status !== 'approved' || plan.expiresAt <= Date.now()) return errorResult('This decrypt has not been approved or its approval expired');
+      if (!['approved', 'submitting'].includes(plan.status) || plan.expiresAt <= Date.now()) return errorResult('This decrypt has not been approved or its approval expired');
       if (getMaintenanceStatus().active) return errorResult('dkrypt is in maintenance mode; try submitting this approved decrypt after service recovers');
-      const job = enqueueDecryptJob(plan.bundleId, 'manual', {
-        externalVersionId: plan.externalVersionId,
-        testflight: plan.testflight as never,
-        versionLabel: plan.versionLabel,
-        minimumOsVersion: plan.minimumOsVersion,
+      const reservedPlan = reserveMcpPlanSubmission(plan.id, userId, authInfo!.clientId);
+      if (reservedPlan.status === 'submitted' && reservedPlan.jobId) {
+        const existingJob = ownedJob(userId, reservedPlan.jobId);
+        return existingJob ? textResult(jobMetadata(existingJob)) : errorResult('The submitted job is no longer available');
+      }
+      const job = enqueueDecryptJob(reservedPlan.bundleId, 'manual', {
+        externalVersionId: reservedPlan.externalVersionId,
+        testflight: reservedPlan.testflight as never,
+        versionLabel: reservedPlan.versionLabel,
+        minimumOsVersion: reservedPlan.minimumOsVersion,
         queuedBy: userId,
         billingOwnerId: userId,
       });
-      const submitted = { ...plan, status: 'submitted' as const, jobId: job.id };
-      writeRecord(submitted);
+      writeRecord({ ...reservedPlan, status: 'submitted', jobId: job.id });
+      if (reservedPlan.autopilotPolicyId) {
+        const usageId = recordId('autopilot_use', reservedPlan.id);
+        const usage = readRecord<McpAutopilotUseRecord>(usageId);
+        if (usage) writeRecord({ ...usage, jobId: job.id });
+      }
       return textResult(jobMetadata(job));
     } catch (error) {
       return errorResult(error instanceof Error ? error.message : String(error));
@@ -822,7 +913,62 @@ export const mcpRoutes: FastifyPluginAsyncTypebox = async (server) => {
       current.active ||= !record.revokedAt && record.expiresAt > Date.now();
       byClient.set(record.clientId, current);
     }
-    return { agents: [...byClient.values()].map((agent) => ({ ...agent, scopes: [...agent.scopes].sort() })).sort((a, b) => b.connectedAt - a.connectedAt) };
+    return {
+      agents: [...byClient.values()].map((agent) => ({
+        ...agent,
+        scopes: [...agent.scopes].sort(),
+        autopilot: readAutopilotPolicy(userId, agent.clientId) ?? {
+          enabled: false,
+          bundleIds: [],
+          channels: [],
+          maximumPer24Hours: 1,
+        },
+      })).sort((a, b) => b.connectedAt - a.connectedAt),
+    };
+  });
+
+  server.post('/v1/dashboard/mcp/clients/autopilot', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
+    const userId = getFastifySession(request)!.sub.toLowerCase();
+    const body = typeof request.body === 'object' && request.body !== null ? request.body as Record<string, unknown> : {};
+    const clientId = typeof body.clientId === 'string' ? body.clientId : '';
+    const enabled = body.enabled === true;
+    const bundleIds = Array.isArray(body.bundleIds) ? body.bundleIds : [];
+    const channels = Array.isArray(body.channels) ? body.channels : [];
+    const maximumPer24Hours = body.maximumPer24Hours;
+    const activeClientTokens = listRecords<AccessTokenRecord>('access_token').filter((record) => record.clientId === clientId && record.userId.toLowerCase() === userId && !record.revokedAt && record.expiresAt > Date.now());
+    if (!clientId || activeClientTokens.length === 0) {
+      return reply.code(404).send({ error: 'connected agent not found' });
+    }
+    const activeScopes = new Set(activeClientTokens.flatMap((record) => record.scopes));
+    if (!activeScopes.has('decrypt:plan') || !activeScopes.has('decrypt:submit')) return reply.code(403).send({ error: 'connect this agent with decrypt planning and submission access before enabling autopilot' });
+    if (typeof body.enabled !== 'boolean'
+      || bundleIds.length > 50
+      || !bundleIds.every((value) => typeof value === 'string' && MCP_AUTOPILOT_BUNDLE_ID_RE.test(value))
+      || new Set(bundleIds.map((value) => String(value).toLowerCase())).size !== bundleIds.length
+      || channels.length > 2
+      || !channels.every((value) => value === 'appstore' || value === 'testflight')
+      || new Set(channels).size !== channels.length
+      || !Number.isInteger(maximumPer24Hours) || Number(maximumPer24Hours) < 1 || Number(maximumPer24Hours) > 100) {
+      return reply.code(400).send({ error: 'provide exact bundle IDs, allowed channels, and a 1–100 decrypt limit per 24 hours' });
+    }
+    const normalizedBundleIds = bundleIds.map((value) => String(value).toLowerCase());
+    if (enabled && (normalizedBundleIds.length === 0 || channels.length === 0)) return reply.code(400).send({ error: 'enable autopilot only after selecting at least one bundle ID and channel' });
+    const client = readRecord<McpClientRecord>(recordId('client', clientId));
+    if (!client || client.type !== 'client') return reply.code(404).send({ error: 'connected agent not found' });
+    const policy: McpAutopilotPolicyRecord = {
+      id: autopilotPolicyId(userId, clientId),
+      type: 'autopilot_policy',
+      userId,
+      clientId,
+      enabled,
+      bundleIds: normalizedBundleIds,
+      channels: channels as McpDecryptChannel[],
+      maximumPer24Hours: Number(maximumPer24Hours),
+      updatedAt: Date.now(),
+    };
+    writeRecord(policy);
+    recordAudit(userId, 'mcp.agent.autopilot.update', clientId, enabled ? `enabled for ${normalizedBundleIds.length} bundle(s), ${policy.maximumPer24Hours} per 24 hours` : 'disabled');
+    return reply.send({ ok: true, autopilot: policy });
   });
 
   server.post('/v1/dashboard/mcp/clients/revoke', { schema: { hide: true }, preHandler: fastifyRequireSession }, (request, reply) => {
@@ -835,6 +981,8 @@ export const mcpRoutes: FastifyPluginAsyncTypebox = async (server) => {
       revokeAccess(record);
       revoked += 1;
     }
+    const policy = readAutopilotPolicy(userId, clientId);
+    if (policy?.enabled) writeRecord({ ...policy, enabled: false, updatedAt: Date.now() });
     recordAudit(userId, 'mcp.agent.revoke', clientId, `revoked ${revoked} agent token(s)`);
     return reply.send({ ok: true, revoked });
   });

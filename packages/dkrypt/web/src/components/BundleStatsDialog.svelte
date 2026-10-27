@@ -41,30 +41,30 @@
 
 	const VERSIONS_PAGE_SIZE = 20;
 	const STOREFRONT_OPTIONS = [
-		{ code: 'US', name: 'United States' },
-		{ code: 'GB', name: 'United Kingdom' },
-		{ code: 'DE', name: 'Germany' },
-		{ code: 'FR', name: 'France' },
-		{ code: 'CA', name: 'Canada' },
-		{ code: 'AU', name: 'Australia' },
-		{ code: 'JP', name: 'Japan' },
-		{ code: 'IN', name: 'India' },
-		{ code: 'IT', name: 'Italy' },
-		{ code: 'ES', name: 'Spain' },
-		{ code: 'NL', name: 'Netherlands' },
-		{ code: 'SE', name: 'Sweden' },
-		{ code: 'CH', name: 'Switzerland' },
-		{ code: 'AT', name: 'Austria' },
-		{ code: 'PL', name: 'Poland' },
-		{ code: 'MX', name: 'Mexico' },
-		{ code: 'BR', name: 'Brazil' },
-		{ code: 'SG', name: 'Singapore' },
-		{ code: 'KR', name: 'South Korea' },
-		{ code: 'HK', name: 'Hong Kong' },
-		{ code: 'NZ', name: 'New Zealand' },
-		{ code: 'CN', name: 'China' },
-		{ code: 'TR', name: 'Türkiye' },
-		{ code: 'AE', name: 'United Arab Emirates' },
+		{ code: 'CA', name: 'Canada', column: 2, row: 1 },
+		{ code: 'US', name: 'United States', column: 2, row: 2 },
+		{ code: 'MX', name: 'Mexico', column: 2, row: 3 },
+		{ code: 'BR', name: 'Brazil', column: 4, row: 4 },
+		{ code: 'GB', name: 'United Kingdom', column: 6, row: 2 },
+		{ code: 'FR', name: 'France', column: 6, row: 3 },
+		{ code: 'ES', name: 'Spain', column: 6, row: 4 },
+		{ code: 'NL', name: 'Netherlands', column: 7, row: 1 },
+		{ code: 'DE', name: 'Germany', column: 7, row: 2 },
+		{ code: 'IT', name: 'Italy', column: 7, row: 3 },
+		{ code: 'AT', name: 'Austria', column: 8, row: 2 },
+		{ code: 'CH', name: 'Switzerland', column: 8, row: 3 },
+		{ code: 'SE', name: 'Sweden', column: 8, row: 1 },
+		{ code: 'PL', name: 'Poland', column: 9, row: 2 },
+		{ code: 'IN', name: 'India', column: 9, row: 4 },
+		{ code: 'TR', name: 'Türkiye', column: 9, row: 3 },
+		{ code: 'AE', name: 'United Arab Emirates', column: 10, row: 3 },
+		{ code: 'CN', name: 'China', column: 10, row: 2 },
+		{ code: 'SG', name: 'Singapore', column: 10, row: 4 },
+		{ code: 'HK', name: 'Hong Kong', column: 11, row: 3 },
+		{ code: 'KR', name: 'South Korea', column: 11, row: 2 },
+		{ code: 'JP', name: 'Japan', column: 12, row: 2 },
+		{ code: 'AU', name: 'Australia', column: 12, row: 4 },
+		{ code: 'NZ', name: 'New Zealand', column: 12, row: 5 },
 	];
 
 	let stats = $state<BundleStats | null>(null);
@@ -223,6 +223,23 @@
 		storefrontLoading = false;
 	}
 
+	function storefrontTileClass(countryCode: string): string {
+		const result = storefronts.find((storefront) => storefront.countryCode === countryCode);
+		if (result?.status === 'available') return 'border-ok/40 bg-ok/15 text-ok';
+		if (result?.status === 'unavailable') return 'border-err/40 bg-err/10 text-err';
+		if (result) return 'border-warn/40 bg-warn/10 text-warn';
+		if (storefrontCountries.includes(countryCode)) return 'border-accent/50 bg-accent/10 text-text';
+		return 'border-border/70 bg-background/70 text-muted hover:border-accent/40 hover:text-text';
+	}
+
+	function storefrontTileLabel(countryCode: string, countryName: string): string {
+		const result = storefronts.find((storefront) => storefront.countryCode === countryCode);
+		const state = result?.status === 'available'
+			? `available${result.formattedPrice ? ` at ${result.formattedPrice}` : ''}`
+			: result?.status === 'unavailable' ? 'not listed' : result ? 'could not verify' : storefrontCountries.includes(countryCode) ? 'selected, not checked' : 'not selected';
+		return `${countryName}: ${state}`;
+	}
+
 	async function checkStorefronts(): Promise<void> {
 		const trackId = currentAppMetadata?.trackId;
 		if (!trackId || storefrontCountries.length === 0) return;
@@ -277,7 +294,32 @@
 		{#if !currentAppMetadata?.trackId}
 			<p class="mt-2 text-xs text-muted">App Store metadata is not available for this app yet.</p>
 		{:else}
-			<button type="button" class="mt-2 text-[11px] text-accent hover:underline" aria-expanded={storefrontsExpanded} onclick={() => (storefrontsExpanded = !storefrontsExpanded)}>{storefrontsExpanded ? 'Hide countries' : `${storefrontCountries.length} countries selected · Edit`}</button>
+			<div class="mt-3" role="group" aria-label="World storefront availability map">
+				<div class="grid grid-cols-12 grid-rows-5 gap-1 rounded-lg border border-border/60 bg-panel-muted/20 p-2">
+					{#each STOREFRONT_OPTIONS as country (country.code)}
+						{@const checked = storefrontCountries.includes(country.code)}
+						<button type="button" class={`flex min-h-8 items-center justify-center rounded-md border text-[9px] font-semibold transition-colors sm:min-h-9 sm:text-[10px] ${storefrontTileClass(country.code)}`} style={`grid-column:${country.column};grid-row:${country.row}`} aria-label={storefrontTileLabel(country.code, country.name)} aria-pressed={checked} title={storefrontTileLabel(country.code, country.name)} onclick={() => toggleStorefront(country.code, !checked)}>{country.code}</button>
+					{/each}
+				</div>
+				<div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted" aria-label="Map legend">
+					<span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-ok"></span>Available</span>
+					<span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-err"></span>Not listed</span>
+					<span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-warn"></span>Could not verify</span>
+					<span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm border border-accent bg-accent/20"></span>Selected, unchecked</span>
+				</div>
+				{#if storefrontCountries.some((code) => !STOREFRONT_OPTIONS.some((country) => country.code === code))}
+					<div class="mt-3">
+						<p class="mb-1 text-[10px] font-medium text-muted">Other selected storefronts</p>
+						<div class="flex flex-wrap gap-1.5">
+							{#each storefrontCountries.filter((code) => !STOREFRONT_OPTIONS.some((country) => country.code === code)) as code (code)}
+								{@const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code) ?? code}
+								<button type="button" class={`rounded-md border px-2 py-1 text-[10px] ${storefrontTileClass(code)}`} aria-label={`${storefrontTileLabel(code, name)}. Remove from selection`} aria-pressed="true" title={storefrontTileLabel(code, name)} onclick={() => toggleStorefront(code, false)}>{name} · {code}</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			</div>
+			<button type="button" class="mt-2 text-[11px] text-accent hover:underline" aria-expanded={storefrontsExpanded} onclick={() => (storefrontsExpanded = !storefrontsExpanded)}>{storefrontsExpanded ? 'Hide country list' : `${storefrontCountries.length} countries selected · Edit list`}</button>
 			{#if storefrontsExpanded}
 				<div class="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
 					{#each STOREFRONT_OPTIONS as country (country.code)}

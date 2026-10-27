@@ -154,6 +154,9 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
   if (externalVersionId && versionId === undefined) {
     throw new Error(`refusing to install with non-numeric externalVersionId: ${JSON.stringify(externalVersionId)}`);
   }
+  if (versionId !== undefined && !expectedVersion?.trim()) {
+    throw new Error('refusing to install a pinned App Store release without its expected version');
+  }
 
   const report = (message: string) => {
     log.info(message, { bundleId, externalVersionId });
@@ -173,6 +176,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     : versionId === undefined
       ? normalizeVersion(latestVersion)
       : undefined;
+  if (!targetVersion) throw new Error(`could not resolve the expected App Store version for ${bundleId}`);
   const listing = await lookupAppMetadataByTrackId(trackId);
   ensureNotCancelled();
   if (listing.bundleId !== bundleId || listing.price !== 0) {
@@ -189,8 +193,9 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       country = APP_STORE_LOCALE_RE.exec(locale.stdout.trim())?.[1]?.toUpperCase();
     } catch (error) {
       ensureNotCancelled();
-      log.warn('device App Store locale could not be read; using the verified US title', { bundleId, error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`could not verify the device App Store storefront before installing ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (!country) throw new Error(`could not verify the device App Store storefront before installing ${bundleId}`);
     if (country && country !== 'US') {
       let localizedListing: Awaited<ReturnType<typeof lookupAppMetadataByTrackId>> | undefined;
       try {
@@ -198,14 +203,12 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
         ensureNotCancelled();
       } catch (error) {
         ensureNotCancelled();
-        log.warn('localized App Store title lookup unavailable; using the verified US title', { bundleId, country, error: error instanceof Error ? error.message : String(error) });
+        throw new Error(`could not verify the free ${country} App Store listing for ${bundleId}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      if (localizedListing) {
-        if (localizedListing.trackId !== trackId || localizedListing.bundleId !== bundleId || localizedListing.price !== 0) {
-          throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
-        }
-        if (!appNames.includes(localizedListing.trackName)) appNames.push(localizedListing.trackName);
+      if (!localizedListing || localizedListing.trackId !== trackId || localizedListing.bundleId !== bundleId || localizedListing.price !== 0) {
+        throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
       }
+      if (!appNames.includes(localizedListing.trackName)) appNames.push(localizedListing.trackName);
     }
     const existing = await findInstalledAppStoreBundle(conn, bundleId);
     ensureNotCancelled();
@@ -333,6 +336,19 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
         }
         await delayWithSignal(5_000, options.signal);
       }
+      ensureNotCancelled();
+      const finalBundlePath = await findInstalledAppStoreBundle(conn, bundleId);
+      ensureNotCancelled();
+      if (finalBundlePath) {
+        const finalVersion = await readInstalledBundleVersions(conn, finalBundlePath);
+        ensureNotCancelled();
+          const matchesTarget = normalizeVersion(finalVersion.shortVersion ?? '') === targetVersion || (finalVersion.shortVersion ? compareVersions(finalVersion.shortVersion, targetVersion) === 0 : false);
+        if (matchesTarget) {
+          report(`install verified during final device check: ${finalVersion.shortVersion ?? 'unknown version'} build ${finalVersion.buildVersion ?? 'unknown'}`);
+          return { ...finalVersion, bundleId, appPath: finalBundlePath, fairPlayProtected: true, elapsedMs: Date.now() - start };
+        }
+        lastUnexpectedVersion = finalVersion.shortVersion ?? 'unknown';
+      }
       if (lastUnexpectedVersion && targetVersion) {
         throw new Error(`timed out waiting for ${bundleId} version ${targetVersion}; version ${lastUnexpectedVersion} remained installed after ${Math.round(waitTimeoutMs / 1000)}s`);
       }
@@ -349,5 +365,5 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     } finally {
       await clearAppStoreAutoConfirm(conn).catch(() => {});
     }
-  }, options.signal);
+  }, options.signal, 'foreground');
 }

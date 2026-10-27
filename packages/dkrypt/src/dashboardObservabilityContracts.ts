@@ -45,6 +45,8 @@ const auditActionSchema = Type.Union([
   Type.Literal('billing.webhook.replay'),
   Type.Literal('billing.webhook.quarantine'),
   Type.Literal('billing.reconciliation.sync'),
+  Type.Literal('mcp.decrypt.auto_approve'),
+  Type.Literal('mcp.agent.autopilot.update'),
   Type.Literal('billing.entitlement.refresh'),
   Type.Literal('billing.checkouts.pause'),
   Type.Literal('privacy.export'),

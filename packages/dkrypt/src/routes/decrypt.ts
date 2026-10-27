@@ -715,7 +715,7 @@ export function createArtifactCatalogRoutes(
           return apiErrorEnvelope('this API key is not scoped to this bundleId', 'bundle_scope_denied', request.id);
         }
         await services.touchArtifact(artifact);
-        await streamFilePath(artifact.filePath, request.raw, new Response(reply), artifactDownloadName(artifact), artifact.fileSizeBytes, artifact.id);
+        await streamFilePath(artifact.filePath, request.raw, new Response(reply), artifactDownloadName(artifact), artifact.fileSizeBytes, artifact.id, artifact.sha256);
         return;
       },
     );

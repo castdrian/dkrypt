@@ -583,7 +583,7 @@ describe('exportBackup / importBackup', () => {
     addAllowedUser('roundtrip-user', [role.id], 'tester');
     const backup = exportBackup();
 
-    expect(backup.backupVersion).toBe(14);
+    expect(backup.backupVersion).toBe(15);
     expect(backup.allowedUsers.some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(backup).not.toHaveProperty('projects');
 

@@ -174,6 +174,7 @@ test('typed artifact routes enforce API-key bundle scopes and stream downloads',
     expect(allowedFile.statusCode).toBe(200);
     expect(allowedFile.body).toBe(artifactContents);
     expect(allowedFile.headers['content-type']).toContain('application/octet-stream');
+    expect(allowedFile.headers.etag).toBe(`"${allowedArtifact.sha256}"`);
     expect(touchedArtifactIds).toEqual([allowedArtifact.id]);
 
     const denied = await server.inject({ method: 'GET', url: `/v1/artifacts/${deniedArtifact.id}`, headers });
@@ -188,12 +189,20 @@ test('typed artifact routes enforce API-key bundle scopes and stream downloads',
     const resumedFile = await server.inject({
       method: 'GET',
       url: `/v1/artifacts/${allowedArtifact.id}/file`,
-      headers: { ...headers, range: 'bytes=4-8' },
+      headers: { ...headers, range: 'bytes=4-8', 'if-range': `"${allowedArtifact.sha256}"` },
     });
     expect(resumedFile.statusCode).toBe(206);
     expect(resumedFile.body).toBe(artifactContents.slice(4, 9));
     expect(resumedFile.headers['content-range']).toBe(`bytes 4-8/${Buffer.byteLength(artifactContents)}`);
     expect(resumedFile.headers['accept-ranges']).toBe('bytes');
+
+    const staleResume = await server.inject({
+      method: 'GET',
+      url: `/v1/artifacts/${allowedArtifact.id}/file`,
+      headers: { ...headers, range: 'bytes=4-8', 'if-range': `"${'b'.repeat(64)}"` },
+    });
+    expect(staleResume.statusCode).toBe(200);
+    expect(staleResume.body).toBe(artifactContents);
 
     const suffixFile = await server.inject({
       method: 'GET',

@@ -624,6 +624,8 @@ export type AuditAction =
   | 'billing.webhook.replay'
   | 'billing.webhook.quarantine'
   | 'billing.reconciliation.sync'
+  | 'mcp.decrypt.auto_approve'
+  | 'mcp.agent.autopilot.update'
   | 'billing.entitlement.refresh'
   | 'billing.checkouts.pause'
   | 'privacy.export'
@@ -4021,7 +4023,7 @@ export function markNotificationsRead(userId: string, ids?: string[]): number {
   return changed;
 }
 
-const BACKUP_VERSION = 14;
+const BACKUP_VERSION = 15;
 
 type BackupDeviceRecord = Omit<DeviceRecord, 'transport' | 'host' | 'udid'>
   & { transport: DeviceTransport }
@@ -4113,7 +4115,7 @@ export function exportBackup(): BackupPayload {
     identities: exportIdentitySnapshot(),
     decryptQuotaLedger: exportDecryptQuotaLedger(),
     decryptCreditRecords: stateDatabase.readCollection('decrypt_credit_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type))),
-    mcpRecords: stateDatabase.readCollection('mcp_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type))),
+    mcpRecords: stateDatabase.readCollection('mcp_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'].includes(String((entry as Record<string, unknown>).type))),
   };
 }
 
@@ -4532,7 +4534,7 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'not a valid backup file' };
   const b = raw as Record<string, unknown>;
 
-  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== 12 && b.backupVersion !== 13 && b.backupVersion !== BACKUP_VERSION) {
+  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== 12 && b.backupVersion !== 13 && b.backupVersion !== 14 && b.backupVersion !== BACKUP_VERSION) {
     return { ok: false, error: `unsupported backup version (expected 3 through ${BACKUP_VERSION})` };
   }
   if (b.backupVersion >= 12 && (typeof b.apiKeyRequestHistory !== 'object' || b.apiKeyRequestHistory === null || Array.isArray(b.apiKeyRequestHistory) || Object.values(b.apiKeyRequestHistory).some((entries) => !Array.isArray(entries) || !entries.every((entry) => typeof entry === 'object' && entry !== null && Number.isFinite(entry.at) && typeof entry.method === 'string' && typeof entry.route === 'string' && Number.isFinite(entry.status))))) {
@@ -4544,7 +4546,8 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (b.backupVersion >= 13 && (!Array.isArray(b.decryptCreditRecords) || !b.decryptCreditRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && ['grant', 'usage', 'outage'].includes(entry.type)))) {
     return { ok: false, error: 'decrypt credit records are missing or malformed' };
   }
-  if (b.backupVersion === BACKUP_VERSION && (!Array.isArray(b.mcpRecords) || !b.mcpRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && ['client', 'access_token', 'refresh_token'].includes(String(entry.type))))) {
+  const acceptedMcpRecordTypes = b.backupVersion >= 15 ? ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'] : ['client', 'access_token', 'refresh_token'];
+  if (b.backupVersion >= 14 && (!Array.isArray(b.mcpRecords) || !b.mcpRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && acceptedMcpRecordTypes.includes(String(entry.type))))) {
     return { ok: false, error: 'connected agent records are missing or malformed' };
   }
   if (!Array.isArray(b.allowedUsers) || !b.allowedUsers.every(isAllowedUserRecord)) {
@@ -4768,7 +4771,7 @@ function backupDatabaseCollections(
     projectCollectionReplacement([createDefaultProject()]),
     { table: 'decrypt_quota_ledger', rows: payload.decryptQuotaLedger.map((entry) => ({ id: entry.jobId, payload: entry, updatedAt: entry.admittedAt })) },
     { table: 'decrypt_credit_records', rows: payload.decryptCreditRecords.flatMap((entry) => typeof entry === 'object' && entry !== null && typeof (entry as Record<string, unknown>).id === 'string' ? [{ id: (entry as Record<string, unknown>).id as string, payload: entry, updatedAt: typeof (entry as Record<string, unknown>).createdAt === 'number' ? (entry as Record<string, unknown>).createdAt as number : Date.now() }] : []) },
-    { table: 'mcp_records', rows: payload.mcpRecords.flatMap((entry) => typeof entry === 'object' && entry !== null && typeof (entry as Record<string, unknown>).id === 'string' && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)) ? [{ id: (entry as Record<string, unknown>).id as string, payload: entry, updatedAt: typeof (entry as Record<string, unknown>).createdAt === 'number' ? (entry as Record<string, unknown>).createdAt as number : Date.now() }] : []) },
+    { table: 'mcp_records', rows: payload.mcpRecords.flatMap((entry) => typeof entry === 'object' && entry !== null && typeof (entry as Record<string, unknown>).id === 'string' && ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'].includes(String((entry as Record<string, unknown>).type)) ? [{ id: (entry as Record<string, unknown>).id as string, payload: entry, updatedAt: typeof (entry as Record<string, unknown>).updatedAt === 'number' ? (entry as Record<string, unknown>).updatedAt as number : typeof (entry as Record<string, unknown>).createdAt === 'number' ? (entry as Record<string, unknown>).createdAt as number : Date.now() }] : []) },
   ];
 }
 
@@ -4918,8 +4921,8 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
       const expectedCreditRecords = payload.decryptCreditRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
       const actualCreditRecords = readStateCollection(database.db, 'decrypt_credit_records').filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
       if (!sameCollectionPayloads(expectedCreditRecords, actualCreditRecords)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Decrypt credit and service outage records did not survive a database reopen' };
-      const expectedMcpRecords = payload.mcpRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)));
-      const actualMcpRecords = readStateCollection(database.db, 'mcp_records').filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token'].includes(String((entry as Record<string, unknown>).type)));
+      const expectedMcpRecords = payload.mcpRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'].includes(String((entry as Record<string, unknown>).type)));
+      const actualMcpRecords = readStateCollection(database.db, 'mcp_records').filter((entry) => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'].includes(String((entry as Record<string, unknown>).type)));
       if (!sameCollectionPayloads(expectedMcpRecords, actualMcpRecords)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Connected agent records did not survive a database reopen' };
       const normalizedEntitlementHistory = expectedBilling.entitlementHistory ?? [];
       if (

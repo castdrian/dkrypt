@@ -9,7 +9,7 @@ import type { Job } from '#jobs/types.js';
 import { artifactDownloadName, artifactFileAvailable, getArtifactForJob, touchArtifact } from '#artifacts.js';
 
 interface CloseAwareRequest {
-  headers: { range?: string | string[] };
+  headers: { range?: string | string[]; 'if-range'?: string | string[] };
   on(event: 'aborted', listener: () => void): unknown;
 }
 
@@ -100,12 +100,18 @@ export async function streamFilePath(
   filename: string,
   fileSizeBytes: number | undefined,
   contextId: string,
+  sha256?: string,
 ): Promise<void> {
   const size = fileSizeBytes ?? (await stat(filePath)).size;
-  const range = parseByteRange(req.headers.range, size);
+  const etag = sha256 && /^[a-f0-9]{64}$/i.test(sha256) ? `"${sha256.toLowerCase()}"` : undefined;
+  const ifRange = req.headers['if-range'];
+  const allowRange = !ifRange || Boolean(etag && ifRange === etag);
+  const range = allowRange ? parseByteRange(req.headers.range, size) : undefined;
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, no-cache');
+  if (etag) res.setHeader('ETag', etag);
 
   if (range === null) {
     res.status(416).setHeader('Content-Range', `bytes */${size}`).setHeader('Content-Length', '0').send(null);
@@ -170,5 +176,6 @@ export async function streamJobFile(job: Job, req: CloseAwareRequest, res: Respo
     artifact ? artifactDownloadName(artifact) : `${job.bundleId}.ipa`,
     artifact?.fileSizeBytes ?? job.fileSizeBytes,
     job.id,
+    artifact?.sha256 ?? job.sha256,
   );
 }

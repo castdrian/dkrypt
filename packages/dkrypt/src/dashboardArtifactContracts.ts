@@ -44,6 +44,7 @@ export const dashboardArtifactListResponseSchema = Type.Object({
 
 export const dashboardArtifactParamsSchema = Type.Object({ id: identifierSchema }, additionalProperties);
 export const dashboardArtifactDetailQuerySchema = Type.Object({}, additionalProperties);
+export const dashboardArtifactOptimizeQuerySchema = Type.Object({ deviceId: identifierSchema }, additionalProperties);
 export const dashboardArtifactContentsQuerySchema = Type.Object({
   q: Type.Optional(Type.String({ maxLength: 200 })),
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 100_000 })),
@@ -214,6 +215,11 @@ export type DashboardArtifactDetailRoute = {
   Params: Static<typeof dashboardArtifactParamsSchema>;
   Querystring: Static<typeof dashboardArtifactDetailQuerySchema>;
   Reply: { 200: Static<typeof dashboardArtifactResponseSchema>; 401: ApiErrorEnvelope; 403: ApiErrorEnvelope; 404: ApiErrorEnvelope };
+};
+
+export type DashboardArtifactOptimizeRoute = {
+  Params: Static<typeof dashboardArtifactParamsSchema>;
+  Querystring: Static<typeof dashboardArtifactOptimizeQuerySchema>;
 };
 
 export type DashboardArtifactContentsRoute = {

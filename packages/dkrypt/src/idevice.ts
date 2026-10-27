@@ -12,6 +12,8 @@ import { currentCorrelation } from '#correlation.js';
 import { startSpan } from '#telemetry.js';
 import { incrementMetric, observeMetric } from '#metrics.js';
 import { abortedOperationError, delayWithSignal, throwIfAborted } from '#util/abort.js';
+import { adaptiveTimeout, recordAdaptiveDuration } from '#util/adaptiveTimeout.js';
+import { deviceOperationQueue, KeyedPriorityQueue, type DeviceOperationPriority } from '#util/keyedPriorityQueue.js';
 
 const log = scopedLogger('idevice');
 let previousBridgeSecretWarningEmitted = false;
@@ -797,7 +799,7 @@ export async function probeDeviceSshTunnel(connection: DeviceConnection, signal?
   const startedAt = performance.now();
   let ready = false;
   try {
-    await withDeviceTunnel(connection, async (auth) => {
+    await deviceOperationQueue.run(sshSessionKey(connection), 'background', () => withDeviceTunnel(connection, async (auth) => {
       const privateKey = await readFile(auth.keyPath);
       throwIfAborted(signal);
       const client = await retryTransientSshConnection(
@@ -837,7 +839,7 @@ export async function probeDeviceSshTunnel(connection: DeviceConnection, signal?
       } finally {
         client.end();
       }
-    }, signal);
+    }, signal), signal);
     throwIfAborted(signal);
     ready = true;
     return ready;
@@ -870,20 +872,6 @@ async function installDkryptSshPublicKey(connection: DeviceClient): Promise<void
   const { code, stderr } = await execCommand(connection, command, REMOTE_COMMAND_TIMEOUT_MS);
   if (code !== 0) throw new Error(stderr.trim() || 'could not authorize dkrypt SSH access on the device');
 }
-
-function makeSerialQueue() {
-  let queue: Promise<unknown> = Promise.resolve();
-  return function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const result = queue.then(fn, fn);
-    queue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
-}
-
-const withSSHLock = makeSerialQueue();
 
 function sshSessionKey(connection: DeviceConnection): string {
   if (connection.id) return 'id:' + connection.id;
@@ -1077,48 +1065,47 @@ export function getDeviceTransportOrder(connection: DeviceConnection, mode = con
 }
 
 async function withDeviceAgent<T>(connection: DeviceConnection, fn: (client: DeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return withSSHLock(async () => {
+  throwIfAborted(signal);
+  let opened: { key: string; session: DeviceAgentSession };
+  try {
+    opened = await getDeviceAgentSession(connection, signal);
+  } catch (error) {
     throwIfAborted(signal);
-    let opened: { key: string; session: DeviceAgentSession };
-    try {
-      opened = await getDeviceAgentSession(connection, signal);
-    } catch (error) {
-      throwIfAborted(signal);
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new DeviceAgentUnavailableError(`could not connect to the dkrypt device agent: ${detail}`, { cause: error });
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new DeviceAgentUnavailableError(`could not connect to the dkrypt device agent: ${detail}`, { cause: error });
+  }
+  const cancelPending = () => opened.session.client.cancelPending();
+  signal?.addEventListener('abort', cancelPending, { once: true });
+  try {
+    throwIfAborted(signal);
+    const result = await fn(opened.session.client);
+    throwIfAborted(signal);
+    return result;
+  } catch (error) {
+    throwIfAborted(signal);
+    if (opened.session.client.isUnusable) {
+      throw new DeviceAgentUnavailableError('the dkrypt device agent connection was lost', { cause: error });
     }
-    const cancelPending = () => opened.session.client.cancelPending();
-    signal?.addEventListener('abort', cancelPending, { once: true });
-    try {
-      throwIfAborted(signal);
-      const result = await fn(opened.session.client);
-      throwIfAborted(signal);
-      return result;
-    } catch (error) {
-      throwIfAborted(signal);
-      if (opened.session.client.isUnusable) {
-        throw new DeviceAgentUnavailableError('the dkrypt device agent connection was lost', { cause: error });
-      }
-      throw error;
-    } finally {
-      signal?.removeEventListener('abort', cancelPending);
-      releaseDeviceAgentSession(opened.key, opened.session);
-    }
-  });
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', cancelPending);
+    releaseDeviceAgentSession(opened.key, opened.session);
+  }
 }
 
 export async function withAutoinstallDeviceAgent<T>(connection: DeviceConnection, fn: (client: DeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!isDirectUsbDeviceAgentConnection(connection)) throw new DeviceAgentUnavailableError('the direct USB recovery channel is unavailable for this device');
-  return withDeviceAgent(connection, fn, signal);
+  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', () => withDeviceAgent(connection, fn, signal), signal);
 }
 
-export async function withSSH<T>(connection: DeviceConnection, fn: (conn: DeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function withSSH<T>(connection: DeviceConnection, fn: (conn: DeviceClient) => Promise<T>, signal?: AbortSignal, priority: DeviceOperationPriority = 'normal'): Promise<T> {
   throwIfAborted(signal);
-  const transportOrder = getDeviceTransportOrder(connection);
-  if (transportOrder[0] === 'autoinstall' && isRustDeviceConnection(connection)) {
-    return withDeviceAgent(connection, fn, signal);
-  }
-  return withSSHLock(async () => {
+  return deviceOperationQueue.run(sshSessionKey(connection), priority, async () => {
+    throwIfAborted(signal);
+    const transportOrder = getDeviceTransportOrder(connection);
+    if (transportOrder[0] === 'autoinstall' && isRustDeviceConnection(connection)) {
+      return withDeviceAgent(connection, fn, signal);
+    }
     throwIfAborted(signal);
     let key = '';
     let session: SshSession | undefined;
@@ -1137,10 +1124,10 @@ export async function withSSH<T>(connection: DeviceConnection, fn: (conn: Device
       const result = await fn(session.conn);
       throwIfAborted(signal);
       return result;
-    } catch (err) {
+    } catch (error) {
       throwIfAborted(signal);
-      if (session && (session.unusable || isTransientSshConnectionError(err))) closeSshSession(key, session);
-      throw err;
+      if (session && (session.unusable || isTransientSshConnectionError(error))) closeSshSession(key, session);
+      throw error;
     } finally {
       if (clearCommandSignal) signal?.removeEventListener('abort', clearCommandSignal);
       if (session) {
@@ -1148,17 +1135,17 @@ export async function withSSH<T>(connection: DeviceConnection, fn: (conn: Device
         releaseSshSession(key, session);
       }
     }
-  });
+  }, signal);
 }
 
 export async function withIpadecrypt<T>(connection: DeviceConnection, fn: (runtimeDir: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
   throwIfAborted(signal);
-  return withDeviceTunnel(connection, async (auth, runtimeDir) => {
+  return deviceOperationQueue.run(sshSessionKey(connection), 'foreground', () => withDeviceTunnel(connection, async (auth, runtimeDir) => {
     throwIfAborted(signal);
     const readyRuntimeDir = await ensureIpadecryptRuntime(runtimeDir, auth);
     throwIfAborted(signal);
     return fn(readyRuntimeDir);
-  }, signal);
+  }, signal), signal);
 }
 
 async function discoverRustDevices(): Promise<DeviceDiscoveryResult> {
@@ -1609,7 +1596,7 @@ export async function readInstalledBundleVersions(conn: DeviceClient, appPath: s
   }
 }
 
-const withBridgeLock = makeSerialQueue();
+const bridgeRequestQueue = new KeyedPriorityQueue(128);
 
 async function sendBridgeRequestRawTo(
   conn: DeviceClient,
@@ -1618,22 +1605,25 @@ async function sendBridgeRequestRawTo(
   timeoutMs = 20_000,
   signal?: AbortSignal,
 ): Promise<any> {
-  return withBridgeLock(async () => {
+  const runtimeDir = isDeviceSession(conn) ? conn.runtimeDir : connectionRuntimeDirs.get(conn);
+  if (!runtimeDir) throw new Error('autoinstall bridge requests must run through a managed device session');
+  return bridgeRequestQueue.run(runtimeDir, 'normal', async () => {
     throwIfAborted(signal);
     const requestId = typeof request.requestId === 'string' ? request.requestId : randomUUID();
-    const runtimeDir = isDeviceSession(conn) ? conn.runtimeDir : connectionRuntimeDirs.get(conn);
-    if (!runtimeDir) throw new Error('autoinstall bridge requests must run through a managed device session');
     const secret = await loadBridgeSecret(runtimeDir);
     const requestDirectory = `${BRIDGE_ROOT_PATH}/${channel}/requests`;
     const responseDirectory = `${BRIDGE_ROOT_PATH}/${channel}/responses`;
     const requestPath = `${requestDirectory}/${requestId}.json`;
     const responsePath = `${responseDirectory}/${requestId}.response.json`;
     const envelope = createBridgeEnvelope(secret, channel, request, requestId);
-    let deadline = Date.now() + timeoutMs;
+    const action = typeof request.action === 'string' ? request.action : 'unknown';
+    const timeoutKey = `${runtimeDir}:${channel}:${action}`;
+    const resolvedTimeoutMs = adaptiveTimeout(timeoutKey, timeoutMs);
+    let deadline = Date.now() + resolvedTimeoutMs;
     const commandTimeout = () => Math.max(1, Math.min(REMOTE_COMMAND_TIMEOUT_MS, deadline - Date.now()));
     let requestMayExist = false;
     let completed = false;
-    log.info('sending authenticated autoinstall bridge request', { requestId, channel, action: request.action });
+    log.info('sending authenticated autoinstall bridge request', { requestId, channel, action, timeoutMs: resolvedTimeoutMs });
     try {
       const { code, stderr } = await execCommand(
         conn,
@@ -1652,7 +1642,8 @@ async function sendBridgeRequestRawTo(
       requestMayExist = true;
       await writeRemoteFileAtomically(conn, requestPath, JSON.stringify(envelope), commandTimeout());
       throwIfAborted(signal);
-      deadline = Date.now() + timeoutMs;
+      const waitStartedAt = performance.now();
+      deadline = Date.now() + resolvedTimeoutMs;
 
       while (Date.now() < deadline) {
         throwIfAborted(signal);
@@ -1681,11 +1672,17 @@ async function sendBridgeRequestRawTo(
             throw new BridgeError({ message: typeof error === 'string' ? error : String(error), retryable: false });
           }
           completed = true;
+          recordAdaptiveDuration(timeoutKey, performance.now() - waitStartedAt);
           return { ...parsed, requestId };
         }
         await delayWithSignal(Math.min(500, Math.max(1, deadline - Date.now())), signal);
       }
       throw new Error(`autoinstall bridge request timed out (${requestId}) on ${channel}: ${JSON.stringify(request)}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('autoinstall bridge request timed out (')) {
+        recordAdaptiveDuration(timeoutKey, resolvedTimeoutMs * 1.2);
+      }
+      throw error;
     } finally {
       if (requestMayExist && !completed) await execCommand(conn, `rm -f "${requestPath}" "${responsePath}"`, Math.min(5_000, REMOTE_COMMAND_TIMEOUT_MS)).catch(() => {});
     }

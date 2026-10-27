@@ -621,7 +621,7 @@ async function computeDeviceHealth(device: DeviceRecord, signal?: AbortSignal): 
         network: trackAgentHeartbeat(() => queryNetworkStatus(conn)),
         bridgeHeartbeats: trackAgentHeartbeat(() => readBridgeHeartbeats(conn)),
       }, signal);
-    }, signal);
+    }, signal, 'background');
     const bridge = await bridgeHealthPromise;
     const sshSftpReady = await probeDeviceSshTunnel(device, signal);
     const health: DeviceHealth = {

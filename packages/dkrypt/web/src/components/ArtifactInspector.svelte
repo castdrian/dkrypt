@@ -6,7 +6,7 @@
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import { buttonVariants } from '#lib/components/ui/variants';
-  import { fetchDashboardArtifact, fetchDashboardArtifactAnalysis, fetchDashboardArtifactAssetPreview, fetchDashboardArtifactContents, fetchDashboardArtifactNote, updateDashboardArtifactNote, type ArtifactPackageEntry, type ArtifactRecord, type IpaAnalysisReport } from '#lib/api';
+  import { fetchDashboardArtifact, fetchDashboardArtifactAnalysis, fetchDashboardArtifactAssetPreview, fetchDashboardArtifactContents, fetchDashboardArtifactNote, fetchDevices, updateDashboardArtifactNote, type ArtifactPackageEntry, type ArtifactRecord, type DeviceRecord, type IpaAnalysisReport } from '#lib/api';
   import { appDisplayName, appIconUrl } from '#lib/appCatalog.svelte';
   import { fmtSize, fmtTime } from '#lib/format.svelte';
   import { artifactDetailJumpState } from '#lib/ui.svelte';
@@ -34,6 +34,8 @@
   let noteLoading = $state(false);
   let noteSaving = $state(false);
   let noteError = $state('');
+  let optimizationDevices = $state<DeviceRecord[]>([]);
+  let optimizationDeviceId = $state('');
   let requestVersion = 0;
 
   async function loadArtifact(id: string): Promise<void> {
@@ -41,6 +43,13 @@
     loading = true;
     error = '';
     open = true;
+    void fetchDevices().then(({ devices }) => {
+      if (version !== requestVersion) return;
+      optimizationDevices = devices.filter((device) => device.enabled && !device.draining && /^iPad\d+,\d+$/.test(device.productType ?? '') && Number.parseInt(device.iosVersion?.split('.')[0] ?? '', 10) >= 11);
+      if (!optimizationDevices.some((device) => device.id === optimizationDeviceId)) optimizationDeviceId = optimizationDevices[0]?.id ?? '';
+    }).catch(() => {
+      if (version === requestVersion) optimizationDevices = [];
+    });
     try {
       const result = await fetchDashboardArtifact(id);
       if (version === requestVersion) {
@@ -245,6 +254,21 @@
           <div><dt class="font-medium text-text">Signing</dt><dd>The code signature used by iOS to validate an app. Decrypting does not automatically make an IPA installable on every device.</dd></div>
         </dl>
       </details>
+    </section>
+    <section class="mt-4 rounded-xl border border-border/70 p-4" aria-labelledby="artifact-inspector-optimized-copy">
+      <h3 id="artifact-inspector-optimized-copy" class="text-sm font-semibold">iPad optimized copy</h3>
+      <p class="mt-1 text-xs text-muted">Create a separate arm64 IPA with simulator and other non-iPad binary slices removed. The saved original stays unchanged.</p>
+      {#if optimizationDevices.length > 0}
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <label class="sr-only" for="artifact-optimization-device">Target iPad</label>
+          <select id="artifact-optimization-device" class="h-9 min-w-40 flex-1 rounded-md border border-border bg-background px-2 text-xs" bind:value={optimizationDeviceId}>
+            {#each optimizationDevices as device (device.id)}<option value={device.id}>{device.name}</option>{/each}
+          </select>
+          <a href={`/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/optimized?deviceId=${encodeURIComponent(optimizationDeviceId)}`} class={buttonVariants('secondary', 'sm')} aria-label="Download iPad optimized IPA"><Download class="h-3.5 w-3.5" /> iPad copy</a>
+        </div>
+      {:else}
+        <p class="mt-3 text-xs text-muted">Connect an enabled iPad on iOS 11 or later to create a device optimized copy.</p>
+      {/if}
     </section>
     <section class="mt-4 overflow-hidden rounded-xl border border-border/70" aria-labelledby="artifact-inspector-analysis">
       <button id="artifact-inspector-analysis" class="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-expanded={analysisOpen} onclick={() => void toggleAnalysis()}>
