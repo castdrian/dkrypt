@@ -26,6 +26,8 @@ Object.assign(process.env, {
   ARTIFACT_DIR: artifactDir,
   OUTPUT_DIR: outputDir,
   API_RATE_LIMIT_PER_MINUTE: '2000',
+  FREE_NETWORK_DECRYPT_LIMIT: '1000',
+  FREE_ADDRESS_DECRYPT_LIMIT: '1000',
   JOB_MAX_WAIT_SECONDS: '300',
   DEVICE_BRIDGE_SOCKET: path.join(sandbox, 'device-bridge.sock'),
   DEVICE_BRIDGE_SECRET: `load-test-bridge-${runId}`,
