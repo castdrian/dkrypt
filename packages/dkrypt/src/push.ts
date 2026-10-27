@@ -24,6 +24,10 @@ export interface PushPayload {
   title: string;
   body: string;
   url?: string;
+  jobUrl?: string;
+  tag?: string;
+  silent?: boolean;
+  renotify?: boolean;
   actions?: { action: string; title: string }[];
 }
 

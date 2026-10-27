@@ -4,7 +4,7 @@ import path from 'node:path';
 import { config } from '#config.js';
 import { emitJobsChanged } from '#events.js';
 import { scopedLogger } from '#logger.js';
-import { recordDeviceActivity, type DeviceRecord } from '#store/state.js';
+import { getUserPrefs, recordDeviceActivity, type DeviceRecord } from '#store/state.js';
 import { buildAppStoreOperationId, installFromAppStore } from '#appStoreInstall.js';
 import { installBuild } from '#testflight.js';
 import { getDeviceHealth, getDeviceInstallBlocker } from '#deviceHealth.js';
@@ -19,6 +19,8 @@ import { currentCorrelation, withCorrelation } from '#correlation.js';
 import { startSpan } from '#telemetry.js';
 import { abortedOperationError, throwIfAborted } from '#util/abort.js';
 import { offlineAppStoreProcessor } from '#offlineAppStore.js';
+import { resolveJobNotificationChannels } from '#appNotificationPreferences.js';
+import { sendPushToUser } from '#push.js';
 
 const log = scopedLogger('jobs');
 import { appendJobTimelineEvent, type Job, type JobExecutionStage } from '#jobs/types.js';
@@ -89,6 +91,7 @@ async function runDecryptOperation(job: Job, device: DeviceRecord, signal?: Abor
   job.deviceId = device.id;
 
   let lastActivityStage = '';
+  let lastPushStage = '';
   const report = (message: string) => {
     job.progress = message;
     recordTimeline(message);
@@ -104,6 +107,22 @@ async function runDecryptOperation(job: Job, device: DeviceRecord, signal?: Abor
     if (stage && stage !== lastActivityStage) {
       lastActivityStage = stage;
       recordDeviceActivity({ deviceId: device.id, kind: 'job', bundleId: job.bundleId, message: stage });
+    }
+    if (stage && stage !== lastPushStage && job.queuedBy) {
+      lastPushStage = stage;
+      if (resolveJobNotificationChannels(getUserPrefs(job.queuedBy), job.bundleId, 'success').push) {
+        const jobUrl = `/?job=${encodeURIComponent(job.id)}`;
+        void sendPushToUser(job.queuedBy, {
+          title: 'Decrypt in progress',
+          body: `${job.bundleId} · ${stage}`,
+          url: jobUrl,
+          jobUrl,
+          tag: `dkrypt-job-${job.id}`,
+          silent: true,
+          renotify: false,
+          actions: [{ action: 'open-job', title: 'View progress' }],
+        });
+      }
     }
     emitJobsChanged();
   };

@@ -51,7 +51,10 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: '/favicon.svg',
-      data: { url: payload.url ?? '/' },
+      data: { url: payload.url ?? '/', jobUrl: payload.jobUrl ?? payload.url ?? '/' },
+      tag: payload.tag,
+      renotify: payload.renotify ?? false,
+      silent: payload.silent ?? false,
       actions: payload.actions ?? [],
     }),
   );
@@ -63,12 +66,15 @@ self.addEventListener('notificationclick', (event) => {
     event.waitUntil(self.clients.openWindow(event.notification.data?.url ?? '/'));
     return;
   }
+  const targetUrl = event.action === 'open-job'
+    ? event.notification.data?.jobUrl ?? '/'
+    : event.notification.data?.jobUrl ?? event.notification.data?.url ?? '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
-        if ('focus' in client) return client.focus();
+        if ('focus' in client) return client.navigate(targetUrl).then(() => client.focus());
       }
-      return self.clients.openWindow(event.notification.data?.url ?? '/');
+      return self.clients.openWindow(targetUrl);
     }),
   );
 });

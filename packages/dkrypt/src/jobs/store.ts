@@ -48,6 +48,7 @@ const workerInstanceId = randomUUID();
 const workerLeases = new Map<string, { lease: JobWorkerLease; timer: ReturnType<typeof setInterval> }>();
 const lostWorkerLeaseJobIds = new Set<string>();
 const queuedDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const deferredDeviceAttempts = new Map<string, { deviceId: string; reason: string; healthCheckedAt: number }>();
 const queueSloNotified = new Set<string>();
 const offlineAppStoreCircuit = new OfflineAppStoreCircuitBreaker(
   config.appStoreOfflineCircuitFailureThreshold,
@@ -1005,6 +1006,7 @@ export function waitForJob(job: Job, timeoutMs: number): Promise<Job> {
 }
 
 function settle(job: Job): void {
+  deferredDeviceAttempts.delete(job.id);
   const waiters = job.waiters;
   job.waiters = [];
   for (const w of waiters) w(job);
@@ -1201,10 +1203,19 @@ export function reorderQueue(orderedIds: string[], projectId?: string): boolean 
 }
 
 function jobDeviceBlocker(job: Job, device: DeviceRecord): string | undefined {
-  return getJobDeviceBlocker(job, device, {
-    health: getCachedDeviceHealth(device.id)?.value,
+  const cachedHealth = getCachedDeviceHealth(device.id);
+  const state = {
+    health: cachedHealth?.value,
     testFlightCatalog: getTestFlightCatalogCache(),
-  });
+  };
+  const deferredAttempt = deferredDeviceAttempts.get(job.id);
+  if (!deferredAttempt || deferredAttempt.deviceId !== device.id) return getJobDeviceBlocker(job, device, state);
+  if (!cachedHealth || cachedHealth.at <= deferredAttempt.healthCheckedAt) return deferredAttempt.reason;
+  deferredAttempt.healthCheckedAt = cachedHealth.at;
+  const blocker = getJobDeviceBlocker(job, device, state);
+  if (blocker) return blocker;
+  deferredDeviceAttempts.delete(job.id);
+  return undefined;
 }
 
 export function isJobDispatchable(job: Job, device: DeviceRecord): boolean {
@@ -1551,6 +1562,28 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       persistShutdownRecovery(job);
       return;
     }
+    const deferredDeviceReason = /^decrypt deferred:\s*(.+)$/i.exec(message)?.[1];
+    if (device && deferredDeviceReason && !job.cancelledBy && !job.deadlineExceeded && (job.deadlineAt === undefined || Date.now() < job.deadlineAt)) {
+      deferredDeviceAttempts.set(job.id, {
+        deviceId: device.id,
+        reason: deferredDeviceReason,
+        healthCheckedAt: getCachedDeviceHealth(device.id)?.at ?? Date.now(),
+      });
+      job.status = 'queued';
+      job.progress = 'Waiting for device';
+      job.queueReason = deferredDeviceReason;
+      job.lastQueueReason = deferredDeviceReason;
+      job.error = undefined;
+      job.failureClass = undefined;
+      job.workerAttemptId = undefined;
+      if (job.source === 'scheduler') queue.unshift(job.id);
+      else insertByPriority(job.id, job.priority);
+      appendJobTimelineEvent(job, `Deferred: ${deferredDeviceReason}`, 'queued');
+      scheduleQueuedDeadline(job);
+      persistActiveJobs();
+      emitJobsChanged();
+      return;
+    }
     if (!device && !preventsDeviceFallback && !job.cancelledBy && !job.deadlineExceeded && (job.deadlineAt === undefined || Date.now() < job.deadlineAt)) {
       job.offlineFailureReason = message.replace(/\s+/g, ' ').slice(0, 600);
       incrementMetric('appstore_offline_device_fallbacks_total', { failureClass: classifyJobFailure(message), source: job.source });
@@ -1653,12 +1686,16 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     const notificationChannels = resolveJobNotificationChannels(prefs, job.bundleId, job.status === 'done' ? 'success' : 'failure');
     const shouldPush = notificationChannels.push;
     if (shouldPush) {
+      const jobUrl = `/?job=${encodeURIComponent(job.id)}`;
       void sendPushToUser(job.queuedBy, {
         title,
         body,
-        url: downloadUrl ?? `/?job=${encodeURIComponent(job.id)}`,
+        url: downloadUrl ?? jobUrl,
+        jobUrl,
+        tag: `dkrypt-job-${job.id}`,
+        renotify: true,
         actions: downloadUrl
-          ? [{ action: 'download', title: 'Download' }]
+          ? [{ action: 'download', title: 'Download IPA' }, { action: 'open-job', title: 'View job' }]
           : [{ action: 'open-job', title: 'Open job' }],
       });
     }

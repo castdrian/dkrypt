@@ -32,6 +32,7 @@
 	import UpdateAvailableBanner from "#components/UpdateAvailableBanner.svelte";
 	import HeaderOnlineUsers from "#components/HeaderOnlineUsers.svelte";
 	import BackgroundTaskTray from "#components/BackgroundTaskTray.svelte";
+	import QueueDock from "#components/QueueDock.svelte";
 	import Login from "#components/Login.svelte";
 	import MfaVerification from "#components/MfaVerification.svelte";
 	import LegalPage from "#components/LegalPage.svelte";
@@ -1344,6 +1345,7 @@ initDensity();
 	</div>
 {/if}
 
+<QueueDock />
 <ConfirmModal />
 <PromptModal />
 <CommandPalette />

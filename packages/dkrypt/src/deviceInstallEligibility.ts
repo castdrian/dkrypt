@@ -36,6 +36,7 @@ export function getRootlessJailbreakBlocker(health: Pick<DeviceHealth, 'jailbrea
 
 export function getDeviceInstallBlocker(health: DeviceHealth, installSizeBytes?: number, source?: DeviceInstallSource): string | undefined {
   if (!health.reachable) return health.error ?? 'device is unreachable';
+  if (health.autoinstallPaused) return health.autoinstallPauseReason ?? 'Autoinstall is paused on the device';
   if (health.subsystems?.agent === 'offline') return 'device agent is unavailable while the USB transport is still connected';
   if (health.subsystems?.sshTunnel === 'degraded' || health.subsystems?.sshTunnel === 'offline') return 'device SSH/SFTP tunnel is unavailable for decrypt';
   const jailbreakBlocker = getRootlessJailbreakBlocker(health);

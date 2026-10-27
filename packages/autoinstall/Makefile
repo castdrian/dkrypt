@@ -18,10 +18,16 @@ autoinstall-device-agent_CFLAGS = -fobjc-arc -DAGENT_VERSION='@"$(THEOS_PACKAGE_
 autoinstall-device-agent_FRAMEWORKS = Foundation
 autoinstall-device-agent_INSTALL_PATH = /usr/libexec
 
+BUNDLE_NAME = AutoinstallPrefs
+AutoinstallPrefs_FILES = preferences/AutoinstallRootListController.m
+AutoinstallPrefs_FRAMEWORKS = UIKit
+AutoinstallPrefs_RESOURCE_FILES = preferences/Resources/Info.plist
+AutoinstallPrefs_INSTALL_PATH = /Library/PreferenceBundles
+AutoinstallPrefs_CFLAGS = -fobjc-arc -DAUTOINSTALL_PREFS_VERSION='@"$(THEOS_PACKAGE_BASE_VERSION)"'
+AutoinstallPrefs_LDFLAGS = -undefined dynamic_lookup
+
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 include $(THEOS_MAKE_PATH)/tool.mk
 
-after-stage::
-	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/LaunchDaemons$(ECHO_END)
-	$(ECHO_NOTHING)cp resources/dev.adrian.autoinstall.device-agent.plist $(THEOS_STAGING_DIR)/Library/LaunchDaemons/$(ECHO_END)
+include $(THEOS_MAKE_PATH)/bundle.mk

@@ -11,6 +11,7 @@
 #import <sys/file.h>
 #import <sys/wait.h>
 #import <unistd.h>
+#import <math.h>
 #import "FreeInstallConfirmation.h"
 #import "PurchaseResponse.h"
 
@@ -200,6 +201,40 @@ static NSString *bridgeDirectory(NSString *channel, NSString *kind) {
 
 static NSDictionary *readJSONFile(NSString *path);
 
+static NSString * const kAutoinstallPreferencesDomain = @"dev.adrian.autoinstall";
+static NSString * const kOriginalBrightnessPath = @"/var/mobile/Library/Preferences/dev.adrian.autoinstall-original-brightness.json";
+static NSString * const kRecentActivityPath = @"/var/mobile/Library/Preferences/dev.adrian.autoinstall-recent-activity.json";
+
+static id autoinstallPreference(NSString *key) {
+    return CFBridgingRelease(CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kAutoinstallPreferencesDomain));
+}
+
+static void setAutoinstallPreference(NSString *key, id value) {
+    CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value, (__bridge CFStringRef)kAutoinstallPreferencesDomain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kAutoinstallPreferencesDomain);
+}
+
+static void appendRecentAutoinstallActivity(NSString *channel, NSString *operationId, NSString *state, NSDictionary *fields) {
+    NSString *directory = [kRecentActivityPath stringByDeletingLastPathComponent];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:nil];
+    id storedActivity = readJSONFile(kRecentActivityPath);
+    NSArray *existing = [storedActivity isKindOfClass:[NSArray class]] ? (NSArray *)storedActivity : @[];
+    NSMutableArray *activity = [existing mutableCopy];
+    NSMutableDictionary *entry = [@{
+        @"at": @([[NSDate date] timeIntervalSince1970]),
+        @"channel": channel ?: @"unknown",
+        @"operationId": operationId ?: @"",
+        @"state": state ?: @"unknown",
+    } mutableCopy];
+    for (NSString *key in @[@"bundleId", @"appId", @"buildVersion", @"version", @"trainVersion"]) {
+        id value = fields[key];
+        if ([value isKindOfClass:[NSString class]] || [value isKindOfClass:[NSNumber class]]) entry[key] = [value description];
+    }
+    [activity addObject:entry];
+    if (activity.count > 12) [activity removeObjectsInRange:NSMakeRange(0, activity.count - 12)];
+    writeJSONFile(kRecentActivityPath, activity);
+}
+
 static NSString *bridgeTransactionPath(NSString *channel, NSString *operationId) {
     return [[bridgeDirectory(channel, @"transactions") stringByAppendingPathComponent:operationId] stringByAppendingPathExtension:@"json"];
 }
@@ -216,6 +251,7 @@ static void writeBridgeTransaction(NSString *channel, NSString *operationId, NSS
     transaction[@"state"] = state;
     transaction[@"updatedAt"] = @([[NSDate date] timeIntervalSince1970]);
     writeJSONFile(bridgeTransactionPath(channel, operationId), transaction);
+    appendRecentAutoinstallActivity(channel, operationId, state, fields);
 }
 
 static NSDictionary *autoinstallActiveFreeAppStoreAuthorization(void) {
@@ -540,8 +576,40 @@ static BOOL setBrightnessFactor(NSNumber *factor) {
     return result;
 }
 
+static NSNumber *currentBrightnessFactor(void) {
+    id value = [brightnessClient() copyPropertyForKey:@"DisplayBrightnessFactor"];
+    if ([value isKindOfClass:[NSNumber class]]) return value;
+    if ([value isKindOfClass:[NSString class]]) {
+        double factor = [(NSString *)value doubleValue];
+        return isfinite(factor) && factor >= 0.0 && factor <= 1.0 ? @(factor) : nil;
+    }
+    return nil;
+}
+
+static void saveOriginalBrightnessIfNeeded(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:kOriginalBrightnessPath]) return;
+    NSNumber *factor = currentBrightnessFactor();
+    if ([fm fileExistsAtPath:kDarkFlagPath] && factor.doubleValue <= 0.001) return;
+    if (factor) writeJSONFile(kOriginalBrightnessPath, @{@"factor": factor});
+}
+
+static BOOL restoreOriginalBrightness(BOOL useLegacyFallback) {
+    NSDictionary *saved = readJSONFile(kOriginalBrightnessPath);
+    NSNumber *factor = [saved[@"factor"] isKindOfClass:[NSNumber class]] ? saved[@"factor"] : nil;
+    BOOL legacyDarkState = [[NSFileManager defaultManager] fileExistsAtPath:kDarkFlagPath] && currentBrightnessFactor().doubleValue <= 0.001;
+    if (!factor && (useLegacyFallback || legacyDarkState)) factor = @1.0;
+    BOOL result = factor ? setBrightnessFactor(factor) : YES;
+    id backlight = backlightController();
+    if (respondsToSelectorSafe(backlight, @selector(allowIdleSleep))) [backlight allowIdleSleep];
+    if (factor) [[NSFileManager defaultManager] removeItemAtPath:kOriginalBrightnessPath error:nil];
+    if (legacyDarkState) [[NSFileManager defaultManager] removeItemAtPath:kDarkFlagPath error:nil];
+    return result;
+}
+
 static BOOL applyDark(void) {
     @try {
+        saveOriginalBrightnessIfNeeded();
         id backlight = backlightController();
         if (respondsToSelectorSafe(backlight, @selector(preventIdleSleep))) {
             [backlight preventIdleSleep];
@@ -559,14 +627,8 @@ static BOOL applyDark(void) {
 
 static BOOL removeDark(void) {
     @try {
-        BOOL result = setBrightnessFactor(@(1));
-        id backlight = backlightController();
-        if (respondsToSelectorSafe(backlight, @selector(allowIdleSleep))) {
-            [backlight allowIdleSleep];
-        } else {
-            autoinstallLog(@"removeDark: allowIdleSleep unavailable");
-        }
-        autoinstallLog([NSString stringWithFormat:@"removeDark: DisplayBrightnessFactor=1 result=%d", result]);
+        BOOL result = restoreOriginalBrightness(YES);
+        autoinstallLog([NSString stringWithFormat:@"removeDark: restored saved display brightness result=%d", result]);
         return result;
     } @catch (NSException *exception) {
         autoinstallLog([NSString stringWithFormat:@"removeDark: EXCEPTION name=%@ reason=%@", exception.name, exception.reason]);
@@ -576,6 +638,85 @@ static BOOL removeDark(void) {
 
 static BOOL isDarkFlagSet(void) {
     return [[NSFileManager defaultManager] fileExistsAtPath:kDarkFlagPath];
+}
+
+static NSString *autoinstallDisplayMode(void) {
+    id mode = autoinstallPreference(@"DisplayMode");
+    if ([mode isKindOfClass:[NSString class]] && [@[@"dark_awake", @"dark_sleep", @"restore_idle", @"unchanged"] containsObject:mode]) return mode;
+    return isDarkFlagSet() ? @"dark_awake" : @"unchanged";
+}
+
+static NSDictionary *activeInstallOperation(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSDictionary *latest;
+    for (NSString *channel in @[@"appstore", @"testflight"]) {
+        NSString *directory = bridgeDirectory(channel, @"transactions");
+        for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil] ?: @[]) {
+            if (![name.pathExtension isEqualToString:@"json"]) continue;
+            NSDictionary *transaction = readJSONFile([directory stringByAppendingPathComponent:name]);
+            NSString *state = transaction[@"state"];
+            NSTimeInterval updatedAt = [transaction[@"updatedAt"] respondsToSelector:@selector(doubleValue)] ? [transaction[@"updatedAt"] doubleValue] : 0;
+            if (![state isEqual:@"requested"] && ![state isEqual:@"authorizing"] && ![state isEqual:@"installing"]) continue;
+            if (updatedAt <= 0 || now - updatedAt > 1800) continue;
+            if (!latest || updatedAt > [latest[@"updatedAt"] doubleValue]) latest = transaction;
+        }
+    }
+    return latest;
+}
+
+static NSDictionary *autoinstallBatteryStatus(void) {
+    UIDevice *device = [UIDevice currentDevice];
+    device.batteryMonitoringEnabled = YES;
+    float level = device.batteryLevel;
+    UIDeviceBatteryState state = device.batteryState;
+    return @{
+        @"batteryPercent": level >= 0.0f ? @((NSInteger)roundf(level * 100.0f)) : [NSNull null],
+        @"batteryCharging": @(state == UIDeviceBatteryStateCharging || state == UIDeviceBatteryStateFull),
+    };
+}
+
+static NSDictionary *autoinstallPauseStatus(void) {
+    if ([autoinstallPreference(@"Paused") boolValue]) return @{@"paused": @YES, @"reason": @"Paused on iPad"};
+    NSDictionary *battery = autoinstallBatteryStatus();
+    NSNumber *percent = [battery[@"batteryPercent"] isKindOfClass:[NSNumber class]] ? battery[@"batteryPercent"] : nil;
+    NSInteger threshold = [autoinstallPreference(@"LowBatteryThreshold") respondsToSelector:@selector(integerValue)] ? [autoinstallPreference(@"LowBatteryThreshold") integerValue] : 20;
+    BOOL pauseOnLowBattery = [autoinstallPreference(@"PauseOnLowBattery") boolValue];
+    BOOL charging = [battery[@"batteryCharging"] boolValue];
+    if (pauseOnLowBattery && percent && percent.integerValue < threshold && !charging) {
+        return @{@"paused": @YES, @"reason": [NSString stringWithFormat:@"Waiting for charge · battery is %@%%", percent]};
+    }
+    return @{@"paused": @NO, @"reason": [NSNull null]};
+}
+
+static BOOL applyDarkWithoutKeepingAwake(void) {
+    @try {
+        saveOriginalBrightnessIfNeeded();
+        BOOL result = setBrightnessFactor(@0);
+        id backlight = backlightController();
+        if (respondsToSelectorSafe(backlight, @selector(allowIdleSleep))) [backlight allowIdleSleep];
+        return result;
+    } @catch (NSException *exception) {
+        autoinstallLog([NSString stringWithFormat:@"applyDarkWithoutKeepingAwake: EXCEPTION name=%@ reason=%@", exception.name, exception.reason]);
+        return NO;
+    }
+}
+
+static NSString *gAppliedDisplayState = nil;
+
+static BOOL applyConfiguredDisplayMode(void) {
+    NSString *mode = autoinstallDisplayMode();
+    NSDictionary *operation = activeInstallOperation();
+    BOOL operationActive = operation != nil;
+    NSString *state = [NSString stringWithFormat:@"%@:%@", mode, operationActive ? @"active" : @"idle"];
+    if ([state isEqualToString:gAppliedDisplayState]) return YES;
+    BOOL applied = YES;
+    if ([mode isEqual:@"dark_awake"]) applied = applyDark();
+    else if ([mode isEqual:@"dark_sleep"]) applied = applyDarkWithoutKeepingAwake();
+    else if ([mode isEqual:@"restore_idle"] && operationActive) applied = applyDark();
+    else applied = restoreOriginalBrightness(NO);
+    if (applied) gAppliedDisplayState = state;
+    return applied;
 }
 
 static void setDarkFlag(BOOL on) {
@@ -590,9 +731,22 @@ static void setDarkFlag(BOOL on) {
 static NSDictionary *screenStatusDict(void) {
     id backlight = backlightController();
     id bsc = brightnessClient();
+    NSString *displayMode = autoinstallDisplayMode();
+    NSDictionary *operation = activeInstallOperation();
+    NSDictionary *pause = autoinstallPauseStatus();
+    NSDictionary *battery = autoinstallBatteryStatus();
+    BOOL displayIsDark = ([displayMode isEqual:@"dark_awake"] || [displayMode isEqual:@"dark_sleep"] || ([displayMode isEqual:@"restore_idle"] && operation != nil));
     NSMutableDictionary *status = [@{
         @"ok": @YES,
-        @"darkEnabled": @(isDarkFlagSet()),
+        @"darkEnabled": @(displayIsDark),
+        @"displayMode": displayMode,
+        @"autoinstallPaused": pause[@"paused"],
+        @"pauseReason": pause[@"reason"],
+        @"batteryPauseEnabled": @([autoinstallPreference(@"PauseOnLowBattery") boolValue]),
+        @"batteryPauseThreshold": autoinstallPreference(@"LowBatteryThreshold") ?: @20,
+        @"batteryPercent": battery[@"batteryPercent"],
+        @"batteryCharging": battery[@"batteryCharging"],
+        @"activeOperation": operation ? operation[@"bundleId"] ?: operation[@"channel"] : [NSNull null],
     } mutableCopy];
     if (respondsToSelectorSafe(backlight, @selector(screenIsOn))) {
         status[@"screenIsOn"] = @([backlight screenIsOn]);
@@ -615,7 +769,7 @@ static NSDictionary *screenStatusDict(void) {
 static NSDictionary *springBoardBridgeStatus(void) {
     NSMutableDictionary *status = [screenStatusDict() mutableCopy];
     status[@"bridgeVersion"] = BRIDGE_VERSION;
-    status[@"capabilities"] = @[@"dark_on", @"dark_off", @"launch_app", @"screen_status", @"status", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"];
+    status[@"capabilities"] = @[@"dark_on", @"dark_off", @"launch_app", @"screen_status", @"status", @"device_preferences", @"local_pause", @"low_battery_pause", @"recent_activity", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"];
     return status;
 }
 
@@ -643,8 +797,10 @@ static void handleSpringBoardRequest(NSDictionary *req, NSString *responsePath, 
 
     @try {
         if ([action isEqualToString:@"dark_on"]) {
-            BOOL applied = applyDark();
-            if (applied) setDarkFlag(YES);
+            setAutoinstallPreference(@"DisplayMode", @"dark_awake");
+            setDarkFlag(YES);
+            gAppliedDisplayState = nil;
+            BOOL applied = applyConfiguredDisplayMode();
             NSMutableDictionary *status = [screenStatusDict() mutableCopy];
             status[@"ok"] = @(applied);
             if (!applied) status[@"error"] = @"dark mode could not be applied";
@@ -653,8 +809,10 @@ static void handleSpringBoardRequest(NSDictionary *req, NSString *responsePath, 
         }
 
         if ([action isEqualToString:@"dark_off"]) {
+            setAutoinstallPreference(@"DisplayMode", @"unchanged");
+            setDarkFlag(NO);
+            gAppliedDisplayState = nil;
             BOOL removed = removeDark();
-            if (removed) setDarkFlag(NO);
             NSMutableDictionary *status = [screenStatusDict() mutableCopy];
             status[@"ok"] = @(removed);
             if (!removed) status[@"error"] = @"dark mode could not be disabled";
@@ -669,7 +827,7 @@ static void handleSpringBoardRequest(NSDictionary *req, NSString *responsePath, 
                 return;
             }
             unlockDeviceIfLocked();
-            if (isDarkFlagSet()) applyDark();
+            applyConfiguredDisplayMode();
             int rc = sbsLaunchApplication(bundleId);
             autoinstallLog([NSString stringWithFormat:@"launch_app: SBSLaunchApplicationWithIdentifier(%@)=%d", bundleId, rc]);
             NSMutableDictionary *resp = [screenStatusDict() mutableCopy];
@@ -701,6 +859,7 @@ static void startSpringBoardSide(void) {
     dispatch_source_set_event_handler(gSBBridgeTimer, ^{
         @autoreleasepool {
         NSFileManager *fm = [NSFileManager defaultManager];
+        applyConfiguredDisplayMode();
         writeBridgeHeartbeat(@"springboard");
         sweepBridgeArtifacts(@"springboard");
         processSecureBridgeRequests(@"springboard", ^(NSDictionary *request, NSString *responsePath, NSString *requestId) {
@@ -761,12 +920,10 @@ static void startSpringBoardSide(void) {
     dispatch_resume(gSBBridgeTimer);
     autoinstallLog(@"sb-bridge: request-file watcher started");
 
-    if (isDarkFlagSet()) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), gSBBridgeQueue, ^{
-            autoinstallLog(@"sb: dark flag set, re-applying dark state (deferred 15s past boot)");
-            applyDark();
-        });
-    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), gSBBridgeQueue, ^{
+        gAppliedDisplayState = nil;
+        applyConfiguredDisplayMode();
+    });
 }
 
 #pragma mark - TestFlight side: list / install bridge

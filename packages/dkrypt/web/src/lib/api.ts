@@ -891,6 +891,12 @@ export interface DeviceHealth extends DeviceTransportStatus {
   testFlightRunning?: boolean;
   testFlightBridgeReachable?: boolean;
   darkEnabled?: boolean;
+  displayMode?: 'dark_awake' | 'dark_sleep' | 'restore_idle' | 'unchanged';
+  autoinstallPaused?: boolean;
+  autoinstallPauseReason?: string;
+  batteryPauseEnabled?: boolean;
+  batteryPauseThreshold?: number;
+  activeOperation?: string;
   screenIsOn?: boolean;
   backlightState?: number;
   batteryPercent?: number;

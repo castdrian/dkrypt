@@ -28,6 +28,12 @@ export interface DeviceHealth {
   testFlightRunning?: boolean;
   testFlightBridgeReachable?: boolean;
   darkEnabled?: boolean;
+  displayMode?: 'dark_awake' | 'dark_sleep' | 'restore_idle' | 'unchanged';
+  autoinstallPaused?: boolean;
+  autoinstallPauseReason?: string;
+  batteryPauseEnabled?: boolean;
+  batteryPauseThreshold?: number;
+  activeOperation?: string;
   screenIsOn?: boolean;
   backlightState?: number;
   batteryPercent?: number;
@@ -322,6 +328,14 @@ interface SpringBoardStatusResult {
   ok: boolean;
   value?: {
     darkEnabled?: boolean;
+    displayMode?: DeviceHealth['displayMode'];
+    autoinstallPaused?: boolean;
+    pauseReason?: string | null;
+    batteryPauseEnabled?: boolean;
+    batteryPauseThreshold?: number;
+    batteryPercent?: number | null;
+    batteryCharging?: boolean;
+    activeOperation?: string | null;
     screenIsOn?: boolean;
     backlightState?: number;
   };
@@ -342,6 +356,12 @@ export interface DeviceTelemetry {
   testFlightBridgeReachable?: boolean;
   jailbreakAvailable?: boolean;
   darkEnabled?: boolean;
+  displayMode?: DeviceHealth['displayMode'];
+  autoinstallPaused?: boolean;
+  autoinstallPauseReason?: string;
+  batteryPauseEnabled?: boolean;
+  batteryPauseThreshold?: number;
+  activeOperation?: string;
   screenIsOn?: boolean;
   backlightState?: number;
   battery?: BatteryStatus;
@@ -371,15 +391,30 @@ export async function collectDeviceTelemetry(queries: DeviceHealthQueries, signa
   const storage = await runHealthQuery('storage status', queries.storage, undefined, signal);
   const network = await runHealthQuery('network status', queries.network, undefined, signal);
   const bridgeHeartbeats = await runHealthQuery('autoinstall heartbeats', queries.bridgeHeartbeats, {}, signal);
+  const springBoardBatteryPercent = typeof springBoardStatus.value?.batteryPercent === 'number' ? springBoardStatus.value.batteryPercent : undefined;
+  const springBoardBatteryCharging = typeof springBoardStatus.value?.batteryCharging === 'boolean' ? springBoardStatus.value.batteryCharging : undefined;
 
   return {
     testFlightRunning,
     testFlightBridgeReachable: springBoardStatus.ok,
     jailbreakAvailable,
     darkEnabled: springBoardStatus.value?.darkEnabled,
+    displayMode: springBoardStatus.value?.displayMode,
+    autoinstallPaused: springBoardStatus.value?.autoinstallPaused,
+    autoinstallPauseReason: typeof springBoardStatus.value?.pauseReason === 'string' ? springBoardStatus.value.pauseReason : undefined,
+    batteryPauseEnabled: springBoardStatus.value?.batteryPauseEnabled,
+    batteryPauseThreshold: springBoardStatus.value?.batteryPauseThreshold,
+    activeOperation: typeof springBoardStatus.value?.activeOperation === 'string' ? springBoardStatus.value.activeOperation : undefined,
     screenIsOn: springBoardStatus.value?.screenIsOn,
     backlightState: springBoardStatus.value?.backlightState,
-    battery,
+    battery: battery ? {
+      ...battery,
+      batteryPercent: springBoardBatteryPercent ?? battery.batteryPercent,
+      batteryCharging: springBoardBatteryCharging ?? battery.batteryCharging,
+    } : springBoardBatteryPercent === undefined && springBoardBatteryCharging === undefined ? undefined : {
+      batteryPercent: springBoardBatteryPercent,
+      batteryCharging: springBoardBatteryCharging,
+    },
     storage,
     network,
     bridgeHeartbeats,
@@ -601,6 +636,12 @@ async function computeDeviceHealth(device: DeviceRecord, signal?: AbortSignal): 
       testFlightBridgeReachable: telemetry.testFlightBridgeReachable,
       jailbreakAvailable: telemetry.jailbreakAvailable,
       darkEnabled: telemetry.darkEnabled,
+      displayMode: telemetry.displayMode,
+      autoinstallPaused: telemetry.autoinstallPaused,
+      autoinstallPauseReason: telemetry.autoinstallPauseReason,
+      batteryPauseEnabled: telemetry.batteryPauseEnabled,
+      batteryPauseThreshold: telemetry.batteryPauseThreshold,
+      activeOperation: telemetry.activeOperation,
       screenIsOn: telemetry.screenIsOn,
       backlightState: telemetry.backlightState,
       batteryPercent: telemetry.battery?.batteryPercent,

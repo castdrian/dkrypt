@@ -1,9 +1,9 @@
 Name: autoinstall
-Description: TestFlight and App Store browse/install bridge for dkrypt, plus an authenticated USB device agent and dark-screen/no-sleep control
-Version: 1.4.14
+Description: TestFlight and App Store bridge for dkrypt, with on-device controls and an authenticated USB device agent
+Version: 1.5.0
 Package: dev.adrian.autoinstall
 Architecture: iphoneos-arm64
 Maintainer: Adrian Castro
 Author: Adrian Castro
 Section: Tweaks
-Depends: ellekit
+Depends: ellekit, preferenceloader

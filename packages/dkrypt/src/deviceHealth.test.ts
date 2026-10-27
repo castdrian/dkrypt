@@ -56,6 +56,13 @@ describe('getDeviceReadiness', () => {
     });
   });
 
+  test('holds new installs while Autoinstall is locally paused without marking transport unavailable', () => {
+    const deviceHealth = health({ autoinstallPaused: true, autoinstallPauseReason: 'Paused on iPad' });
+
+    expect(deviceHealth.reachable).toBeTrue();
+    expect(getDeviceInstallBlocker(deviceHealth)).toBe('Paused on iPad');
+  });
+
   test('blocks automation when the device loses internet or bridge access', () => {
     expect(getDeviceReadiness(health({ internetAccess: false })).state).toBe('blocked');
     expect(getDeviceReadiness(health({ testFlightBridgeReachable: false })).state).toBe('blocked');
@@ -203,6 +210,40 @@ describe('parseDeviceStorageDf', () => {
 });
 
 describe('collectDeviceTelemetry', () => {
+  test('exposes local pause, display policy, and operation status from SpringBoard', async () => {
+    const query = <T>(value: T) => async (): Promise<T> => value;
+    const telemetry = await collectDeviceTelemetry({
+      testFlightRunning: query(false),
+      springBoardStatus: query({ ok: true, value: {
+        darkEnabled: true,
+        displayMode: 'dark_sleep',
+        autoinstallPaused: true,
+        pauseReason: 'Waiting for charge',
+        batteryPauseEnabled: true,
+        batteryPauseThreshold: 20,
+        batteryPercent: 18,
+        batteryCharging: false,
+        activeOperation: 'com.example.app',
+      } }),
+      jailbreakAvailable: query(true),
+      battery: query(undefined),
+      storage: query(undefined),
+      network: query(undefined),
+      bridgeHeartbeats: query({}),
+    });
+
+    expect(telemetry).toMatchObject({
+      darkEnabled: true,
+      displayMode: 'dark_sleep',
+      autoinstallPaused: true,
+      autoinstallPauseReason: 'Waiting for charge',
+      batteryPauseEnabled: true,
+      batteryPauseThreshold: 20,
+      activeOperation: 'com.example.app',
+      battery: { batteryPercent: 18, batteryCharging: false },
+    });
+  });
+
   test('keeps telemetry failures from making an established SSH session unreachable', async () => {
     let activeQueries = 0;
     let maxActiveQueries = 0;
