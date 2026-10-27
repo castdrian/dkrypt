@@ -15,6 +15,7 @@
     columns,
     listView,
     canManageStorage,
+    allowBinaryActions,
     canSelect,
     selected,
     selectionDisabled,
@@ -28,6 +29,7 @@
     columns: ArtifactColumnId[];
     listView: boolean;
     canManageStorage: boolean;
+    allowBinaryActions: boolean;
     canSelect: boolean;
     selected: boolean;
     selectionDisabled: boolean;
@@ -93,8 +95,10 @@
           {#if artifact.archivedAt}<ArchiveRestore class="h-4 w-4" />{:else}<Archive class="h-4 w-4" />{/if}
         </Button>
       {/if}
-      <Button data-list-primary-action variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={onDetails} aria-label="Artifact details" title="Artifact details"><FileSearch class="h-4 w-4" /></Button>
-      <a href={artifact.fileUrl} download class="{buttonVariants('secondary', 'sm')} w-8 shrink-0 !px-0" aria-label="Download {appDisplayName(artifact.bundleId)} {artifactVersion}" title="Download IPA"><Download class="h-4 w-4" /></a>
+      {#if allowBinaryActions}
+        <Button data-list-primary-action variant="ghost" size="icon" class="h-8 w-8 shrink-0" onclick={onDetails} aria-label="Artifact details" title="Artifact details"><FileSearch class="h-4 w-4" /></Button>
+        <a href={artifact.fileUrl} download class="{buttonVariants('secondary', 'sm')} w-8 shrink-0 !px-0" aria-label="Download {appDisplayName(artifact.bundleId)} {artifactVersion}" title="Download IPA"><Download class="h-4 w-4" /></a>
+      {/if}
     </div>
   </div>
 </article>

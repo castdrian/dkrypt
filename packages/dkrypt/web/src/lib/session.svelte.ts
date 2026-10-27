@@ -60,6 +60,7 @@ export function permissionsSummary(bits: bigint): string {
 
 export interface SessionInfo {
   loggedIn: boolean;
+  freeTier?: boolean;
   sub?: string;
   username?: string;
   displayName?: string;
@@ -91,6 +92,15 @@ export function sessionHasPermission(flag: bigint): boolean {
 
 export function sessionHasAnyPermission(flags: bigint[]): boolean {
   return flags.some((flag) => sessionHasPermission(flag));
+}
+
+export function sessionCanViewOperationalDashboard(): boolean {
+  return sessionHasAnyPermission([
+    PermissionFlag.viewDevices,
+    PermissionFlag.manageDevices,
+    PermissionFlag.viewAutomation,
+    PermissionFlag.manageAutomation,
+  ]);
 }
 
 export function sessionPermissionLabels(): string[] {

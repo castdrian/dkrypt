@@ -8,10 +8,10 @@ import { setSessionCookie } from '#session.js';
 import type { AppCatalogEntry, JobHistoryEntry } from '#store/state.js';
 import { buildTestServer } from '#testServer.js';
 
-function sessionCookie(permissions: bigint): string {
+function sessionCookie(permissions: bigint, sub = 'root'): string {
   let value = '';
   const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as Response;
-  setSessionCookie(response, { sub: 'root', permissions });
+  setSessionCookie(response, { sub, permissions });
   return value.split(';', 1)[0]!;
 }
 
@@ -58,12 +58,12 @@ test('quick search is session-only, bounded, and searches the shared workspace',
     const response = await server.inject({
       method: 'GET',
       url,
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewLogs) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices | PermissionFlag.viewLogs) },
     });
     const empty = await server.inject({
       method: 'GET',
       url: '/v1/dashboard/quick-search?q=%20%20',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewLogs) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices | PermissionFlag.viewLogs) },
     });
 
     expect(anonymous.statusCode).toBe(401);
@@ -77,6 +77,38 @@ test('quick search is session-only, bounded, and searches the shared workspace',
     expect(response.body).toContain('job-beta');
     expect(empty.json() as unknown).toEqual({ results: [] });
     expect(catalogSearches).toBe(1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('quick search limits member job results to jobs owned by the signed-in account', async () => {
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardQuickSearchRoutes({
+    searchAppCatalogEntries: () => [app],
+    getAllJobHistory: () => [
+      { ...historyEntry('member-job'), queuedBy: 'root' },
+      { ...historyEntry('other-job'), queuedBy: 'someone-else' },
+    ],
+    getActiveJobs: () => [
+      { ...historyEntry('member-active-job'), queuedBy: 'root', status: 'running' },
+      { ...historyEntry('other-active-job'), billingOwnerId: 'someone-else', status: 'running' },
+    ] as never,
+    listArtifacts: () => ({ artifacts: [], total: 0, totalBytes: 0, maxBytes: 1 }),
+    getEffectiveDevices: () => [],
+    listAuthProfiles: () => [],
+    listAllowedUsers: () => [],
+  }));
+
+  try {
+    const response = await server.inject({
+      method: 'GET',
+      url: '/v1/dashboard/quick-search?q=example',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().results.filter((result: { kind: string }) => result.kind === 'job').map((result: { id: string }) => result.id).sort()).toEqual(['member-active-job', 'member-job']);
   } finally {
     await server.close();
   }

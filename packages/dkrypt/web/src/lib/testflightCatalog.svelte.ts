@@ -1,5 +1,5 @@
-import { fetchTestFlightCatalog } from '#lib/api';
-import { sessionState } from '#lib/session.svelte';
+import { fetchTestFlightCatalog, type TestFlightCatalogApp } from '#lib/api';
+import { sessionCanViewOperationalDashboard, sessionState } from '#lib/session.svelte';
 import { persistTestFlightCatalog, readPersistedTestFlightCatalog } from '#lib/testFlightCatalogPersistence';
 import { resetTestFlightCatalogState, testFlightCatalogState } from '#lib/testFlightCatalogState.svelte';
 
@@ -25,6 +25,11 @@ function isCurrentCatalogGeneration(userId: string, generation: number): boolean
     && currentUserId() === userId;
 }
 
+function catalogForCurrentViewer(apps: TestFlightCatalogApp[]): TestFlightCatalogApp[] {
+  const canViewDevices = sessionCanViewOperationalDashboard();
+  return canViewDevices ? apps : apps.map((app) => ({ ...app, devices: [], available: true }));
+}
+
 function ensureCatalogOwner(userId: string): number {
   if (testFlightCatalogState.ownerId === userId) return catalogGeneration;
 
@@ -38,7 +43,7 @@ function ensureCatalogOwner(userId: string): number {
 
   const cached = readPersistedTestFlightCatalog(userId);
   if (cached) {
-    testFlightCatalogState.apps = cached.apps;
+    testFlightCatalogState.apps = catalogForCurrentViewer(cached.apps);
     testFlightCatalogState.fetchedAt = cached.fetchedAt;
     testFlightCatalogState.refreshing = true;
   }
@@ -76,13 +81,13 @@ async function loadCatalog(force: boolean, ignoreLoaded: boolean, requestedUserI
         && data.apps.length === 0
         && testFlightCatalogState.apps.length > 0;
       if (!preserveCachedApps) {
-        testFlightCatalogState.apps = data.apps;
+        testFlightCatalogState.apps = catalogForCurrentViewer(data.apps);
         testFlightCatalogState.fetchedAt = data.fetchedAt;
       }
       testFlightCatalogState.refreshing = data.refreshing === true;
       testFlightCatalogState.error = undefined;
       loadedGeneration = generation;
-      if (!preserveCachedApps && data.fetchedAt !== undefined) persistTestFlightCatalog(userId, data.apps, data.fetchedAt);
+      if (!preserveCachedApps && data.fetchedAt !== undefined) persistTestFlightCatalog(userId, testFlightCatalogState.apps, data.fetchedAt);
       if (testFlightCatalogState.refreshing) scheduleRefresh(userId, generation, REFRESHING_POLL_DELAY_MS);
       else scheduleRefresh(userId, generation, NORMAL_REFRESH_DELAY_MS);
     })

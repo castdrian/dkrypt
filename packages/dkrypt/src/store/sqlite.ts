@@ -857,6 +857,24 @@ const migrations = [
       CREATE TABLE IF NOT EXISTS service_monitor_state (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
     `,
   },
+  {
+    version: 35,
+    sql: `
+      CREATE TABLE IF NOT EXISTS free_decrypt_quota (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id TEXT NOT NULL,
+        job_id TEXT UNIQUE,
+        reserved_at INTEGER,
+        completed_at INTEGER,
+        CHECK (
+          (job_id IS NOT NULL AND reserved_at IS NOT NULL AND completed_at IS NULL)
+          OR (job_id IS NULL AND reserved_at IS NULL AND completed_at IS NOT NULL)
+        )
+      );
+      CREATE INDEX IF NOT EXISTS free_decrypt_quota_by_owner_completion ON free_decrypt_quota(owner_id, completed_at);
+      CREATE INDEX IF NOT EXISTS free_decrypt_quota_by_owner_reservation ON free_decrypt_quota(owner_id, reserved_at);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

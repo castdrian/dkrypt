@@ -298,9 +298,9 @@ export const dashboardManualDecryptPreflightResponseSchema = Type.Object({
   testflight: Type.Boolean(),
   installSizeBytes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
   estimatedDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
-  queueLength: Type.Integer({ minimum: 0 }),
+  queueLength: Type.Optional(Type.Integer({ minimum: 0 })),
   canQueue: Type.Boolean(),
-  quota: Type.Optional(Type.Object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }, { additionalProperties: false })),
+  quota: Type.Optional(Type.Object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), windowMs: Type.Optional(Type.Number()), freeTier: Type.Optional(Type.Boolean()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }, { additionalProperties: false })),
   devices: Type.Array(dashboardManualDecryptPreflightDeviceSchema),
 }, { additionalProperties: true });
 export const dashboardJobReorderBodySchema = Type.Object({

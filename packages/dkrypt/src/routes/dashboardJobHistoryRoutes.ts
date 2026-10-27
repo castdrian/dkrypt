@@ -8,6 +8,7 @@ import type {
 import { dashboardJobAttemptDiffQuerySchema, dashboardJobAttemptDiffResponseSchema } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
+import { redactMemberJobHistoryEntry } from '#dashboardJobPresentation.js';
 import { getActiveJobs } from '#jobs/store.js';
 import type { Job } from '#jobs/types.js';
 import { PermissionFlag } from '#permissions.js';
@@ -22,6 +23,7 @@ import {
 import { FixedWindowRateLimiter, fastifyRateLimitPerUser } from '#util/rateLimit.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { csvCell } from '#util/csv.js';
+import { canViewJobForUser, canViewOperationalDashboard } from '#dashboardAccess.js';
 
 export interface DashboardJobHistoryServices {
   getActiveJobs: typeof getActiveJobs;
@@ -96,7 +98,7 @@ function sameBuild(first: JobHistoryEntry, second: JobHistoryEntry): boolean {
   return Boolean(first.versionLabel && second.versionLabel && first.versionLabel === second.versionLabel);
 }
 
-function summarizeAttempt(entry: JobHistoryEntry) {
+function summarizeAttempt(entry: JobHistoryEntry, memberView = false) {
   return {
     id: entry.id,
     status: entry.status,
@@ -105,8 +107,8 @@ function summarizeAttempt(entry: JobHistoryEntry) {
     startedAt: entry.startedAt,
     finishedAt: entry.finishedAt,
     durationMs: entry.startedAt === undefined ? undefined : Math.max(0, entry.finishedAt - entry.startedAt),
-    deviceId: entry.deviceId,
-    transport: entry.transport,
+    deviceId: memberView ? undefined : entry.deviceId,
+    transport: memberView ? undefined : entry.transport,
     cacheHit: entry.cacheHit,
     deadlineExceeded: entry.deadlineExceeded,
     error: entry.error,
@@ -125,7 +127,14 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
     server.get<DashboardJobHistoryExportRoute>('/v1/dashboard/jobs/export', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/export'),
     }, (request, reply) => {
-      const entries = services.getAllJobHistory().map(({ projectId: _projectId, ...entry }) => entry);
+      const session = getFastifySession(request)!;
+      const operationalView = canViewOperationalDashboard(session.permissions);
+      const entries = services.getAllJobHistory()
+        .filter((entry) => canViewJobForUser(entry, session.sub, session.permissions))
+        .map((entry) => {
+          const { projectId: _projectId, ...visible } = operationalView ? entry : redactMemberJobHistoryEntry(entry);
+          return visible;
+        });
       if (request.query.format !== 'csv') {
         reply.header('Content-Disposition', 'attachment; filename="dkrypt-job-history.json"');
         return entries;
@@ -145,6 +154,7 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       },
       preHandler: canRequestDecrypt,
     }, (request) => {
+      const session = getFastifySession(request)!;
       const rawIds: string[] = Array.isArray(request.body.ids)
         ? request.body.ids.filter((id): id is string => typeof id === 'string')
         : [];
@@ -152,7 +162,7 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       const activeJobs = services.getActiveJobs();
       const entries = ids.flatMap((id) => {
         const entry = services.getJobHistoryEntryById(id);
-        if (!entry) return [];
+        if (!entry || !canViewJobForUser(entry, session.sub, session.permissions)) return [];
         const active = hasMatchingActiveJob(activeJobs, entry);
         return [{
           entry,
@@ -182,9 +192,10 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       schema: getRouteContract('GET', '/v1/dashboard/jobs/diff'),
       preHandler: limitJobDiff,
     }, (request, reply) => {
+      const session = getFastifySession(request)!;
       const first = services.getJobHistoryEntryById(request.query.a);
       const second = services.getJobHistoryEntryById(request.query.b);
-      if (!first || !second) {
+      if (!first || !second || !canViewJobForUser(first, session.sub, session.permissions) || !canViewJobForUser(second, session.sub, session.permissions)) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or both job history entries not found');
       }
@@ -213,9 +224,10 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
       schema: { hide: true, querystring: dashboardJobAttemptDiffQuerySchema, response: { 200: dashboardJobAttemptDiffResponseSchema } },
       preHandler: [canRequestDecrypt, limitJobDiff],
     }, (request, reply) => {
+      const session = getFastifySession(request)!;
       const first = services.getJobHistoryEntryById(request.query.a);
       const second = services.getJobHistoryEntryById(request.query.b);
-      if (!first || !second) {
+      if (!first || !second || !canViewJobForUser(first, session.sub, session.permissions) || !canViewJobForUser(second, session.sub, session.permissions)) {
         reply.code(404);
         return createHttpErrorEnvelope(request.id, 404, 'one or both job attempts were not found');
       }
@@ -223,9 +235,12 @@ export function createDashboardJobHistoryRoutes(overrides: Partial<DashboardJobH
         reply.code(400);
         return createHttpErrorEnvelope(request.id, 400, 'job attempts must belong to the same app build');
       }
-      const a = summarizeAttempt(first);
-      const b = summarizeAttempt(second);
-      const fields = ['status', 'attempt', 'retryCount', 'durationMs', 'deviceId', 'transport', 'cacheHit', 'deadlineExceeded', 'error', 'warnings', 'artifactId'] as const;
+      const memberView = !canViewOperationalDashboard(session.permissions);
+      const a = summarizeAttempt(first, memberView);
+      const b = summarizeAttempt(second, memberView);
+      const fields = memberView
+        ? ['status', 'attempt', 'retryCount', 'durationMs', 'cacheHit', 'deadlineExceeded', 'error', 'warnings'] as const
+        : ['status', 'attempt', 'retryCount', 'durationMs', 'deviceId', 'transport', 'cacheHit', 'deadlineExceeded', 'error', 'warnings', 'artifactId'] as const;
       const changedFields = fields.filter((field) => JSON.stringify(a[field]) !== JSON.stringify(b[field]));
       return { a, b, durationDeltaMs: (b.durationMs ?? 0) - (a.durationMs ?? 0), changedFields: [...changedFields] };
     });

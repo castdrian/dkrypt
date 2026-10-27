@@ -17,6 +17,7 @@
 		TESTFLIGHT_ACCESS_MAX_AGE_MS,
 		batchQueueEntryKey,
 		getRecentlyVerifiedTestFlightDevices,
+		isTestFlightAppAvailable,
 		isValidBatchQueueSelector,
 		parseBatchQueueEntries,
 		type BatchQueueEntry,
@@ -40,7 +41,7 @@
 	import { liveState } from "#lib/live.svelte";
 	import { requestNotificationPermission } from "#lib/notifications";
 	import { PermissionFlag } from "#lib/permissions";
-	import { sessionHasPermission } from "#lib/session.svelte";
+	import { sessionCanViewOperationalDashboard, sessionHasPermission } from "#lib/session.svelte";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { showToast } from "#lib/ui.svelte";
 	import { cn } from "#lib/utils";
@@ -74,6 +75,7 @@
 	const pastedInvalid = $derived(pastedInputs.some((row) => row.kind === "invalid"));
 	const pastedQueueable = $derived(pastedInputs.filter((row) => row.kind === "bundle" || row.kind === "appstore"));
 	const canRequestTestFlight = $derived(sessionHasPermission(PermissionFlag.requestTestFlightSubscriptions));
+	const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
 	const parsed = $derived(parsedResult.entries);
 	const activeTemplate = $derived(BATCH_QUEUE_TEMPLATES.find((template) => template.source === source)!);
 	const missingTestFlightSelectors = $derived(source === "testflight" ? parsed.filter((entry) => !entry.selector) : []);
@@ -89,11 +91,12 @@
 				devices: app && !testFlightCatalogState.error
 					? getRecentlyVerifiedTestFlightDevices(app, now)
 					: [],
+				available: Boolean(app && !testFlightCatalogState.error && isTestFlightAppAvailable(app, now)),
 			};
 		});
 	});
-	const unavailableTestFlightApps = $derived(testFlightAppSelections.filter((selection) => selection.devices.length === 0));
-	const availableTestFlightApps = $derived(testFlightAppSelections.filter((selection) => selection.devices.length > 0));
+	const unavailableTestFlightApps = $derived(testFlightAppSelections.filter((selection) => !selection.available));
+	const availableTestFlightApps = $derived(testFlightAppSelections.filter((selection) => selection.available));
 	const queueableTestFlightEntries = $derived(parsed.filter((entry) =>
 		entry.selector
 		&& isValidBatchQueueSelector(entry.selector, "testflight")
@@ -120,6 +123,7 @@
 		let next = selectedDeviceByBundleId;
 		let changed = false;
 		for (const selection of availableTestFlightApps) {
+			if (selection.devices.length === 0) continue;
 			if (selection.devices.some((device) => device.id === next[selection.bundleId])) continue;
 			if (!changed) next = { ...next };
 			next[selection.bundleId] = selection.devices[0]!.id;
@@ -283,7 +287,7 @@
 					if (!app || testFlightCatalogState.error) throw new Error("not available via TestFlight on an enabled device");
 					const deviceOptions = getRecentlyVerifiedTestFlightDevices(app, Date.now());
 					const selectedDeviceId = selectedDeviceByBundleId[bundleId];
-					if (!selectedDeviceId || !deviceOptions.some((device) => device.id === selectedDeviceId)) {
+					if (canViewOperationalDashboard && (!selectedDeviceId || !deviceOptions.some((device) => device.id === selectedDeviceId))) {
 						throw new Error("no recently verified device has access");
 					}
 					if (!selector) throw new Error("add a version_build selector");
@@ -299,7 +303,7 @@
 					trackName = appDisplayName(app.bundleId, app.bundleId);
 					versionLabel = `TestFlight ${selector}`;
 					testflight = { appId: app.appId, build };
-					response = await queueTestFlightDecrypt(bundleId, app.appId, build, false, selectedDeviceId, true);
+					response = await queueTestFlightDecrypt(bundleId, app.appId, build, false, canViewOperationalDashboard ? selectedDeviceId : undefined, true);
 				} else {
 					response = await queueDecrypt(bundleId, selector, undefined, false, undefined, true);
 				}
@@ -411,7 +415,7 @@
 		<div class="mb-2 text-xs text-muted">{activeTemplate.description}</div>
 		{#if source === "testflight"}
 			{#if parsed.length === 0}
-				<div class="mb-2 text-xs text-muted">Enter apps available via TestFlight to check eligible devices.</div>
+				<div class="mb-2 text-xs text-muted">Enter apps available via TestFlight to confirm access.</div>
 			{:else if testFlightCatalogBusy}
 				<div class="mb-2 text-xs text-muted" role="status">Checking recent TestFlight access…</div>
 			{:else if testFlightCatalogState.error}
@@ -427,8 +431,10 @@
 								<div class="truncate text-xs font-medium">{appDisplayName(selection.bundleId)}</div>
 								<div class="truncate font-mono text-[10px] text-muted">{selection.bundleId}</div>
 							</div>
-							{#if selection.devices.length === 0}
+							{#if !selection.available}
 								<span class="shrink-0 text-xs text-warn">Unavailable</span>
+							{:else if !canViewOperationalDashboard || selection.devices.length === 0}
+								<span class="shrink-0 text-xs text-muted">Available via TestFlight</span>
 							{:else if selection.devices.length === 1}
 								<span class="shrink-0 text-xs text-muted">{selection.devices[0]!.name}</span>
 							{:else}

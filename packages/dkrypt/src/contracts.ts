@@ -298,7 +298,7 @@ export const JobSummaryResponse = object({
   source: Type.Union([Type.Literal('manual'), Type.Literal('scheduler')]),
   channel: Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]),
   queuedBy: Type.Optional(Type.String()),
-  priority: Type.Number(),
+  priority: Type.Optional(Type.Number()),
   deviceId: Type.Optional(Identifier),
   preferredDeviceId: Type.Optional(Identifier),
   transport: Type.Optional(deviceTransportSchema),
@@ -323,12 +323,14 @@ export const JobSummaryResponse = object({
   cacheHit: Type.Optional(Type.Boolean()),
   sizeBytes: Type.Optional(Type.Number()),
   sha256: Type.Optional(Type.String()),
+  freeTierResult: Type.Optional(Type.Boolean()),
+  temporaryResultExpiresAt: Type.Optional(Type.Number()),
   createdAt: Type.String(),
   startedAt: Type.Optional(Type.String()),
   finishedAt: Type.Optional(Type.String()),
   queue: Type.Optional(object({
     position: Type.Number(),
-    total: Type.Number(),
+    total: Type.Optional(Type.Number()),
     predictedStartMs: Type.Optional(Type.Number({ minimum: 0 })),
     predictedCompletionMs: Type.Optional(Type.Number({ minimum: 0 })),
   })),
@@ -400,7 +402,7 @@ const BillingResponse = object({
   })),
   legacyBilling: Type.Boolean(),
   entitlement: JsonObject,
-  quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
+  quota: object({ limit: Type.Union([Type.Number(), Type.Null()]), used: Type.Number(), remaining: Type.Union([Type.Number(), Type.Null()]), nextAvailableAt: Type.Optional(Type.Number()), windowMs: Type.Optional(Type.Number()), legacy: Type.Optional(Type.Boolean()), apiRatePerMinute: Type.Optional(Type.Number()) }),
   decryptCredits: object({
     available: Type.Integer({ minimum: 0 }),
     grants: Type.Array(object({ id: Identifier, remaining: Type.Integer({ minimum: 0 }), expiresAt: Type.Optional(Type.Number()), source: Type.String() })),
@@ -509,6 +511,7 @@ export type DashboardJobHistoryPage = Static<typeof dashboardJobHistoryPageSchem
 const AuthMfaResponse = object({ enabled: Type.Boolean(), recoveryCodesRemaining: Type.Integer({ minimum: 0 }) });
 const AuthSessionResponse = object({
   loggedIn: Type.Boolean(),
+  freeTier: Type.Boolean(),
   sub: Type.Optional(Identifier),
   username: Type.Optional(Type.String()),
   displayName: Type.Optional(Type.String()),

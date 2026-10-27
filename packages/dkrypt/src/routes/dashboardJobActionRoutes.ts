@@ -39,6 +39,7 @@ import {
   type JobHistoryEntry,
 } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
+import { canViewJobForUser, canViewOperationalDashboard } from '#dashboardAccess.js';
 
 export interface DashboardJobActionServices {
   getJob: typeof getJob;
@@ -162,6 +163,10 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
+      if (!canViewJobForUser(job, session.sub, session.permissions)) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
       if (!services.cancelJob(request.params.id, session.sub)) {
         reply.code(409);
         return sendJobError(request.id, 409, 'job is not queued or running (already finished, or not found)');
@@ -176,6 +181,10 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
       if (!job) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
+      if (!canViewJobForUser(job, session.sub, session.permissions)) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -196,6 +205,10 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
+      if (!canViewJobForUser(job, session.sub, session.permissions)) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
       if (!resumePausedJob(job.id, session.sub)) {
         reply.code(409);
         return sendJobError(request.id, 409, 'only a paused queued job can be resumed');
@@ -207,8 +220,13 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/prioritize'),
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
+      const session = getFastifySession(request)!;
       const job = services.getJob(request.params.id);
       if (!job) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
+      if (!canViewJobForUser(job, session.sub, session.permissions)) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job not found');
       }
@@ -223,10 +241,11 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       schema: getRouteContract('POST', '/v1/dashboard/jobs/reorder'),
       preHandler: canRequestDecrypt,
     }, (request) => {
+      const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
       const scopedJobs = request.body.ids.every((id) => {
         const job = services.getJob(id);
-        return job && (job.projectId ?? DEFAULT_PROJECT_ID) === projectId;
+        return job && (job.projectId ?? DEFAULT_PROJECT_ID) === projectId && canViewJobForUser(job, session.sub, session.permissions);
       });
       return { ok: scopedJobs && services.reorderQueue(request.body.ids, projectId) };
     });
@@ -242,6 +261,10 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       const session = getFastifySession(request)!;
       const entry = services.getJobHistoryEntryById(request.params.id);
       if (!entry) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job history entry not found');
+      }
+      if (!canViewJobForUser(entry, session.sub, session.permissions)) {
         reply.code(404);
         return sendJobError(request.id, 404, 'job history entry not found');
       }
@@ -338,12 +361,45 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         return sendJobError(request.id, 404, 'job not found');
       }
       const job: Job | JobHistoryEntry = active ?? entry!;
+      const session = getFastifySession(request)!;
+      if (!canViewJobForUser(job, session.sub, session.permissions)) {
+        reply.code(404);
+        return sendJobError(request.id, 404, 'job not found');
+      }
+      const operationalView = canViewOperationalDashboard(session.permissions);
+      const timeline = active?.timeline ?? entry?.timeline ?? [];
       reply.header('Content-Disposition', `attachment; filename="dkrypt-job-${job.id}-diagnostic.json"`);
       return {
         generatedAt: new Date().toISOString(),
         correlationId: job.correlationId ?? job.id,
-        job,
-        timeline: active?.timeline ?? entry?.timeline ?? [],
+        job: operationalView ? job : {
+          id: job.id,
+          correlationId: job.correlationId ?? job.id,
+          bundleId: job.bundleId,
+          externalVersionId: job.externalVersionId,
+          testflight: job.testflight,
+          versionLabel: job.versionLabel,
+          source: job.source,
+          status: job.status,
+          progress: 'progress' in job ? job.progress : undefined,
+          warnings: job.warnings,
+          error: job.error,
+          retryCount: job.retryCount,
+          attempt: job.attempt,
+          cacheHit: job.cacheHit,
+          fileSizeBytes: 'fileSizeBytes' in job ? job.fileSizeBytes : 'sizeBytes' in job ? job.sizeBytes : undefined,
+          createdAt: job.createdAt,
+          startedAt: job.startedAt,
+          finishedAt: job.finishedAt,
+          ipaMetadata: job.ipaMetadata,
+          ipaInfoPlist: job.ipaInfoPlist,
+        },
+        timeline: operationalView ? timeline : timeline.map((event) => ({
+          at: event.at,
+          status: event.status,
+          durationMs: event.durationMs,
+          label: event.status === 'queued' ? 'Queued' : event.status === 'running' ? 'Decrypt in progress' : event.status === 'done' ? 'Finished' : 'Failed',
+        })),
       };
     });
   };

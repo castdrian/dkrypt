@@ -13,17 +13,17 @@ const Identifier = identifierSchema;
 export const dashboardOverviewQuerySchema = Type.Object({}, { additionalProperties: true });
 
 export const dashboardOverviewResponseSchema = Type.Object({
-  settings: dashboardSettingsResponseSchema,
+  settings: Type.Optional(dashboardSettingsResponseSchema),
   devices: Type.Array(dashboardDeviceResponseSchema),
-  statusDevices: Type.Array(Type.Object({
+  statusDevices: Type.Optional(Type.Array(Type.Object({
     id: Identifier,
     name: Type.String(),
     enabled: Type.Boolean(),
     draining: Type.Boolean(),
     isPrimary: Type.Optional(Type.Boolean()),
     reachable: Type.Optional(Type.Boolean()),
-  })),
-  deviceStatus: Type.Object({
+  }))),
+  deviceStatus: Type.Optional(Type.Object({
     configured: Type.Integer({ minimum: 0 }),
     enabled: Type.Integer({ minimum: 0 }),
     online: Type.Integer({ minimum: 0 }),
@@ -32,10 +32,11 @@ export const dashboardOverviewResponseSchema = Type.Object({
     checking: Type.Integer({ minimum: 0 }),
     unavailable: Type.Integer({ minimum: 0 }),
     freshUntil: Type.Optional(Type.Number()),
-  }),
+  })),
   disk: Type.Optional(dashboardDiskUsageSchema),
   isPaidPlan: Type.Boolean(),
-  maintenance: dashboardMaintenanceStatusSchema,
+  serviceStatus: Type.Union([Type.Literal('operational'), Type.Literal('maintenance')]),
+  maintenance: Type.Optional(dashboardMaintenanceStatusSchema),
   activeJobs: Type.Array(Type.Object({
     id: Identifier,
     correlationId: Identifier,
@@ -55,11 +56,11 @@ export const dashboardOverviewResponseSchema = Type.Object({
     }, { additionalProperties: true })),
     queuedBy: Type.Optional(Type.String()),
     queuedByDisplayName: Type.Optional(Type.String()),
-    priority: Type.Number(),
+    priority: Type.Optional(Type.Number()),
     createdAt: Type.Number(),
     queue: Type.Optional(Type.Object({
       position: Type.Number(),
-      total: Type.Number(),
+      total: Type.Optional(Type.Number()),
       predictedStartMs: Type.Optional(Type.Number({ minimum: 0 })),
       predictedCompletionMs: Type.Optional(Type.Number({ minimum: 0 })),
     }, { additionalProperties: true })),

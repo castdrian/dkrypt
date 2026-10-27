@@ -7,6 +7,7 @@ import Fastify from 'fastify';
 import { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import type { Response } from '#http.js';
 import type { ArtifactRecord } from '#artifacts.js';
+import { exportBillingSnapshot, replaceBillingSnapshot, upsertBillingSubscription } from '#billing.js';
 import { PermissionFlag, serializeBits } from '#permissions.js';
 import { dashboardRouter } from '#routes/dashboard.js';
 import { createDashboardArtifactRoutes } from '#routes/dashboardArtifactRoutes.js';
@@ -74,6 +75,7 @@ test('IPA reports and previews stay behind decrypt permission and analyze-only u
 });
 
 test('artifact notes are private to the signed-in user and bounded', async () => {
+  const previousBilling = exportBillingSnapshot();
   const record = artifact({ filePath: '/tmp/private-note-artifact.ipa' });
   const userOne = `artifact-note-one-${Date.now()}`;
   const userTwo = `artifact-note-two-${Date.now()}`;
@@ -81,6 +83,21 @@ test('artifact notes are private to the signed-in user and bounded', async () =>
   const noAccessRole = createRole({ name: `Artifact note denied ${userTwo}`, color: '#3498db', permissions: serializeBits(0n) }, 'root');
   addAllowedUser(userOne, [decryptRole.id], 'root');
   addAllowedUser(userTwo, [decryptRole.id], 'root');
+  replaceBillingSnapshot({ customers: [], subscriptions: [] });
+  for (const userId of [userOne, userTwo]) {
+    upsertBillingSubscription({
+      provider: 'stripe',
+      subscriptionId: `sub_${userId}`,
+      customerId: `customer_${userId}`,
+      userId,
+      status: 'active',
+      planId: 'regular',
+      priceId: 'price_regular',
+      productId: 'product_regular',
+      occurredAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardArtifactRoutes({ artifactFileAvailable: () => true, getArtifactById: () => record }));
 
@@ -106,6 +123,7 @@ test('artifact notes are private to the signed-in user and bounded', async () =>
     expect(deniedByPermission.statusCode).toBe(403);
   } finally {
     await server.close();
+    replaceBillingSnapshot(previousBilling);
   }
 });
 

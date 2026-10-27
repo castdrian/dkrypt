@@ -36,6 +36,7 @@ function parseByteRange(value: string | string[] | undefined, size: number): Byt
 
 export function jobFileAvailable(job: Job | undefined): boolean {
   if (!job || job.status !== 'done') return false;
+  if (job.freeTierResult && (!job.temporaryResultExpiresAt || job.temporaryResultExpiresAt <= Date.now())) return false;
   const artifact = getArtifactForJob(job);
   if (artifact) return artifactFileAvailable(artifact);
   return !!job.filePath && existsSync(job.filePath);
@@ -77,8 +78,8 @@ export function jobSummary(job: Job) {
     progress: job.progress,
     warnings: job.warnings,
     error: job.error,
-    artifactId: job.artifactId,
-    artifactUrl: job.artifactId
+    artifactId: job.freeTierResult ? undefined : job.artifactId,
+    artifactUrl: !job.freeTierResult && job.artifactId
       ? `/v1/artifacts/${encodeURIComponent(job.artifactId)}/file`
       : undefined,
     cacheHit: job.cacheHit,
@@ -87,6 +88,8 @@ export function jobSummary(job: Job) {
     createdAt: new Date(job.createdAt).toISOString(),
     startedAt: job.startedAt ? new Date(job.startedAt).toISOString() : undefined,
     finishedAt: job.finishedAt ? new Date(job.finishedAt).toISOString() : undefined,
+    temporaryResultExpiresAt: job.temporaryResultExpiresAt,
+    freeTierResult: job.freeTierResult,
     queue,
     queueReason: job.queueReason ?? getQueueReason(job),
     statusUrl: `/v1/jobs/${job.id}`,
@@ -159,7 +162,7 @@ export async function streamFilePath(
   });
 }
 
-export async function streamJobFile(job: Job, req: CloseAwareRequest, res: Response): Promise<void> {
+export async function streamJobFile(job: Job, req: CloseAwareRequest, res: Response, touchSharedArtifact = true): Promise<void> {
   const artifact = getArtifactForJob(job);
   const filePath = artifact?.filePath ?? job.filePath;
   if (!jobFileAvailable(job) || !filePath) {
@@ -167,7 +170,7 @@ export async function streamJobFile(job: Job, req: CloseAwareRequest, res: Respo
     return;
   }
 
-  if (artifact) await touchArtifact(artifact);
+  if (artifact && touchSharedArtifact) await touchArtifact(artifact);
 
   await streamFilePath(
     filePath,

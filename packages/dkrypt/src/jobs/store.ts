@@ -12,7 +12,7 @@ import { scopedLogger } from '#logger.js';
 const log = scopedLogger('jobs');
 import { sendMailToUser } from '#mail.js';
 import { sendPushToUser } from '#push.js';
-import { DEFAULT_PROJECT_ID, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, deleteJobHistoryEntry, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { uninstallFromDevice } from '#appStoreInstall.js';
 import { getCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -20,7 +20,7 @@ import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
 import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, type ArtifactRecord } from '#artifacts.js';
-import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
+import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
@@ -151,8 +151,18 @@ function loadDoneJobs(): void {
     const restored = JSON.parse(readFileSync(donePath, 'utf8')) as Job[];
     for (const job of restored) {
       job.filePath = migrateLegacyPath(job.filePath);
+      if (job.freeTierResult && job.temporaryResultExpiresAt === undefined) {
+        job.temporaryResultExpiresAt = (job.finishedAt ?? job.createdAt) + 30 * 60_000;
+      }
+      if (job.freeTierResult && job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) {
+        if (job.filePath && !job.temporaryResultSharedCache && !job.artifactId) void rm(job.filePath, { force: true }).catch(() => {});
+        deletePersistedJob(job.id);
+        deleteJobHistoryEntry(job.id);
+        continue;
+      }
       if (!job.filePath || !existsSync(job.filePath)) continue;
       jobs.set(job.id, { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, waiters: [] });
+      if (job.freeTierResult) recordJobHistory(toHistoryEntry({ ...job, waiters: [] }));
     }
     log.info('restored completed jobs from previous process', { count: jobs.size });
   } catch (err) {
@@ -249,8 +259,18 @@ function loadDatabaseJobs(): boolean {
   if (saved.length === 0) return false;
   for (const job of saved.filter((entry) => entry.status === 'done' || entry.status === 'failed')) {
     job.filePath = migrateLegacyPath(job.filePath);
+      if (job.freeTierResult && job.temporaryResultExpiresAt === undefined) {
+        job.temporaryResultExpiresAt = (job.finishedAt ?? job.createdAt) + 30 * 60_000;
+      }
+    if (job.freeTierResult && job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) {
+      if (job.filePath && !job.temporaryResultSharedCache && !job.artifactId) void rm(job.filePath, { force: true }).catch(() => {});
+      deletePersistedJob(job.id);
+      deleteJobHistoryEntry(job.id);
+      continue;
+    }
     if (job.status === 'done' && job.filePath && !existsSync(job.filePath)) job.filePath = undefined;
     jobs.set(job.id, { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, waiters: [] });
+      if (job.freeTierResult) recordJobHistory(toHistoryEntry({ ...job, waiters: [] }));
   }
   for (const job of saved.filter((entry) => entry.status === 'queued' || entry.status === 'running')) {
     const restoredJob = { ...job, projectId: job.projectId ?? DEFAULT_PROJECT_ID, executionStage: undefined, childProcess: undefined, waiters: [] } as Job;
@@ -457,13 +477,19 @@ function waitForCompletionOrTimeout(completion: Promise<unknown>, timeoutMs: num
   });
 }
 
-function findActiveJobForBundle(lookup: JobBuildLookup): Job | undefined {
+function findActiveJobForBundle(lookup: JobBuildLookup, ownerId?: string): Job | undefined {
   syncPersistedJobsFromRepository(true);
+  if (ownerId) {
+    return [...jobs.values()].find((job) => isMatchingBuild(job, lookup)
+      && (job.status === 'queued' || job.status === 'running')
+      && job.freeTierResult === true
+      && job.billingOwnerId?.toLowerCase() === ownerId.toLowerCase());
+  }
   const persistedId = findPersistedActiveJobId(lookup);
   const persistedJob = persistedId ? jobs.get(persistedId) : undefined;
-  if (persistedJob && isMatchingBuild(persistedJob, lookup) && (persistedJob.status === 'queued' || persistedJob.status === 'running')) return persistedJob;
+  if (persistedJob && !persistedJob.freeTierResult && isMatchingBuild(persistedJob, lookup) && (persistedJob.status === 'queued' || persistedJob.status === 'running')) return persistedJob;
   for (const job of jobs.values()) {
-    if (isMatchingBuild(job, lookup) && (job.status === 'queued' || job.status === 'running')) return job;
+    if (!job.freeTierResult && isMatchingBuild(job, lookup) && (job.status === 'queued' || job.status === 'running')) return job;
   }
   return undefined;
 }
@@ -498,6 +524,8 @@ function createCachedJob(
   apiKeyId: string | undefined,
   projectId: string,
   artifact: ArtifactRecord,
+  billingOwnerId?: string,
+  freeTierResult = false,
   minimumOsVersion?: string,
 ): Job {
   const now = Date.now();
@@ -514,6 +542,7 @@ function createCachedJob(
     minimumOsVersion: minimumOsVersion ?? minimumOsVersionForBuild(testflight?.build),
     source,
     queuedBy,
+    billingOwnerId,
     apiKeyId,
     priority,
     status: 'done',
@@ -523,6 +552,9 @@ function createCachedJob(
       { at: now, label: 'Finished', status: 'done' },
     ],
     artifactId: artifact.id,
+    freeTierResult,
+    temporaryResultExpiresAt: freeTierResult ? now + 30 * 60_000 : undefined,
+    temporaryResultSharedCache: freeTierResult,
     cacheHit: true,
     filePath: artifact.filePath,
     fileSizeBytes: artifact.fileSizeBytes,
@@ -574,6 +606,7 @@ function failExpiredQueuedJob(job: Job, now = Date.now()): void {
   job.error = `job deadline exceeded while waiting in the queue${queueReason ? `: ${queueReason}` : ''}${separateOfflineFailure}`;
   job.failureClass = classifyJobFailure(job.error);
   job.finishedAt = now;
+  if (job.freeTierResult) job.temporaryResultExpiresAt = now + 30 * 60_000;
   appendJobTimelineEvent(job, `Failed: ${job.error}`, 'failed', now);
   incrementMetric('jobs_failed_total', { source: job.source, failureClass: job.failureClass });
   log.warn('queued job expired before it could start', { jobId: job.id, bundleId: job.bundleId });
@@ -691,7 +724,10 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   if (!acceptingJobs) throw new JobsShuttingDownError();
   if (options.billingOwnerId && options.billingOwnerId !== 'root' && !hasPermission(getUserEffectivePermissions(options.billingOwnerId), PermissionFlag.requestDecrypt)) throw new AutomationOwnerUnavailableError();
   const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId };
-  const existing = findActiveJobForBundle(lookup);
+  const entitlement = billingOwnerId ? getBillingEntitlements(billingOwnerId) : undefined;
+  const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root';
+  const effectivePriority = freeTierResult ? -5 : priority;
+  const existing = findActiveJobForBundle(lookup, freeTierResult ? billingOwnerId : undefined);
   if (existing) {
     deferScheduledJobIfUnavailable(source, existing, options.deferWhenNoDispatchableDevice);
     if (source === 'scheduler') {
@@ -704,9 +740,9 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   const artifact = getArtifactByKey(artifactKey);
   if (artifact) {
     linkArtifactToProject(artifact.id, projectId);
-    return createCachedJob(bundleId, source, externalVersionId, testflight, versionLabel, queuedBy, priority, apiKeyId, projectId, artifact, minimumOsVersion);
+    return createCachedJob(bundleId, source, externalVersionId, testflight, versionLabel, queuedBy, effectivePriority, apiKeyId, projectId, artifact, billingOwnerId, freeTierResult, minimumOsVersion);
   }
-  const reusable = findReusableCompletedJob(lookup);
+  const reusable = freeTierResult ? undefined : findReusableCompletedJob(lookup);
   if (reusable) return reusable;
   enforceAccountQuotas(projectId);
 
@@ -727,9 +763,10 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     source,
     queuedBy,
     billingOwnerId,
+    freeTierResult,
     apiKeyId,
     preferredDeviceId,
-    priority,
+    priority: effectivePriority,
     status: 'queued',
     progress: 'queued',
     timeline: [{ at: now, label: 'Queued', status: 'queued' }],
@@ -745,15 +782,18 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   let quotaOwnerId: string | undefined;
   let quotaLimit: number | undefined;
   let previousUsage: number | undefined;
-  if (billingOwnerId) {
-    const entitlement = getBillingEntitlements(billingOwnerId);
-    if (entitlement.planId !== 'viewer' && !entitlement.legacy) {
+  if (billingOwnerId && entitlement) {
+    if (entitlement.freeTier) {
+      quotaOwnerId = billingOwnerId;
+      quotaLimit = entitlement.rollingDecryptLimit;
+      previousUsage = getFreeDecryptQuotaUsage(billingOwnerId).used;
+    } else if (entitlement.planId !== 'viewer' && !entitlement.legacy) {
       quotaOwnerId = billingOwnerId;
       quotaLimit = entitlement.dailyDecryptLimit;
       if (quotaLimit !== undefined) previousUsage = getDecryptQuotaUsage(billingOwnerId, quotaLimit).used;
     }
   }
-  const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit);
+  const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit, freeTierResult);
   if (admittedId !== job.id) {
     syncPersistedJobsFromRepository(true);
     const existing = jobs.get(admittedId);
@@ -763,9 +803,9 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     return existing;
   }
   if (quotaOwnerId && quotaLimit !== undefined && previousUsage !== undefined) {
-    const nextUsage = getDecryptQuotaUsage(quotaOwnerId, quotaLimit).used;
+    const nextUsage = freeTierResult ? getFreeDecryptQuotaUsage(quotaOwnerId).used : getDecryptQuotaUsage(quotaOwnerId, quotaLimit).used;
     for (const threshold of getUserPrefs(quotaOwnerId).decryptUsageAlertThresholds ?? []) {
-      if (previousUsage * 100 < quotaLimit * threshold && nextUsage * 100 >= quotaLimit * threshold) {
+      if (quotaLimit !== undefined && previousUsage * 100 < quotaLimit * threshold && nextUsage * 100 >= quotaLimit * threshold) {
         recordDecryptQuotaThresholdNotice(quotaOwnerId, nextUsage, quotaLimit, threshold);
       }
     }
@@ -775,10 +815,10 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   if (source === 'scheduler') {
     queue.unshift(job.id);
   } else {
-    insertByPriority(job.id, priority);
+    insertByPriority(job.id, effectivePriority);
   }
   scheduleQueuedDeadline(job);
-  log.info('job queued', { jobId: job.id, bundleId, externalVersionId, source, priority });
+  log.info('job queued', { jobId: job.id, bundleId, externalVersionId, source, priority: effectivePriority });
   persistActiveJobs();
   emitJobsChanged();
 
@@ -1013,6 +1053,9 @@ function settle(job: Job): void {
 }
 
 function toHistoryEntry(job: Job) {
+  if (job.freeTierResult && job.temporaryResultExpiresAt === undefined && (job.status === 'done' || job.status === 'failed')) {
+    job.temporaryResultExpiresAt = (job.finishedAt ?? Date.now()) + 30 * 60_000;
+  }
   return {
     id: job.id,
     correlationId: job.correlationId,
@@ -1042,6 +1085,8 @@ function toHistoryEntry(job: Job) {
     ipaMetadata: job.ipaMetadata,
     ipaInfoPlist: job.ipaInfoPlist,
     artifactId: job.artifactId,
+    freeTierResult: job.freeTierResult,
+    temporaryResultExpiresAt: job.temporaryResultExpiresAt,
     sha256: job.sha256,
     timeline: job.timeline,
     attempt: job.attempt,
@@ -1066,6 +1111,7 @@ export function cancelQueuedJob(id: string, cancelledBy: string): boolean {
   job.status = 'failed';
   job.error = `cancelled by ${cancelledBy}`;
   job.finishedAt = Date.now();
+  if (job.freeTierResult) job.temporaryResultExpiresAt = job.finishedAt + 30 * 60_000;
   appendJobTimelineEvent(job, job.error, 'failed', job.finishedAt);
   log.info('job cancelled', { jobId: id, bundleId: job.bundleId, cancelledBy });
 
@@ -1522,6 +1568,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.status = 'done';
     job.shutdownRecoveryPending = undefined;
     job.finishedAt = Date.now();
+    if (job.freeTierResult) job.temporaryResultExpiresAt = job.finishedAt + 30 * 60_000;
     if (!device) {
       incrementMetric('appstore_offline_attempts_total', { outcome: 'success' });
       observeMetric('appstore_offline_attempt_duration_ms', Math.max(0, job.finishedAt - startedAt), { outcome: 'success' });
@@ -1628,6 +1675,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       if (job.cancelledBy) {
         job.status = 'failed';
         job.finishedAt = Date.now();
+        if (job.freeTierResult) job.temporaryResultExpiresAt = job.finishedAt + 30 * 60_000;
         job.error = `cancelled by ${job.cancelledBy}`;
         job.failureClass = classifyJobFailure(job.error);
         appendJobTimelineEvent(job, job.error, 'failed', job.finishedAt);
@@ -1656,6 +1704,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     job.failureClass = classifyJobFailure(message);
     job.status = 'failed';
     job.finishedAt = Date.now();
+    if (job.freeTierResult) job.temporaryResultExpiresAt = job.finishedAt + 30 * 60_000;
     incrementMetric('jobs_failed_total', { source: job.source, failureClass: job.failureClass });
     observeMetric('job_duration_ms', Math.max(0, job.finishedAt - (job.startedAt ?? job.createdAt)), { executionPath: job.executionPath, source: job.source });
     job.error = message;
@@ -1667,7 +1716,9 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
   }
 
   const completedArtifact = job.status === 'done' && job.artifactId ? getArtifactById(job.artifactId) : undefined;
-  const downloadUrl = completedArtifact ? buildDashboardArtifactFileUrl(completedArtifact.id) : undefined;
+  const downloadUrl = job.status === 'done' && job.freeTierResult
+    ? `/v1/dashboard/jobs/${encodeURIComponent(job.id)}/file`
+    : completedArtifact ? buildDashboardArtifactFileUrl(completedArtifact.id) : undefined;
 
   recordJobHistory(toHistoryEntry(job));
   emitJobsChanged();
@@ -1712,7 +1763,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
 
 async function cleanupJob(job: Job): Promise<void> {
   clearQueuedDeadline(job.id);
-  if (job.filePath && !job.artifactId && !getArtifactForJob(job)) {
+  if (job.filePath && !job.temporaryResultSharedCache && !job.artifactId && !getArtifactForJob(job)) {
     await rm(job.filePath, { force: true }).catch((err: unknown) => {
       log.warn('failed to remove job file', { jobId: job.id, error: String(err) });
     });
@@ -1721,6 +1772,11 @@ async function cleanupJob(job: Job): Promise<void> {
   jobs.delete(job.id);
   log.info('job cleaned up', { jobId: job.id, bundleId: job.bundleId });
   persistDoneJobs();
+}
+
+async function expireTemporaryResult(job: Job): Promise<void> {
+  await cleanupJob(job);
+  deleteJobHistoryEntry(job.id);
 }
 
 export async function reclaimJobFile(job: Job): Promise<void> {
@@ -1800,6 +1856,11 @@ export function startJobSweeper(): void {
     for (const job of jobs.values()) {
 
       const finishedAt = job.finishedAt ?? job.createdAt;
+      if (job.freeTierResult && job.temporaryResultExpiresAt !== undefined && now >= job.temporaryResultExpiresAt) {
+        void trackBackgroundWork('free-result-expiry', () => expireTemporaryResult(job))
+          .catch((error: unknown) => log.warn('free result expiry failed', { jobId: job.id, error: String(error) }));
+        continue;
+      }
       if ((job.status === 'done' || job.status === 'failed') && now - finishedAt > retentionMs) {
         void trackBackgroundWork('job-retention-reclaim', () => reclaimAndMaybeUninstall(job))
           .catch((error: unknown) => log.warn('job retention cleanup failed', { jobId: job.id, error: String(error) }));

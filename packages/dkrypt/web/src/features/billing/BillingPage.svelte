@@ -59,8 +59,11 @@
     scheduledChangeAction?: string;
     scheduledChangeAt?: string;
     dailyDecryptLimit?: number;
+    rollingDecryptLimit?: number;
+    rollingDecryptWindowMs?: number;
     apiRatePerMinute?: number;
     legacy?: boolean;
+    freeTier?: boolean;
   }
 
   interface BillingData {
@@ -84,7 +87,7 @@
     };
     legacyBilling: boolean;
     entitlement: Entitlement;
-    quota: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number };
+    quota: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number; windowMs?: number };
     decryptCredits: { available: number; grants: Array<{ id: string; remaining: number; expiresAt?: number; source: string }>; purchaseEnabled: boolean; purchaseQuantity: number; purchasePriceMinor?: number; purchaseCurrency?: string };
     apiRateUsage?: { limit: number; used: number; remaining: number; resetAt: number };
     usageForecast: { sampleDays: number; jobsInSample: number; averagePerDay: number; daysUntilAllowanceUsed: number | null };
@@ -591,7 +594,7 @@
   }
 
   function planLabel(planId: PlanId): string {
-    return planId === 'viewer' ? 'Viewer' : planId.replace('_', ' ');
+    return planId === 'viewer' ? 'Free' : planId.replace('_', ' ');
   }
 
   function statusVariant(status?: string): BadgeVariant {
@@ -672,12 +675,12 @@
     {#if billing?.paymentMethod && billing.paymentMethod.state !== 'ready'}<div class="mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-sm" role="status"><div class="font-medium">{billing.paymentMethod.state === 'unavailable' ? 'Payment method status unavailable' : billing.paymentMethod.state === 'expiring' ? 'Card may expire before your next renewal' : billing.paymentMethod.state === 'expired' ? 'Your payment card has expired' : 'Your subscription needs a valid payment method'}</div><p class="mt-1 text-muted">{#if billing.paymentMethod.brand && billing.paymentMethod.last4}{billing.paymentMethod.brand} ending in {billing.paymentMethod.last4}{#if billing.paymentMethod.expMonth && billing.paymentMethod.expYear} · expires {String(billing.paymentMethod.expMonth).padStart(2, '0')}/{billing.paymentMethod.expYear}{/if}. {/if}{#if billing.paymentMethod.state === 'unavailable'}We couldn’t check your saved payment method just now.{:else}Update your payment details in Stripe to avoid a failed renewal.{/if}</p>{#if billing.paymentMethod.state !== 'unavailable'}<Button class="mt-2" size="sm" variant="secondary" loading={openingPortal} onclick={() => void manageSubscription()}>Update payment method</Button>{/if}</div>{/if}
     {#if accessRefreshMessage}<div class={accessRefreshState === 'unavailable' ? 'mt-3 rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs text-muted' : 'mt-3 rounded-lg border border-ok/30 bg-ok/5 p-3 text-xs text-muted'} role="status">{accessRefreshMessage}</div>{/if}
     {#if accessCheckLines}<div class="mt-4 grid gap-2 rounded-xl border border-border bg-bg/40 p-3 sm:grid-cols-3" aria-live="polite">{#each accessCheckLines as line (line.label)}<div class="flex items-start gap-2 text-xs"><span class={line.ok ? 'text-ok' : 'text-warn'}>{#if line.ok}<Check class="size-3.5" />{:else}<CircleX class="size-3.5" />{/if}</span><span><span class="font-medium">{line.label}</span><span class="mt-0.5 block text-muted">{line.detail}</span></span></div>{/each}</div>{/if}
-    {#if billing && billing.entitlement.planId !== 'viewer'}
+    {#if billing && (billing.entitlement.planId !== 'viewer' || billing.entitlement.freeTier)}
       <div class="mt-4 rounded-xl border border-border bg-bg/50 px-3 py-3 text-sm">
         <div class="flex flex-wrap items-center gap-2 font-medium">Your decrypt allowance {#if billing.entitlement.legacy}<Badge variant="secondary">Grandfathered</Badge>{/if}</div>
-        <div class="mt-1 text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.remaining ?? 0} of ${billing.quota.limit} new decrypts available in the rolling 24-hour window`}. IPA Library downloads do not use this allowance.</div>
+        <div class="mt-1 text-muted">{billing.quota.limit === null ? 'Unlimited new decrypts' : `${billing.quota.remaining ?? 0} of ${billing.quota.limit} new decrypts available in the rolling ${billing.quota.windowMs === 30 * 24 * 60 * 60 * 1000 ? '30-day' : '24-hour'} window`}. IPA Library downloads do not use this allowance.</div>
         {#if billing.quota.nextAvailableAt && billing.quota.remaining === 0}<div class="mt-1 text-xs text-muted">Next slot opens {formatDate(new Date(billing.quota.nextAvailableAt).toISOString())}.</div>{/if}
-        {#if billing.quota.limit !== null}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
+        {#if billing.quota.limit !== null && !billing.entitlement.freeTier}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-2 rounded-lg border border-border/70 px-3 py-2"><div class="flex items-center justify-between gap-3 text-xs"><span>API request limit</span><span class="tabular-nums">{billing.apiRateUsage?.used ?? 0} of {billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute} per minute</span></div><div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-muted"><div class="h-full rounded-full bg-accent transition-[width]" style={`width: ${Math.min(100, ((billing.apiRateUsage?.used ?? 0) / (billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute)) * 100)}%`}></div></div><div class="mt-1 text-[11px] text-muted">Shared across all your API keys. Resets continuously over a rolling minute.</div></div>{/if}
         {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
         {#if billing.entitlement.dailyDecryptLimit !== undefined || billing.decryptCredits.available > 0}

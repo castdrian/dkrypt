@@ -65,7 +65,7 @@ import {
   verifyNowPaymentsEvent,
 } from '#cryptoBilling.js';
 import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpayments.js';
-import { findStripeDecryptCreditOwner, getDecryptCreditBalance, getDecryptQuotaJournal, getDecryptQuotaUsage, grantDecryptCredits, revokeStripeDecryptCredits } from '#jobs/repository.js';
+import { findStripeDecryptCreditOwner, getDecryptCreditBalance, getDecryptQuotaJournal, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, grantDecryptCredits, revokeStripeDecryptCredits } from '#jobs/repository.js';
 import { getAccountApiRateUsage } from '#auth.js';
 import { getAuthProfile, resolveAuthUserId } from '#identity.js';
 import { log } from '#logger.js';
@@ -734,11 +734,14 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const profile = getAuthProfile(userId);
     const entitlement = getBillingEntitlements(userId);
     const paymentMethod = await getPaymentMethodStatus(userId, entitlement.provider === 'stripe' ? entitlement.subscriptionId : undefined);
-    const quota = getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
+    const quota = entitlement.freeTier
+      ? getFreeDecryptQuotaUsage(userId)
+      : getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
+    quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
     const credits = getDecryptCreditBalance(userId);
-    const decryptCreditPriceOffer = entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
+    const decryptCreditPriceOffer = entitlement.freeTier || entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
     const sampleDays = 7;
-    const recentQuotaAdmissions = getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
+    const recentQuotaAdmissions = entitlement.freeTier ? [] : getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
     const averagePerDay = recentQuotaAdmissions.length / sampleDays;
     const crypto = await getNowPaymentsProviderStatus();
     const minimumResults = crypto.enabled && crypto.ready

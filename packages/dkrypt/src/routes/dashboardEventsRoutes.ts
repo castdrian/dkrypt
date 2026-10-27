@@ -11,6 +11,7 @@ import { buildDashboardOverview } from '#dashboardOverview.js';
 import { getUserEffectivePermissions, type JobHistoryEntry } from '#store/state.js';
 import { fastifyRequireSession, getFastifySession } from '#session.js';
 import { sendHttpErrorEnvelope } from '#util/httpResponse.js';
+import { canViewJobForUser, canViewOperationalDashboard } from '#dashboardAccess.js';
 
 export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.addHook('preHandler', fastifyRequireSession);
@@ -66,7 +67,11 @@ export const dashboardEventsRoutes: FastifyPluginAsyncTypebox = async (server) =
 
     const onOverviewChanged = () => sendEvent('overview', buildDashboardOverview(session.permissions, sub));
     const onLogAdded = (entry: LogEntry) => sendEvent('log', entry);
-    const onHistoryAdded = (entry: JobHistoryEntry) => sendEvent('history', dashboardHistoryEntry(entry));
+    const memberView = !canViewOperationalDashboard(session.permissions);
+    const onHistoryAdded = (entry: JobHistoryEntry) => {
+      if (!canViewJobForUser(entry, sub, session.permissions)) return;
+      sendEvent('history', dashboardHistoryEntry(entry, memberView));
+    };
     const onPresenceChanged = (usernames: string[]) => sendEvent('presence', presentOnlineUsers(usernames));
     const onBillingChanged = () => sendEvent('billing', {});
 

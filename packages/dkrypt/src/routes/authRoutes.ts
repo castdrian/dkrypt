@@ -15,6 +15,7 @@ import {
 } from '#authContracts.js';
 import { linkOauthAccount, resolveOauthAccount } from '#account.js';
 import { getRouteContract } from '#contracts.js';
+import { getBillingEntitlements } from '#billing.js';
 import { config, isDiscordBotEnabled, isDiscordOauthEnabled, isGithubOauthEnabled } from '#config.js';
 import { fetchMemberRoleIds } from '#discord.js';
 import {
@@ -135,6 +136,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
     const profile = session ? getAuthProfile(session.sub) : undefined;
     return reply.send({
       loggedIn: !!session,
+      freeTier: session ? getBillingEntitlements(session.sub).freeTier === true : false,
       sub: session?.sub,
       username: profile?.username,
       displayName: profile?.displayName,

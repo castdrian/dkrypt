@@ -286,8 +286,8 @@ describe('Stripe billing webhooks', () => {
     expect(cancelledSubscription).toBe(1);
     expect(getBillingSubscriptionById(subscriptionId)).toMatchObject({ status: 'revoked', failureReason: 'payment refunded' });
     expect(getBillingSubscriptionById(subscriptionId)?.nextBilledAt).toBeUndefined();
-    expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'viewer', decrypt: false, api: false });
-    expect(hasPermission(getUserEffectivePermissions(userId), PermissionFlag.requestDecrypt)).toBeFalse();
+    expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'viewer', decrypt: true, api: false, freeTier: true });
+    expect(hasPermission(getUserEffectivePermissions(userId), PermissionFlag.requestDecrypt)).toBeTrue();
     expect(hasPermission(getUserEffectivePermissions(userId), PermissionFlag.createApiKeys)).toBeFalse();
 
     const laterActiveEvent = subscriptionEvent(userId, customerId, subscriptionId);
@@ -297,7 +297,7 @@ describe('Stripe billing webhooks', () => {
 
     expect(getBillingSubscriptionById(subscriptionId)).toMatchObject({ status: 'revoked', failureReason: 'payment refunded' });
     expect(getBillingSubscriptionById(subscriptionId)?.nextBilledAt).toBeUndefined();
-    expect(getBillingEntitlements(userId).planId).toBe('viewer');
+    expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'viewer', decrypt: true, api: false, freeTier: true });
   });
 
   test('keeps an unresolved full refund retryable while its customer has paid access', async () => {

@@ -243,7 +243,7 @@ test('app search caches discovery data and metadata requests hydrate app details
     });
 
     expect(search.statusCode).toBe(200);
-    expect(JSON.parse(search.body)).toMatchObject({ results: [{ minimumOsVersion: '17.0', testflight: { appId: 12345, devices: [{ id: 'ipad', verifiedAt: 123 }] } }] });
+    expect(JSON.parse(search.body)).toMatchObject({ results: [{ minimumOsVersion: '17.0', testflight: { appId: 12345, available: true, devices: [] } }] });
     expect(metadata.statusCode).toBe(200);
     expect(JSON.parse(metadata.body)).toMatchObject({ entries: [
       { bundleId: 'com.example.app', displayName: 'Cached metadata', releaseNotes: 'What is new' },

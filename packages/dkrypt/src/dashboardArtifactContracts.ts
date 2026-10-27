@@ -21,24 +21,24 @@ export const dashboardArtifactResponseSchema = Type.Object({
   versionLabel: Type.Optional(Type.String()),
   buildNumber: Type.Optional(Type.String()),
   fileSizeBytes: Type.Number({ minimum: 0 }),
-  sha256: Type.String({ minLength: 64, maxLength: 64 }),
+  sha256: Type.Optional(Type.String({ minLength: 64, maxLength: 64 })),
   createdAt: Type.String({ format: 'date-time' }),
-  lastAccessedAt: Type.String({ format: 'date-time' }),
-  accessCount: Type.Integer({ minimum: 0 }),
+  lastAccessedAt: Type.Optional(Type.String({ format: 'date-time' })),
+  accessCount: Type.Optional(Type.Integer({ minimum: 0 })),
   pinnedAt: Type.Optional(Type.String({ format: 'date-time' })),
   archivedAt: Type.Optional(Type.String({ format: 'date-time' })),
   pinnedStateChangedAt: Type.Optional(Type.Number()),
   archivedStateChangedAt: Type.Optional(Type.Number()),
   sourceJobId: Type.Optional(identifierSchema),
   warnings: Type.Optional(Type.Array(Type.String())),
-  fileUrl: Type.String(),
+  fileUrl: Type.Optional(Type.String()),
 }, additionalProperties);
 
 export const dashboardArtifactListResponseSchema = Type.Object({
   artifacts: Type.Array(dashboardArtifactResponseSchema),
   total: Type.Integer({ minimum: 0 }),
-  totalBytes: Type.Number({ minimum: 0 }),
-  maxBytes: Type.Number({ minimum: 0 }),
+  totalBytes: Type.Optional(Type.Number({ minimum: 0 })),
+  maxBytes: Type.Optional(Type.Number({ minimum: 0 })),
   nextCursor: Type.Optional(Type.String()),
 }, additionalProperties);
 

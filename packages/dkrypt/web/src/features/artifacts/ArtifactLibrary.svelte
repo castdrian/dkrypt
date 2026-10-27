@@ -14,7 +14,7 @@
   import { fmtBytesGB, fmtSize } from '#lib/format.svelte';
   import { createSavedViews } from '#lib/savedViews.svelte';
   import { PermissionFlag } from '#lib/permissions';
-  import { sessionHasPermission } from '#lib/session.svelte';
+import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#lib/session.svelte';
   import { isServerQueryCancelled, mergeServerPage, serverQueryStatus } from '#lib/serverStateCache.svelte';
   import VirtualizedList from '#components/VirtualizedList.svelte';
   import { artifactDetailJumpState, artifactLibraryPreferencesState, homeViewModesState } from '#lib/ui.svelte';
@@ -50,7 +50,9 @@
   const savedViews = createSavedViews<ArtifactFilterPreset>('artifactFilterPresets');
 
   const canDecrypt = $derived(sessionHasPermission(PermissionFlag.requestDecrypt));
-  const canManageStorage = $derived(sessionHasPermission(PermissionFlag.manageAutomation));
+  const canViewStorageMetrics = $derived(sessionHasAnyPermission([PermissionFlag.viewAutomation, PermissionFlag.manageAutomation, PermissionFlag.viewDevices, PermissionFlag.manageDevices]));
+  const canUseBinaryActions = $derived(!sessionState.freeTier);
+  const canManageStorage = $derived(!sessionState.freeTier && sessionHasPermission(PermissionFlag.manageAutomation));
   let artifacts = $state<ArtifactRecord[]>([]);
   let total = $state(0);
   let totalBytes = $state(0);
@@ -519,12 +521,14 @@
               <div class="text-sm font-semibold tracking-tight">IPA Library</div>
               <Badge variant="secondary">{total}</Badge>
             </div>
-            <div class="text-muted mt-0.5 text-xs">{fmtBytesGB(totalBytes)} / {fmtBytesGB(maxBytes)} used</div>
+            {#if canViewStorageMetrics}<div class="text-muted mt-0.5 text-xs">{fmtBytesGB(totalBytes)} / {fmtBytesGB(maxBytes)} used</div>{/if}
           </div>
           <div class="flex shrink-0 items-center gap-1">
-            <input bind:this={analysisFileInput} class="sr-only" type="file" accept=".ipa,application/octet-stream" aria-label="Choose IPA to analyze" onchange={analyzeSelectedFile} />
-            <Button variant="secondary" size="icon" class="h-8 w-8 sm:h-8 sm:w-auto sm:px-3" aria-label="Analyze IPA" title="Analyze IPA" disabled={analysisUploadLoading} onclick={() => analysisFileInput?.click()}><ScanSearch class="h-3.5 w-3.5" /><span class="sr-only sm:not-sr-only">Analyze IPA</span></Button>
-            {#if artifacts.length > 0}
+            {#if canUseBinaryActions}
+              <input bind:this={analysisFileInput} class="sr-only" type="file" accept=".ipa,application/octet-stream" aria-label="Choose IPA to analyze" onchange={analyzeSelectedFile} />
+              <Button variant="secondary" size="icon" class="h-8 w-8 sm:h-8 sm:w-auto sm:px-3" aria-label="Analyze IPA" title="Analyze IPA" disabled={analysisUploadLoading} onclick={() => analysisFileInput?.click()}><ScanSearch class="h-3.5 w-3.5" /><span class="sr-only sm:not-sr-only">Analyze IPA</span></Button>
+            {/if}
+            {#if canUseBinaryActions && artifacts.length > 0}
               <Button variant={selectingArtifacts ? 'secondary' : 'ghost'} size="icon" class="h-8 w-8 sm:h-8 sm:w-auto sm:px-3" aria-label={selectingArtifacts ? 'Done selecting' : 'Select items'} title={selectingArtifacts ? 'Done selecting' : 'Select items'} aria-pressed={selectingArtifacts} onclick={toggleArtifactSelectionMode}><ListChecks class="h-3.5 w-3.5" /><span class="sr-only sm:not-sr-only">{selectingArtifacts ? 'Done selecting' : 'Select items'}</span></Button>
             {/if}
             <div class="inline-flex rounded-md border border-border/70 p-0.5" role="group" aria-label={viewMessage('viewMode.label')}>
@@ -562,6 +566,9 @@
       </div>
 
       <div class="p-4 sm:p-5">
+        {#if sessionState.freeTier}
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/25 bg-accent/5 px-3 py-2.5 text-sm"><span>The Free Library is read-only. Upgrade to download saved IPAs.</span><a href="/?tab=billing" class="font-medium text-accent hover:underline">Compare plans</a></div>
+        {/if}
         <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Saved library filters">
           {#each savedViews.presets as preset (preset.name)}
             <span class="border-border text-muted hover:text-foreground hover:border-accent inline-flex items-center gap-1 rounded-full border pr-1 pl-2.5 py-1 text-[12px]">
@@ -596,7 +603,7 @@
         {#if archiveFilter === 'archived'}
           <div class="mb-3 text-muted text-xs" role="note">Archived items still use library storage and may be removed automatically unless pinned.</div>
         {/if}
-        {#if selectingArtifacts && canDecrypt && artifacts.length > 0}
+        {#if canUseBinaryActions && selectingArtifacts && canDecrypt && artifacts.length > 0}
           <div class="one-thumb-artifact-actions mb-3 flex flex-wrap items-center gap-2" data-selected={selectAllMatching || selectedArtifactIds.size > 0 ? 'true' : 'false'} role="group" aria-label="Bulk artifact actions">
             {#if canManageStorage}
               <Button variant="ghost" size="sm" onclick={toggleAllLoadedArtifacts}>
@@ -657,14 +664,14 @@
                   </summary>
                   <div class={homeViewModesState.value.artifacts === 'list' ? 'divide-y divide-border' : 'space-y-2 p-2'}>
                     {#each group.artifacts as artifact (artifact.id)}
-                      <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
+                      <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} allowBinaryActions={canUseBinaryActions} canSelect={canUseBinaryActions && selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
                     {/each}
                   </div>
                 </details>
               {:else}
                 {@const artifact = group.artifacts[0]}
                 {#if artifact}
-                  <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} canSelect={selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
+                  <ArtifactLibraryRow artifact={artifact} columns={artifactLibraryPreferencesState.columns} listView={homeViewModesState.value.artifacts === 'list'} {canManageStorage} allowBinaryActions={canUseBinaryActions} canSelect={canUseBinaryActions && selectingArtifacts} selected={selectAllMatching || selectedArtifactIds.has(artifact.id)} selectionDisabled={bulkUpdating || selectAllMatching || (selectedArtifactIds.size >= 100 && !selectedArtifactIds.has(artifact.id))} updating={updatingArtifactIds.includes(artifact.id)} onSelection={(selected) => toggleArtifactSelection(artifact.id, selected)} onPin={() => void toggleArtifactPin(artifact)} onArchive={() => void toggleArtifactArchived(artifact)} onDetails={() => (artifactDetailJumpState.id = artifact.id)} />
                 {/if}
               {/if}
             {/snippet}

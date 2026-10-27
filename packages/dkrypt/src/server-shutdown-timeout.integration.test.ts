@@ -36,7 +36,7 @@ const [{ buildServer, registerShutdownHandlers }, { createDevice }, { setCachedD
 function createCookie(): string {
   let cookie = '';
   const response = { setHeader: (_name: string, value: string) => { cookie = value; } };
-  setSessionCookie(response as never, { sub: 'root', permissions: PermissionFlag.requestDecrypt });
+  setSessionCookie(response as never, { sub: 'root', permissions: PermissionFlag.requestDecrypt | PermissionFlag.viewDevices });
   return cookie.split(';', 1)[0]!;
 }
 

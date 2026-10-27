@@ -89,7 +89,7 @@ test('attempt comparison rejects records without stable build identity', async (
     const response = await server.inject({
       method: 'GET',
       url: `/v1/dashboard/jobs/attempt-diff?a=${first.id}&b=${second.id}&projectId=default`,
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
     });
     expect(response.statusCode).toBe(400);
   } finally {
@@ -105,7 +105,7 @@ test('job history export combines shared account history and omits internal scop
   const server = build({ getAllJobHistory: () => entries });
 
   try {
-    const headers = { cookie: sessionCookie() };
+    const headers = { cookie: sessionCookie(PermissionFlag.viewDevices) };
     const json = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?projectId=default', headers });
     const csv = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?format=csv&projectId=default', headers });
     const unsupportedFormat = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/export?format=other&projectId=default', headers });
@@ -159,19 +159,19 @@ test('bulk preview deduplicates ids in shared account history', async () => {
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/bulk-preview',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
       payload: { ids: [entry.id, 17, entry.id, ...Array.from({ length: 100 }, (_, index) => `missing-${index}`)], projectId: 'default' },
     });
     const nonArrayIds = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/bulk-preview',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
       payload: { ids: 'ignored', projectId: 'default' },
     });
     const bodyless = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/bulk-preview',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
     });
 
     expect(denied.statusCode).toBe(403);
@@ -223,7 +223,7 @@ test('job diff validates bundle ownership and returns sorted plist changes', asy
   const server = build({ getJobHistoryEntryById: (id) => id === first.id ? first : id === second.id ? second : undefined });
 
   try {
-    const headers = { cookie: sessionCookie() };
+    const headers = { cookie: sessionCookie(PermissionFlag.viewDevices) };
     const response = await server.inject({
       method: 'GET',
       url: `/v1/dashboard/jobs/diff?bundleId=${first.bundleId}&a=${first.id}&b=${second.id}&projectId=default`,

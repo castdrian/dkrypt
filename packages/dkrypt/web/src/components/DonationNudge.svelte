@@ -13,7 +13,7 @@
   const hasSuccessfulDecrypt = $derived(myDecryptsState.items.some((d) => d.status === 'done'));
 
   const isPaidPlan = $derived(liveState.overview?.isPaidPlan ?? false);
-  const show = $derived(!dismissed && !isRoot && !isPaidPlan && hasSuccessfulDecrypt);
+  const show = $derived(!dismissed && !isRoot && !sessionState.freeTier && !isPaidPlan && hasSuccessfulDecrypt);
 
   function dismiss(): void {
     dismissed = true;

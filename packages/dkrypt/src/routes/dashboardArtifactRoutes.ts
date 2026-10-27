@@ -23,6 +23,8 @@ import { compareIpaStructures, readIpaStructure } from '#ipaStructure.js';
 import { analyzeIpaInIsolatedProcess, IpaInspectionCapacityError, optimizeIpaForDeviceInIsolatedProcess, readIpaAssetPreviewInIsolatedProcess } from '#jobs/ipaInspection.js';
 import { formatArtifactFilename } from '#artifactFilename.js';
 import { getUserPrefs, updateUserPrefs } from '#store/state.js';
+import { getBillingEntitlements } from '#billing.js';
+import { canViewOperationalDashboard } from '#dashboardAccess.js';
 
 const IPA_UPLOAD_CONTENT_TYPE = 'application/vnd.dkrypt.ipa';
 const MAX_ANALYSIS_UPLOAD_BYTES = 256 * 1024 * 1024;
@@ -98,6 +100,13 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
   return async (server) => {
     server.addHook('preHandler', fastifyRequireSession);
     server.addHook('preHandler', recordFastifyDashboardActivity);
+    server.addHook('preHandler', (request, reply, done) => {
+      const userId = getFastifySession(request)?.sub;
+      if (!userId || !getBillingEntitlements(userId).freeTier) return done();
+      const metadataRoute = request.method === 'GET' && ['/v1/dashboard/artifacts', '/v1/dashboard/artifacts/:id'].includes(request.routeOptions.url ?? '');
+      if (metadataRoute) return done();
+      reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'Free accounts can browse library metadata but cannot access shared IPA files or management tools'));
+    });
     if (!server.hasContentTypeParser(IPA_UPLOAD_CONTENT_TYPE)) {
       server.addContentTypeParser(IPA_UPLOAD_CONTENT_TYPE, (_request, payload, done) => done(null, payload));
     }
@@ -106,6 +115,8 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: getRouteContract('GET', '/v1/dashboard/artifacts'),
       preHandler: canRequestDecrypt,
     }, (request) => {
+      const freeTier = getBillingEntitlements(getFastifySession(request)!.sub).freeTier;
+      const operationalView = canViewOperationalDashboard(getFastifySession(request)!.permissions);
       const projectId = DEFAULT_PROJECT_ID;
       const cursor = request.query.cursor;
       const result = services.listArtifacts({
@@ -121,15 +132,18 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
         ...result,
         artifacts: result.artifacts.map(({ projectIds: _projectIds, ...artifact }) => ({
           ...artifact,
+          ...(operationalView ? {} : { sha256: undefined, sourceJobId: undefined, lastAccessedAt: undefined, accessCount: undefined, pinnedAt: undefined, archivedAt: undefined, pinnedStateChangedAt: undefined, archivedStateChangedAt: undefined }),
           filePath: undefined,
-          fileUrl: `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
+          fileUrl: freeTier ? undefined : `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
           createdAt: new Date(artifact.createdAt).toISOString(),
-          lastAccessedAt: new Date(artifact.lastAccessedAt).toISOString(),
+          lastAccessedAt: operationalView ? new Date(artifact.lastAccessedAt).toISOString() : undefined,
           pinnedAt: artifact.pinnedAt === undefined ? undefined : new Date(artifact.pinnedAt).toISOString(),
           archivedAt: artifact.archivedAt === undefined ? undefined : new Date(artifact.archivedAt).toISOString(),
           pinnedStateChangedAt: artifact.pinnedStateChangedAt,
           archivedStateChangedAt: artifact.archivedStateChangedAt,
         })),
+        totalBytes: operationalView ? result.totalBytes : undefined,
+        maxBytes: operationalView ? result.maxBytes : undefined,
         nextCursor: result.nextCursor,
       };
     });
@@ -138,6 +152,8 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: { hide: true, params: dashboardArtifactParamsSchema, querystring: dashboardArtifactDetailQuerySchema, response: { 200: dashboardArtifactResponseSchema, 404: ErrorEnvelope } },
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
+      const freeTier = getBillingEntitlements(getFastifySession(request)!.sub).freeTier;
+      const operationalView = canViewOperationalDashboard(getFastifySession(request)!.permissions);
       const artifact = services.getArtifactById(request.params.id);
       const projectId = DEFAULT_PROJECT_ID;
       if (!artifact || !services.artifactFileAvailable(artifact) || !artifact.projectIds.includes(projectId)) {
@@ -154,17 +170,17 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
         versionLabel: artifact.versionLabel,
         buildNumber: artifact.buildNumber,
         fileSizeBytes: artifact.fileSizeBytes,
-        sha256: artifact.sha256,
+        sha256: operationalView ? artifact.sha256 : undefined,
         createdAt: new Date(artifact.createdAt).toISOString(),
-        lastAccessedAt: new Date(artifact.lastAccessedAt).toISOString(),
-        accessCount: artifact.accessCount,
-        pinnedAt: artifact.pinnedAt === undefined ? undefined : new Date(artifact.pinnedAt).toISOString(),
-        archivedAt: artifact.archivedAt === undefined ? undefined : new Date(artifact.archivedAt).toISOString(),
-        pinnedStateChangedAt: artifact.pinnedStateChangedAt,
-        archivedStateChangedAt: artifact.archivedStateChangedAt,
-        sourceJobId: artifact.sourceJobId,
-        warnings: artifact.warnings,
-        fileUrl: `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
+        lastAccessedAt: operationalView ? new Date(artifact.lastAccessedAt).toISOString() : undefined,
+        accessCount: operationalView ? artifact.accessCount : undefined,
+        pinnedAt: operationalView && artifact.pinnedAt !== undefined ? new Date(artifact.pinnedAt).toISOString() : undefined,
+        archivedAt: operationalView && artifact.archivedAt !== undefined ? new Date(artifact.archivedAt).toISOString() : undefined,
+        pinnedStateChangedAt: operationalView ? artifact.pinnedStateChangedAt : undefined,
+        archivedStateChangedAt: operationalView ? artifact.archivedStateChangedAt : undefined,
+        sourceJobId: operationalView && !freeTier ? artifact.sourceJobId : undefined,
+        warnings: operationalView && !freeTier ? artifact.warnings : undefined,
+        fileUrl: freeTier ? undefined : `/v1/dashboard/artifacts/${encodeURIComponent(artifact.id)}/file`,
       };
     });
 

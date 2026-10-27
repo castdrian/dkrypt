@@ -5,12 +5,19 @@ import type { Database, SQLQueryBindings } from 'bun:sqlite';
 
 type StoredJob = Omit<Job, 'childProcess' | 'waiters'>;
 const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FREE_QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface DecryptQuotaUsage {
   limit: number | null;
   used: number;
   remaining: number | null;
   nextAvailableAt?: number;
+  windowMs?: number;
+}
+
+export interface FreeDecryptQuotaCompletion {
+  ownerId: string;
+  completedAt: number;
 }
 
 export interface DecryptCreditBalance {
@@ -25,6 +32,16 @@ export class DailyDecryptLimitError extends Error {
   constructor(readonly nextAvailableAt: number) {
     super('daily decrypt allowance exhausted');
     this.name = 'DailyDecryptLimitError';
+  }
+}
+
+export class FreeDecryptLimitError extends Error {
+  readonly statusCode = 429;
+  readonly code = 'free_decrypt_limit';
+
+  constructor(readonly nextAvailableAt: number) {
+    super('free decrypt allowance exhausted');
+    this.name = 'FreeDecryptLimitError';
   }
 }
 const exactBuildFilter = `
@@ -101,9 +118,13 @@ export interface JobRepository {
   markWorkerOffline(workerId: string): void;
   countRunningJobs(filter: { queuedBy?: string; apiKeyId?: string }): number;
   quotaUsage(ownerId: string, limit: number | undefined, now?: number): DecryptQuotaUsage;
+  freeQuotaUsage(ownerId: string, now?: number): DecryptQuotaUsage;
+  freeQuotaCompletions(now?: number): FreeDecryptQuotaCompletion[];
+  replaceFreeQuotaCompletions(completions: readonly FreeDecryptQuotaCompletion[]): void;
+  deleteFreeQuotaOwner(ownerId: string): void;
   quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
   quotaReceipt(jobId: string, ownerId: string): { admittedAt: number; state: 'reserved' | 'consumed' } | undefined;
-  admit(job: Job, ownerId?: string, limit?: number): string;
+  admit(job: Job, ownerId?: string, limit?: number, freeTier?: boolean): string;
   settleQuota(jobId: string, success: boolean): void;
   reconcileQuota(): void;
   mergeQuotaOwner(targetUserId: string, sourceUserId: string): void;
@@ -242,22 +263,72 @@ function quotaUsage(database: Database, ownerId: string, limit: number | undefin
   };
 }
 
-function admitJob(database: Database, job: Job, ownerId?: string, limit?: number): string {
+function freeQuotaUsage(database: Database, ownerId: string, now: number): DecryptQuotaUsage {
+  const normalizedOwnerId = ownerId.trim().toLowerCase();
+  const cutoff = now - FREE_QUOTA_WINDOW_MS;
+  database.query('DELETE FROM free_decrypt_quota WHERE completed_at <= ?').run(cutoff);
+  const rows = database.query(`
+    SELECT COALESCE(completed_at, reserved_at) AS window_start
+    FROM free_decrypt_quota
+    WHERE owner_id = ? AND (completed_at > ? OR job_id IS NOT NULL)
+    ORDER BY COALESCE(completed_at, reserved_at) ASC, id ASC;
+  `).all(normalizedOwnerId, cutoff) as Array<{ window_start: number }>;
+  const used = rows.length;
+  const oldestBlockingRecord = used >= 3 ? rows[used - 3] : undefined;
+  return {
+    limit: 3,
+    used,
+    remaining: Math.max(0, 3 - used),
+    nextAvailableAt: oldestBlockingRecord ? oldestBlockingRecord.window_start + FREE_QUOTA_WINDOW_MS : undefined,
+  };
+}
+
+function freeQuotaCompletions(database: Database, now: number): FreeDecryptQuotaCompletion[] {
+  const cutoff = now - FREE_QUOTA_WINDOW_MS;
+  database.query('DELETE FROM free_decrypt_quota WHERE completed_at <= ?').run(cutoff);
+  return (database.query(`
+    SELECT owner_id, completed_at
+    FROM free_decrypt_quota
+    WHERE job_id IS NULL AND completed_at > ?
+    ORDER BY owner_id, completed_at, id;
+  `).all(cutoff) as Array<{ owner_id: string; completed_at: number }>).map((row) => ({
+    ownerId: row.owner_id,
+    completedAt: row.completed_at,
+  }));
+}
+
+function replaceFreeQuotaCompletions(database: Database, completions: readonly FreeDecryptQuotaCompletion[]): void {
+  database.query('DELETE FROM free_decrypt_quota').run();
+  const insert = database.query('INSERT INTO free_decrypt_quota (owner_id, job_id, reserved_at, completed_at) VALUES (?, NULL, NULL, ?)');
+  for (const completion of completions) {
+    insert.run(completion.ownerId.trim().toLowerCase(), completion.completedAt);
+  }
+}
+
+function admitJob(database: Database, job: Job, ownerId?: string, limit?: number, freeTier = false): string {
   const normalizedOwnerId = ownerId?.trim().toLowerCase();
   database.exec('BEGIN IMMEDIATE;');
   try {
     const existing = database.query(`
       SELECT id FROM jobs
       WHERE ${exactBuildFilter} AND status IN ('queued', 'running')
+        AND (
+          (? = 1 AND json_extract(payload, '$.freeTierResult') = 1 AND lower(json_extract(payload, '$.billingOwnerId')) = ?)
+          OR (? = 0 AND COALESCE(json_extract(payload, '$.freeTierResult'), 0) != 1)
+        )
       ORDER BY updated_at DESC LIMIT 1;
-    `).get(job.projectId ?? 'default', job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null) as { id: string } | null;
+    `).get(job.projectId ?? 'default', job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, Number(freeTier), normalizedOwnerId ?? '', Number(freeTier)) as { id: string } | null;
     if (existing) {
       database.exec('COMMIT;');
       return existing.id;
     }
+    if (normalizedOwnerId && freeTier) {
+      const usage = freeQuotaUsage(database, normalizedOwnerId, job.createdAt);
+      if (usage.used >= 3) throw new FreeDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + FREE_QUOTA_WINDOW_MS);
+    }
     if (normalizedOwnerId) {
-      const usage = quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
-      if (limit !== undefined && usage.used >= limit) {
+      const usage = freeTier ? undefined : quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
+      if (!freeTier && limit !== undefined && usage!.used >= limit) {
         const credit = database.query(`
           SELECT id, payload FROM decrypt_credit_records
           WHERE json_extract(payload, '$.type') = 'grant'
@@ -266,7 +337,7 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
             AND (json_type(payload, '$.expiresAt') IS NULL OR json_extract(payload, '$.expiresAt') > ?)
           ORDER BY updated_at ASC, id ASC LIMIT 1;
         `).get(normalizedOwnerId, job.createdAt) as { id: string; payload: string } | null;
-        if (!credit) throw new DailyDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
+        if (!credit) throw new DailyDecryptLimitError(usage!.nextAvailableAt ?? job.createdAt + QUOTA_WINDOW_MS);
         const grant = JSON.parse(credit.payload) as { remaining: number };
         const updatedGrant = { ...JSON.parse(credit.payload), remaining: grant.remaining - 1 };
         database.query('UPDATE decrypt_credit_records SET payload = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(updatedGrant), job.createdAt, credit.id);
@@ -282,7 +353,8 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(job.id, JSON.stringify(serializableJob(job)), job.createdAt, job.status, job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, job.projectId ?? 'default', job.source, job.priority, job.createdAt, null, null, job.attempt ?? null, job.deadlineAt ?? null, null, job.correlationId ?? null, null, null);
     database.query('INSERT INTO job_timelines (id, payload, updated_at) VALUES (?, ?, ?)').run(job.id, JSON.stringify({ jobId: job.id, events: job.timeline ?? [] }), job.createdAt);
-    if (normalizedOwnerId) database.query('INSERT INTO decrypt_quota_ledger (job_id, owner_id, admitted_at, state) VALUES (?, ?, ?, ?)').run(job.id, normalizedOwnerId, job.createdAt, 'reserved');
+    if (normalizedOwnerId && freeTier) database.query('INSERT INTO free_decrypt_quota (owner_id, job_id, reserved_at, completed_at) VALUES (?, ?, ?, NULL)').run(normalizedOwnerId, job.id, job.createdAt);
+    else if (normalizedOwnerId) database.query('INSERT INTO decrypt_quota_ledger (job_id, owner_id, admitted_at, state) VALUES (?, ?, ?, ?)').run(job.id, normalizedOwnerId, job.createdAt, 'reserved');
     database.exec('COMMIT;');
     return job.id;
   } catch (error) {
@@ -313,6 +385,13 @@ function reconcileQuota(database: Database): void {
       database.query('DELETE FROM decrypt_credit_records WHERE id = ?').run(reservation.id);
     }
     database.exec("DELETE FROM decrypt_quota_ledger WHERE state = 'reserved' AND job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
+    database.query(`
+      UPDATE free_decrypt_quota
+      SET job_id = NULL, reserved_at = NULL,
+          completed_at = COALESCE((SELECT finished_at FROM jobs WHERE jobs.id = free_decrypt_quota.job_id), ?)
+      WHERE job_id IN (SELECT id FROM jobs WHERE status = 'done');
+    `).run(Date.now());
+    database.exec("DELETE FROM free_decrypt_quota WHERE job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
     database.exec('COMMIT;');
   } catch (error) {
     database.exec('ROLLBACK;');
@@ -628,6 +707,12 @@ export function createJobRepository(database: Database): JobRepository {
       return 0;
     },
     quotaUsage: (ownerId, limit, now = Date.now()) => quotaUsage(database, ownerId, limit, now),
+    freeQuotaUsage: (ownerId, now = Date.now()) => freeQuotaUsage(database, ownerId, now),
+    freeQuotaCompletions: (now = Date.now()) => freeQuotaCompletions(database, now),
+    replaceFreeQuotaCompletions: (completions) => replaceFreeQuotaCompletions(database, completions),
+    deleteFreeQuotaOwner(ownerId) {
+      database.query('DELETE FROM free_decrypt_quota WHERE owner_id = ?').run(ownerId.trim().toLowerCase());
+    },
     quotaJournal(ownerId, limit = 10_000) {
       const rows = database.query(`
         SELECT ledger.job_id, ledger.owner_id, ledger.admitted_at, ledger.state,
@@ -648,8 +733,8 @@ export function createJobRepository(database: Database): JobRepository {
       const row = database.query('SELECT admitted_at, state FROM decrypt_quota_ledger WHERE job_id = ? AND owner_id = ?').get(jobId, ownerId.trim().toLowerCase()) as { admitted_at: number; state: 'reserved' | 'consumed' } | null;
       return row ? { admittedAt: row.admitted_at, state: row.state } : undefined;
     },
-    admit(job, ownerId, limit) {
-      const admittedId = admitJob(database, job, ownerId, limit);
+    admit(job, ownerId, limit, freeTier) {
+      const admittedId = admitJob(database, job, ownerId, limit, freeTier);
       if (admittedId === job.id) knownPayloads.set(job.id, JSON.stringify(serializableJob(job)));
       return admittedId;
     },
@@ -658,9 +743,11 @@ export function createJobRepository(database: Database): JobRepository {
       try {
         const usageRow = database.query("SELECT id, payload FROM decrypt_credit_records WHERE json_extract(payload, '$.type') = 'usage' AND json_extract(payload, '$.jobId') = ? AND json_extract(payload, '$.state') = 'reserved'").get(jobId) as { id: string; payload: string } | null;
         if (success) {
+          database.query('UPDATE free_decrypt_quota SET job_id = NULL, reserved_at = NULL, completed_at = ? WHERE job_id = ?').run(Date.now(), jobId);
           database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
           if (usageRow) database.query("UPDATE decrypt_credit_records SET payload = json_set(payload, '$.state', 'consumed'), updated_at = ? WHERE id = ?").run(Date.now(), usageRow.id);
         } else {
+          database.query('DELETE FROM free_decrypt_quota WHERE job_id = ?').run(jobId);
           database.query("DELETE FROM decrypt_quota_ledger WHERE job_id = ? AND state = 'reserved'").run(jobId);
           if (usageRow) {
             const usage = JSON.parse(usageRow.payload) as { grantId: string };
@@ -681,7 +768,12 @@ export function createJobRepository(database: Database): JobRepository {
       }
     },
     reconcileQuota: () => reconcileQuota(database),
-    mergeQuotaOwner: (targetUserId, sourceUserId) => { database.query('UPDATE decrypt_quota_ledger SET owner_id = ? WHERE owner_id = ?').run(targetUserId.trim().toLowerCase(), sourceUserId.trim().toLowerCase()); },
+    mergeQuotaOwner: (targetUserId, sourceUserId) => {
+      const target = targetUserId.trim().toLowerCase();
+      const source = sourceUserId.trim().toLowerCase();
+      database.query('UPDATE decrypt_quota_ledger SET owner_id = ? WHERE owner_id = ?').run(target, source);
+      database.query('UPDATE free_decrypt_quota SET owner_id = ? WHERE owner_id = ?').run(target, source);
+    },
     quotaSnapshot: () => (database.query('SELECT job_id, owner_id, admitted_at, state FROM decrypt_quota_ledger').all() as Array<{ job_id: string; owner_id: string; admitted_at: number; state: 'reserved' | 'consumed' }>).map((row) => ({ jobId: row.job_id, ownerId: row.owner_id, admittedAt: row.admitted_at, state: row.state })),
     creditBalance(ownerId, now = Date.now()) {
       const normalizedOwnerId = ownerId.trim().toLowerCase();
@@ -841,6 +933,22 @@ export function getDecryptQuotaUsage(ownerId: string, limit: number | undefined,
   return repository.quotaUsage(ownerId, limit, now);
 }
 
+export function getFreeDecryptQuotaUsage(ownerId: string, now = Date.now()): DecryptQuotaUsage {
+  return repository.freeQuotaUsage(ownerId, now);
+}
+
+export function exportFreeDecryptQuotaCompletions(now = Date.now()): FreeDecryptQuotaCompletion[] {
+  return repository.freeQuotaCompletions(now);
+}
+
+export function replaceFreeDecryptQuotaCompletionsInDatabase(database: Database, completions: readonly FreeDecryptQuotaCompletion[]): void {
+  replaceFreeQuotaCompletions(database, completions);
+}
+
+export function deleteFreeDecryptQuotaOwner(ownerId: string): void {
+  repository.deleteFreeQuotaOwner(ownerId);
+}
+
 export function getDecryptQuotaJournal(ownerId: string, limit = 10_000): ReturnType<JobRepository['quotaJournal']> {
   return repository.quotaJournal(ownerId, limit);
 }
@@ -849,8 +957,8 @@ export function getDecryptQuotaReceipt(jobId: string, ownerId: string): ReturnTy
   return repository.quotaReceipt(jobId, ownerId);
 }
 
-export function admitPersistedJob(job: Job, ownerId?: string, limit?: number): string {
-  return repository.admit(job, ownerId, limit);
+export function admitPersistedJob(job: Job, ownerId?: string, limit?: number, freeTier = false): string {
+  return repository.admit(job, ownerId, limit, freeTier);
 }
 
 export function settleDecryptQuota(jobId: string, success: boolean): void {

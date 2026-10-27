@@ -1114,6 +1114,7 @@ test('defers a scheduler request for an existing job blocked by its owner concur
     queuedBy: 'scheduler-concurrency-owner',
     preferredDeviceId: secondaryDevice,
   });
+  queued.deadlineAt = Date.now() + 60_000;
 
   try {
     expect(running.status).toBe('running');
@@ -1122,6 +1123,8 @@ test('defers a scheduler request for an existing job blocked by its owner concur
     let deferredError: unknown;
     try {
       enqueueDecryptJob(bundleId, 'scheduler', {
+        queuedBy: 'scheduler-concurrency-owner',
+        billingOwnerId: 'scheduler-concurrency-owner',
         preferredDeviceId: secondaryDevice,
         deferWhenNoDispatchableDevice: true,
       });

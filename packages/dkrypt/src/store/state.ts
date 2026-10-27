@@ -25,7 +25,7 @@ import {
 } from '#identity.js';
 import { log } from '#logger.js';
 import type { JobExecutionPath, JobTimelineEvent, TestFlightJobSource } from '#jobs/types.js';
-import { exportDecryptQuotaLedger } from '#jobs/repository.js';
+import { deleteFreeDecryptQuotaOwner, exportDecryptQuotaLedger, exportFreeDecryptQuotaCompletions, replaceFreeDecryptQuotaCompletionsInDatabase, type FreeDecryptQuotaCompletion } from '#jobs/repository.js';
 import { createAccountRepository, isAllowedUserRecord, isRoleRecord, isUserMfaRecord, validateAccountCollections, type AccountCollections } from '#store/accountRepository.js';
 import { createBillingRepository } from '#store/billingRepository.js';
 import { createApiKeyRepository, isApiKeyRecordShape } from '#store/apiKeyRepository.js';
@@ -126,12 +126,18 @@ function seedDefaultRole(now: number): Role {
     id: DEFAULT_ROLE_ID,
     name: '@everyone',
     color: DEFAULT_ROLE_COLOR,
-    permissions: serializeBits(PermissionFlag.viewLogs),
+    permissions: serializeBits(0n),
     position: 0,
     isDefault: true,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function normalizeDefaultRolePermissions(roles: Role[]): Role[] {
+  return roles.map((role) => role.isDefault
+    ? { ...role, permissions: serializeBits(parseBits(role.permissions) & ~PermissionFlag.viewLogs) }
+    : role);
 }
 
 export function effectiveBitsForRoleIds(roleIds: string[], roles: Role[]): bigint {
@@ -421,6 +427,8 @@ export interface JobHistoryEntry {
   attempt?: number;
   retryCount?: number;
   cacheHit?: boolean;
+  freeTierResult?: boolean;
+  temporaryResultExpiresAt?: number;
   deadlineAt?: number;
   deadlineExceeded?: boolean;
   failureClass?: JobFailureClass;
@@ -1442,6 +1450,7 @@ function asStateRecord(value: unknown): Record<string, unknown> {
 
 function normalizeLoadedState(migrated: PersistedState): PersistedState {
   if (!Array.isArray(migrated.allowedUsers) || !Array.isArray(migrated.roles)) throw new Error('persistent account or role data is malformed');
+  migrated.roles = normalizeDefaultRolePermissions(migrated.roles);
   validateAccountCollections({ users: migrated.allowedUsers, roles: migrated.roles });
   migrated.allowedUsers = migrated.allowedUsers.map((user) => ({ ...user, username: user.username.toLowerCase() }));
   migrated.devices = migrated.devices.map(normalizeLoadedDevice);
@@ -2435,6 +2444,7 @@ export function deleteUserPersonalData(username: string): boolean {
   const existed = state.allowedUsers.some((user) => user.username === lower);
   if (!existed || lower === 'root') return false;
   state.allowedUsers = state.allowedUsers.filter((user) => user.username !== lower);
+  deleteFreeDecryptQuotaOwner(lower);
   revokeUserSessions(lower);
   state.passkeys = state.passkeys.filter((credential) => credential.userId !== lower);
   state.apiKeys = state.apiKeys.filter((key) => key.ownerId !== lower);
@@ -3240,6 +3250,14 @@ export function recordJobHistory(entry: JobHistoryEntry): void {
   emitHistoryAdded(scopedEntry);
 }
 
+export function deleteJobHistoryEntry(id: string): boolean {
+  const before = state.jobHistory.length;
+  state.jobHistory = state.jobHistory.filter((entry) => entry.id !== id);
+  const deleted = jobHistoryRepository.delete(id);
+  if (before !== state.jobHistory.length || deleted) persistNow();
+  return deleted || before !== state.jobHistory.length;
+}
+
 export function getJobHistoryPage(
   offset: number,
   limit: number,
@@ -4023,7 +4041,7 @@ export function markNotificationsRead(userId: string, ids?: string[]): number {
   return changed;
 }
 
-const BACKUP_VERSION = 15;
+const BACKUP_VERSION = 16;
 
 type BackupDeviceRecord = Omit<DeviceRecord, 'transport' | 'host' | 'udid'>
   & { transport: DeviceTransport }
@@ -4059,6 +4077,7 @@ export interface BackupPayload {
   billing: BillingSnapshot;
   identities: IdentitySnapshot;
   decryptQuotaLedger: ReturnType<typeof exportDecryptQuotaLedger>;
+  freeDecryptQuotaCompletions: FreeDecryptQuotaCompletion[];
   decryptCreditRecords: Array<Record<string, unknown>>;
   mcpRecords: Array<Record<string, unknown>>;
 }
@@ -4114,6 +4133,7 @@ export function exportBackup(): BackupPayload {
     billing: exportBillingSnapshot(),
     identities: exportIdentitySnapshot(),
     decryptQuotaLedger: exportDecryptQuotaLedger(),
+    freeDecryptQuotaCompletions: exportFreeDecryptQuotaCompletions().filter((entry) => state.allowedUsers.some((user) => user.username === entry.ownerId)),
     decryptCreditRecords: stateDatabase.readCollection('decrypt_credit_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type))),
     mcpRecords: stateDatabase.readCollection('mcp_records').filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && ['client', 'access_token', 'refresh_token', 'autopilot_policy', 'autopilot_use'].includes(String((entry as Record<string, unknown>).type))),
   };
@@ -4517,6 +4537,7 @@ interface ValidatedBackupPayload {
   billing: BillingSnapshot;
   identities: IdentitySnapshot;
   decryptQuotaLedger: ReturnType<typeof exportDecryptQuotaLedger>;
+  freeDecryptQuotaCompletions: FreeDecryptQuotaCompletion[];
   decryptCreditRecords: Array<Record<string, unknown>>;
   mcpRecords: Array<Record<string, unknown>>;
 }
@@ -4534,7 +4555,7 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'not a valid backup file' };
   const b = raw as Record<string, unknown>;
 
-  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== 12 && b.backupVersion !== 13 && b.backupVersion !== 14 && b.backupVersion !== BACKUP_VERSION) {
+  if (b.backupVersion !== 3 && b.backupVersion !== 4 && b.backupVersion !== 5 && b.backupVersion !== 6 && b.backupVersion !== 7 && b.backupVersion !== 8 && b.backupVersion !== 9 && b.backupVersion !== 10 && b.backupVersion !== 11 && b.backupVersion !== 12 && b.backupVersion !== 13 && b.backupVersion !== 14 && b.backupVersion !== 15 && b.backupVersion !== BACKUP_VERSION) {
     return { ok: false, error: `unsupported backup version (expected 3 through ${BACKUP_VERSION})` };
   }
   if (b.backupVersion >= 12 && (typeof b.apiKeyRequestHistory !== 'object' || b.apiKeyRequestHistory === null || Array.isArray(b.apiKeyRequestHistory) || Object.values(b.apiKeyRequestHistory).some((entries) => !Array.isArray(entries) || !entries.every((entry) => typeof entry === 'object' && entry !== null && Number.isFinite(entry.at) && typeof entry.method === 'string' && typeof entry.route === 'string' && Number.isFinite(entry.status))))) {
@@ -4542,6 +4563,9 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   }
   if (b.backupVersion >= 12 && (!Array.isArray(b.decryptQuotaLedger) || !b.decryptQuotaLedger.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.jobId === 'string' && typeof entry.ownerId === 'string' && Number.isFinite(entry.admittedAt) && ['reserved', 'consumed'].includes(entry.state)))) {
     return { ok: false, error: 'decrypt quota ledger is missing or malformed' };
+  }
+  if (b.backupVersion >= 16 && (!Array.isArray(b.freeDecryptQuotaCompletions) || !b.freeDecryptQuotaCompletions.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.ownerId === 'string' && entry.ownerId.trim().length > 0 && Number.isSafeInteger(entry.completedAt)))) {
+    return { ok: false, error: 'Free decrypt quota completions are missing or malformed' };
   }
   if (b.backupVersion >= 13 && (!Array.isArray(b.decryptCreditRecords) || !b.decryptCreditRecords.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.id === 'string' && ['grant', 'usage', 'outage'].includes(entry.type)))) {
     return { ok: false, error: 'decrypt credit records are missing or malformed' };
@@ -4555,6 +4579,9 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
   }
   if (new Set((b.allowedUsers as AllowedUser[]).map((user) => user.username.toLowerCase())).size !== b.allowedUsers.length) {
     return { ok: false, error: 'allowedUsers contains duplicate usernames' };
+  }
+  if (b.backupVersion >= 16 && (b.freeDecryptQuotaCompletions as FreeDecryptQuotaCompletion[]).some((entry) => !(b.allowedUsers as AllowedUser[]).some((user) => user.username.toLowerCase() === entry.ownerId.trim().toLowerCase()))) {
+    return { ok: false, error: 'Free decrypt quota completions reference an unknown account' };
   }
   if (!Array.isArray(b.roles) || !b.roles.every(isRoleRecord)) {
     return { ok: false, error: 'roles is missing or malformed' };
@@ -4670,6 +4697,7 @@ function validateBackupPayload(raw: unknown): { ok: true; payload: ValidatedBack
         : { customers: [], subscriptions: [], cryptoCheckouts: [], cryptoCharges: [], processedEvents: [] },
       identities: isIdentitySnapshot(b.identities) ? b.identities : { profiles: [] },
       decryptQuotaLedger: Array.isArray(b.decryptQuotaLedger) ? b.decryptQuotaLedger as ReturnType<typeof exportDecryptQuotaLedger> : [],
+      freeDecryptQuotaCompletions: Array.isArray(b.freeDecryptQuotaCompletions) ? b.freeDecryptQuotaCompletions as FreeDecryptQuotaCompletion[] : [],
       decryptCreditRecords: Array.isArray(b.decryptCreditRecords) ? b.decryptCreditRecords as Array<Record<string, unknown>> : [],
       mcpRecords: Array.isArray(b.mcpRecords) ? b.mcpRecords as Array<Record<string, unknown>> : [],
     },
@@ -4736,7 +4764,7 @@ export interface BackupRestoreDrill {
 function prepareBackupRestore(payload: ValidatedBackupPayload): Pick<PersistedState, 'allowedUsers' | 'roles' | 'projects' | 'apiKeys' | 'settings' | 'watches' | 'devices' | 'jobHistory' | 'auditLog' | 'schedulerRunHistory' | 'userPrefs' | 'apiKeyUsage' | 'rootSessionVersion' | 'apiKeyBundleUsage' | 'apiKeyRequestHistory' | 'deviceActivity' | 'testFlightSubscriptions' | 'rootMfa' | 'passkeys'> {
   return {
     allowedUsers: payload.allowedUsers.map((user) => ({ ...user, username: user.username.toLowerCase() })),
-    roles: payload.roles.map((role) => ({ ...role, permissions: serializeBits(consolidatePermissionBits(upgradePermissionBits(parseBits(role.permissions)))) })),
+    roles: normalizeDefaultRolePermissions(payload.roles.map((role) => ({ ...role, permissions: serializeBits(consolidatePermissionBits(upgradePermissionBits(parseBits(role.permissions)))) }))),
     projects: [createDefaultProject()],
     apiKeys: payload.apiKeys.map((key) => {
       const { projectIds: _projectIds, ...portable } = key as ApiKeyRecord & { projectIds?: string[] };
@@ -4877,7 +4905,9 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
   try {
     let database = openStateDatabase(options);
     try {
-      database.writeState(restoredState, undefined, [...backupDatabaseCollections(payload, { users: restored.allowedUsers, roles: restored.roles }), ...additionalCollections]);
+      database.writeState(restoredState, undefined, [...backupDatabaseCollections(payload, { users: restored.allowedUsers, roles: restored.roles }), ...additionalCollections], (connection) => {
+        replaceFreeDecryptQuotaCompletionsInDatabase(connection, payload.freeDecryptQuotaCompletions);
+      });
       database.integrityStatus();
     } finally {
       database.close();
@@ -4918,6 +4948,9 @@ function temporaryDatabaseRestoreCheck(payload: ValidatedBackupPayload, restored
         const expected = expectedQuotaByJobId.get(row.job_id);
         return !expected || row.owner_id !== expected.ownerId || row.admitted_at !== expected.admittedAt || row.state !== expected.state;
       })) return { label: 'Temporary SQLite restore', ok: false, detail: 'Decrypt quota ledger did not survive a database reopen' };
+      const freeQuotaRows = database.db.query('SELECT owner_id, completed_at FROM free_decrypt_quota ORDER BY owner_id, completed_at, id').all() as Array<{ owner_id: string; completed_at: number }>;
+      const expectedFreeQuota = payload.freeDecryptQuotaCompletions.map((entry) => ({ owner_id: entry.ownerId.trim().toLowerCase(), completed_at: entry.completedAt }));
+      if (JSON.stringify(freeQuotaRows) !== JSON.stringify(expectedFreeQuota)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Free decrypt quota completions did not survive a database reopen' };
       const expectedCreditRecords = payload.decryptCreditRecords.filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
       const actualCreditRecords = readStateCollection(database.db, 'decrypt_credit_records').filter((entry) => typeof entry === 'object' && entry !== null && ['grant', 'usage', 'outage'].includes(String((entry as Record<string, unknown>).type)));
       if (!sameCollectionPayloads(expectedCreditRecords, actualCreditRecords)) return { label: 'Temporary SQLite restore', ok: false, detail: 'Decrypt credit and service outage records did not survive a database reopen' };
@@ -5018,7 +5051,9 @@ export function importBackup(raw: unknown, actor: string): ImportBackupResult {
   try {
     replaceBillingSnapshot(b.billing, { persist: false });
     replaceIdentitySnapshot(b.identities, { persist: false });
-    stateDatabase.writeState(restoredState, undefined, restoreCollections);
+    stateDatabase.writeState(restoredState, undefined, restoreCollections, (database) => {
+      replaceFreeDecryptQuotaCompletionsInDatabase(database, b.freeDecryptQuotaCompletions);
+    });
   } catch (error) {
     replaceBillingSnapshot(previousBilling, { persist: false });
     replaceIdentitySnapshot(previousIdentities, { persist: false });

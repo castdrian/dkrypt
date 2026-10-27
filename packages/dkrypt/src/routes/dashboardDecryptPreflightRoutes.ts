@@ -6,7 +6,7 @@ import { getDeviceHealth, getDeviceInstallBlocker, getDeviceReadiness } from '#d
 import { getRouteContract } from '#contracts.js';
 import { getActiveJobs } from '#jobs/store.js';
 import { getBillingEntitlements } from '#billing.js';
-import { getDecryptQuotaUsage } from '#jobs/repository.js';
+import { getDecryptQuotaUsage, getFreeDecryptQuotaUsage } from '#jobs/repository.js';
 import { PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import {
@@ -19,6 +19,7 @@ import { getVerifiedTestFlightCatalog, TestFlightCatalogUnavailableError } from 
 import { recentlyVerifiedTestFlightDevices } from '#testflightPolicy.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { resolveWithin } from '#util/resolveWithin.js';
+import { canViewOperationalDashboard } from '#dashboardAccess.js';
 
 export interface DashboardDecryptPreflightServices {
   getActiveJobs: typeof getActiveJobs;
@@ -62,13 +63,14 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
       const entitlement = getBillingEntitlements(session.sub);
+      const operationalView = canViewOperationalDashboard(session.permissions);
       const projectId = DEFAULT_PROJECT_ID;
 
       const bundleId = request.body.bundleId.trim();
       const testflight = request.body.testflight === true;
       const versionLabel = request.body.versionLabel?.trim().slice(0, 64) || undefined;
       const installSizeBytes = request.body.installSizeBytes;
-      const requestedDeviceId = request.body.deviceId?.trim() ?? '';
+      const requestedDeviceId = operationalView ? request.body.deviceId?.trim() ?? '' : '';
       const requestedDevice = requestedDeviceId ? services.getDevice(requestedDeviceId) : undefined;
       if (requestedDeviceId && (!requestedDevice || !requestedDevice.enabled || requestedDevice.draining)) {
         return sendPreflightError(request.id, reply, 400, 'deviceId must refer to an enabled device accepting jobs');
@@ -160,16 +162,20 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
         }
       }));
 
+      const quota = entitlement.freeTier
+        ? getFreeDecryptQuotaUsage(session.sub)
+        : getDecryptQuotaUsage(session.sub, entitlement.dailyDecryptLimit);
+      quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
       return {
         bundleId,
         versionLabel,
         testflight,
         installSizeBytes,
-        estimatedDurationMs: services.getAverageJobDurationMs(bundleId, projectId),
-        queueLength: services.getActiveJobs().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId).length,
+        estimatedDurationMs: operationalView ? services.getAverageJobDurationMs(bundleId, projectId) : undefined,
+        queueLength: operationalView ? services.getActiveJobs().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId).length : undefined,
         canQueue: checks.some((check) => check.ready),
-        quota: { ...getDecryptQuotaUsage(session.sub, entitlement.dailyDecryptLimit), legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
-        devices: checks,
+        quota: { ...quota, freeTier: entitlement.freeTier ?? false, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
+        devices: operationalView ? checks : [],
       };
     });
   };

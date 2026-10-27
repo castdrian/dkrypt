@@ -13,7 +13,7 @@ import { getRouteContract } from '#contracts.js';
 import { scopedLogger } from '#logger.js';
 import { PermissionFlag } from '#permissions.js';
 import { lookupAppMetadata, lookupAppMetadataByTrackId, searchApps, type ItunesAppMetadata, type ItunesSearchResult } from '#appStoreMetadata.js';
-import { fastifyRequirePermission, fastifyRequireSession } from '#session.js';
+import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import {
   getAppCatalogEntries,
   getAppCatalogStats,
@@ -23,9 +23,10 @@ import {
 import { decorateSearchResults, type TestFlightCatalogApp } from '#testflightSubscriptions.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { listAppVersions } from '#versions.js';
+import { canViewOperationalDashboard } from '#dashboardAccess.js';
 
 type SearchResult = ItunesSearchResult & {
-  testflight?: Pick<TestFlightCatalogApp, 'appId' | 'devices' | 'lastVerifiedAt'>;
+  testflight?: Pick<TestFlightCatalogApp, 'appId' | 'devices' | 'available' | 'lastVerifiedAt'>;
 };
 
 interface DashboardAppServices {
@@ -107,6 +108,12 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
 
       try {
         const results = await services.decorateSearchResults(await services.searchApps(term));
+        const session = getFastifySession(request)!;
+        const visibleResults = canViewOperationalDashboard(session.permissions)
+          ? results
+          : results.map((result) => result.testflight
+            ? { ...result, testflight: { ...result.testflight, devices: [], available: true } }
+            : result);
         services.upsertAppCatalogEntries(results.map((result) => ({
           bundleId: result.bundleId,
           displayName: result.trackName,
@@ -116,7 +123,7 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
           sellerName: result.sellerName,
           category: result.category,
         })));
-        return { results };
+        return { results: visibleResults };
       } catch (error) {
         log.warn('dashboard app search failed', {
           requestId: request.id,

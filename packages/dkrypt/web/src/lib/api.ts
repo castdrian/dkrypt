@@ -156,6 +156,8 @@ export interface JobSummary {
   cacheHit?: boolean;
   sizeBytes?: number;
   sha256?: string;
+  freeTierResult?: boolean;
+  temporaryResultExpiresAt?: number;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -327,12 +329,13 @@ export interface DiskUsage {
 }
 
 export interface OverviewPayload {
-  settings: DashboardSettings;
+  settings?: DashboardSettings;
   devices: DeviceRecord[];
   statusDevices?: Array<{ id: string; name: string; enabled: boolean; draining?: boolean; isPrimary?: boolean; reachable?: boolean }>;
   deviceStatus?: { configured: number; enabled: number; online: number; ready: number; attention: number; checking: number; unavailable: number; freshUntil?: number };
   disk?: DiskUsage;
   isPaidPlan?: boolean;
+  serviceStatus?: 'operational' | 'maintenance';
   maintenance?: MaintenanceStatus;
   activeJobs: ActiveJob[];
 }
@@ -378,6 +381,8 @@ export interface JobHistoryEntry {
   ipaInfoPlist?: Record<string, unknown>;
   downloadUrl?: string;
   fileAvailable: boolean;
+  freeTierResult?: boolean;
+  temporaryResultExpiresAt?: number;
   attempt?: number;
   retryCount?: number;
   cacheHit?: boolean;
@@ -400,15 +405,15 @@ export interface ArtifactRecord {
   versionLabel?: string;
   buildNumber?: string;
   fileSizeBytes: number;
-  sha256: string;
+  sha256?: string;
   createdAt: string;
-  lastAccessedAt: string;
+  lastAccessedAt?: string;
   pinnedAt?: string;
   archivedAt?: string;
   pinnedStateChangedAt?: number;
   archivedStateChangedAt?: number;
-  accessCount: number;
-  fileUrl: string;
+  accessCount?: number;
+  fileUrl?: string;
   sourceJobId?: string;
   warnings?: string[];
 }
@@ -648,9 +653,9 @@ export interface DecryptPreflight {
   testflight: boolean;
   installSizeBytes?: number;
   estimatedDurationMs?: number;
-  queueLength: number;
+  queueLength?: number;
   canQueue: boolean;
-  quota?: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number; legacy?: boolean; apiRatePerMinute?: number };
+  quota?: { limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number; windowMs?: number; freeTier?: boolean; legacy?: boolean; apiRatePerMinute?: number };
   devices: DecryptPreflightDevice[];
 }
 
@@ -857,6 +862,7 @@ export interface TestFlightCatalogApp {
   sellerName?: string;
   category?: string;
   devices: Array<{ id: string; name: string; verifiedAt?: number }>;
+  available?: boolean;
   lastVerifiedAt: number;
   deviceSource: true;
 }

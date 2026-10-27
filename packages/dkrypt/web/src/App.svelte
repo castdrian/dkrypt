@@ -45,6 +45,7 @@
 	import PublicPricing from "#components/PublicPricing.svelte";
 	import PublicStatus from "#components/PublicStatus.svelte";
 	import SessionExpiryBanner from "#components/SessionExpiryBanner.svelte";
+	import FreeTierBanner from "#components/FreeTierBanner.svelte";
 	import SessionsDialog from "#components/SessionsDialog.svelte";
 	import OnboardingTour from "#components/OnboardingTour.svelte";
 	import ShortcutsHelp from "#components/ShortcutsHelp.svelte";
@@ -82,6 +83,7 @@
 		pushThemePref,
 		refreshSession,
 		sessionBits,
+		sessionCanViewOperationalDashboard,
 		sessionCanSeeSettings,
 		sessionHasAnyPermission,
 		sessionHasPermission,
@@ -342,6 +344,8 @@ initDensity();
 	const visibleTabs = $derived.by(() => {
 		const accessibleTabs = TABS.filter((t) => {
 			if (t.id === "settings") return sessionCanSeeSettings();
+			if (t.id === "keys" && sessionState.freeTier) return false;
+			if (t.id === "insights" && !sessionCanViewOperationalDashboard()) return false;
 			return !t.requires || sessionHasAnyPermission(t.requires);
 		});
 		const order = navigationPreferencesState.order;
@@ -351,6 +355,7 @@ initDensity();
 			return Number(rightPinned) - Number(leftPinned) || order.indexOf(left.id) - order.indexOf(right.id);
 		});
 	});
+	const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
 	const pinnedTabs = $derived(visibleTabs.filter((tab) => navigationPreferencesState.pinned.includes(tab.id)));
 	const unpinnedTabs = $derived(visibleTabs.filter((tab) => !navigationPreferencesState.pinned.includes(tab.id)));
 
@@ -701,7 +706,11 @@ initDensity();
 	<MfaVerification />
 {:else}
 	<div class="app-shell min-h-screen bg-background">
-		<MaintenanceBanner />
+		{#if canViewOperationalDashboard}
+			<MaintenanceBanner />
+		{:else if liveState.overview?.serviceStatus}
+			<div class="border-b border-border bg-panel px-4 py-2 text-center text-xs text-muted" role="status">{liveState.overview.serviceStatus === "operational" ? "All systems operational" : "dkrypt is in maintenance mode. Some requests may be delayed."}</div>
+		{/if}
 		<div class="flex min-h-screen">
 			<aside class="app-sidebar relative hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex" style:width={`${sidebarState.collapsed ? 64 : sidebarState.width}px`} style:display={focusViewState.enabled ? 'none' : undefined}>
 				<div class={cn("border-b border-sidebar-border", sidebarState.collapsed ? "px-2 py-3" : "px-4 py-4")}>
@@ -1235,6 +1244,9 @@ initDensity();
 		<main
 			class={cn("mx-auto px-3 pt-4 sm:px-5 sm:pt-5 lg:px-6 lg:pb-6", focusViewState.enabled ? "max-w-none px-4 pb-6 sm:px-8" : sidebarState.collapsed ? "max-w-[2200px] pb-[calc(5rem+env(safe-area-inset-bottom))]" : "max-w-[1760px] pb-[calc(5rem+env(safe-area-inset-bottom))]")}
 		>
+			{#if sessionState.freeTier}
+				<FreeTierBanner />
+			{/if}
 			<SessionExpiryBanner />
 			<ConnectionBanner />
 			<UpdateAvailableBanner />
@@ -1278,7 +1290,7 @@ initDensity();
 						</div>
 					{/if}
 				</div>
-				{#if tabState.active !== "docs" && !focusViewState.enabled}
+				{#if canViewOperationalDashboard && tabState.active !== "docs" && !focusViewState.enabled}
 					<div class="hidden min-w-0 flex-col gap-4 min-[1440px]:sticky min-[1440px]:top-6 min-[1440px]:flex">
 						<StatusPanel />
 					</div>
@@ -1288,7 +1300,7 @@ initDensity();
 		{#if focusViewState.enabled}
 			<Button variant="secondary" size="icon" class="fixed top-3 right-3 z-50 shadow-lg" onclick={() => setFocusView(false)} aria-label="Exit focus view" title="Exit focus view"><Minimize2 class="h-4 w-4" /></Button>
 		{/if}
-		{#if !focusViewState.enabled}
+		{#if canViewOperationalDashboard && !focusViewState.enabled}
 		<Button
 			variant="outline"
 			size="icon"
@@ -1299,7 +1311,7 @@ initDensity();
 			<PanelRightOpen class="h-4 w-4" />
 		</Button>
 		{/if}
-		{#if mobileStatusOpen && !focusViewState.enabled}
+		{#if canViewOperationalDashboard && mobileStatusOpen && !focusViewState.enabled}
 			<Button
 				variant="ghost"
 				type="button"
@@ -1308,6 +1320,7 @@ initDensity();
 				aria-label="Close status drawer"
 			></Button>
 		{/if}
+		{#if canViewOperationalDashboard}
 		<aside style:display={focusViewState.enabled ? 'none' : undefined}
 			class={cn(
 				"fixed top-0 right-0 z-50 h-[100dvh] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto border-l border-border bg-panel p-3 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-2xl transition-transform duration-200 min-[1440px]:hidden",
@@ -1323,6 +1336,7 @@ initDensity();
 			</div>
 			<StatusPanel />
 		</aside>
+		{/if}
 		<nav style:display={focusViewState.enabled ? 'none' : undefined} class="mobile-primary-nav fixed z-40 flex overflow-x-auto border border-border bg-card p-1 shadow-lg lg:hidden" aria-label={msg("nav.primary")} lang={interfaceLanguage}>
 			{#each visibleTabs as t (t.id)}
 				<Button

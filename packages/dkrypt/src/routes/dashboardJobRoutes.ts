@@ -13,6 +13,9 @@ import { getJobHistoryEntryById, getJobHistoryPage } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { getOfflineAppStoreReadiness } from '#offlineAppStore.js';
 import { getDecryptQuotaReceipt } from '#jobs/repository.js';
+import { canViewJobForUser, canViewOperationalDashboard } from '#dashboardAccess.js';
+import { Response } from '#http.js';
+import { streamJobFile } from '#jobs/http.js';
 
 type TimelineSource = {
   id: string;
@@ -47,7 +50,7 @@ type TimelineSource = {
   filePath?: string;
 };
 
-function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number }) {
+function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number }, memberView = false) {
   const events = source.timeline ?? [
     { at: source.createdAt, label: 'Queued', status: 'queued' as const },
     ...(source.startedAt !== undefined ? [{ at: source.startedAt, label: `Started on ${source.deviceId ?? 'unknown device'}`, status: 'running' as const }] : []),
@@ -74,33 +77,39 @@ function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'r
         { id: 'artifact-storage', label: 'IPA artifact storage', state: source.status === 'done' ? source.artifactId || source.filePath ? 'ready' as const : 'unknown' as const : source.status === 'failed' ? 'not_applicable' as const : 'waiting' as const, detail: source.status === 'done' ? source.artifactId || source.filePath ? 'Artifact is available after verification' : 'Artifact storage result is unavailable' : source.status === 'failed' ? 'No artifact was produced' : 'Storage is used after decryption completes' },
       ];
     })();
+  const visibleEvents = memberView
+    ? events.map((event) => ({
+      ...event,
+      label: event.status === 'queued' ? 'Queued' : event.status === 'running' ? 'Decrypt in progress' : event.status === 'done' ? 'Finished' : 'Failed',
+    }))
+    : events;
   return {
     id: source.id,
     correlationId: source.correlationId ?? source.id,
     bundleId: source.bundleId,
     testflight: source.testflight,
     status: source.status,
-    executionStage: source.status === 'running' ? source.executionStage : undefined,
-    executionPath: source.executionPath,
-    offlineAttemptedAt: source.offlineAttemptedAt,
-    offlineAttemptDurationMs: source.offlineAttemptDurationMs,
-    offlineDeviceFallbackStartedAt: source.offlineDeviceFallbackStartedAt,
-    deviceFallbackDurationMs: source.deviceFallbackDurationMs,
-    offlineFailureReason: source.offlineFailureReason,
+    executionStage: !memberView && source.status === 'running' ? source.executionStage : undefined,
+    executionPath: memberView ? undefined : source.executionPath,
+    offlineAttemptedAt: memberView ? undefined : source.offlineAttemptedAt,
+    offlineAttemptDurationMs: memberView ? undefined : source.offlineAttemptDurationMs,
+    offlineDeviceFallbackStartedAt: memberView ? undefined : source.offlineDeviceFallbackStartedAt,
+    deviceFallbackDurationMs: memberView ? undefined : source.deviceFallbackDurationMs,
+    offlineFailureReason: memberView ? undefined : source.offlineFailureReason,
     quotaReceipt,
-    offlineCompatibility: source.offlineCompatibility,
-    shutdownRecoveryAt: source.shutdownRecoveryAt,
+    offlineCompatibility: memberView ? undefined : source.offlineCompatibility,
+    shutdownRecoveryAt: memberView ? undefined : source.shutdownRecoveryAt,
     versionLabel: source.versionLabel,
-    deviceId: source.deviceId,
-    transport: source.transport,
+    deviceId: memberView ? undefined : source.deviceId,
+    transport: memberView ? undefined : source.transport,
     sizeBytes: source.fileSizeBytes ?? source.sizeBytes,
     warnings: source.warnings,
-    queueReason: source.queueReason,
+    queueReason: memberView ? undefined : source.queueReason,
     ipaMetadata: source.ipaMetadata,
     ipaInfoPlist: source.ipaInfoPlist,
-    events,
-    dependencies,
-    guidance: source.status === 'failed' ? getFailureGuidance(source.error, source.queueReason) : undefined,
+    events: visibleEvents,
+    dependencies: memberView ? undefined : dependencies,
+    guidance: !memberView && source.status === 'failed' ? getFailureGuidance(source.error, source.queueReason) : undefined,
   };
 }
 
@@ -109,12 +118,14 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.addHook('preHandler', recordFastifyDashboardActivity);
 
   server.get<DashboardJobListRoute>('/v1/dashboard/jobs', { schema: getRouteContract('GET', '/v1/dashboard/jobs') }, async (request) => {
+    const session = getFastifySession(request)!;
+    const operationalView = canViewOperationalDashboard(session.permissions);
     const query = request.query;
     const limit = Math.min(query.limit ?? 15, 100);
     const cursor = query.cursor;
     const offset = cursor ? 0 : query.offset ?? 0;
     const q = query.q?.trim().slice(0, 200) || undefined;
-    const queuedBy = query.queuedBy?.trim().slice(0, 120) || undefined;
+    const queuedBy = operationalView ? query.queuedBy?.trim().slice(0, 120) || undefined : session.sub;
     const deviceId = query.deviceId?.trim().slice(0, 64) || undefined;
     const errorQ = query.errorQ?.trim().slice(0, 200) || undefined;
     const failureCategory = query.failureCategory?.trim().slice(0, 64) || undefined;
@@ -129,7 +140,7 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
       fromTs: query.fromTs,
       toTs: query.toTs,
     }, cursor);
-    return { history: entries.map(dashboardHistoryEntry), total, nextCursor };
+    return { history: entries.map((entry) => dashboardHistoryEntry(entry, !operationalView)), total, nextCursor };
   });
 
   server.get<DashboardJobStatusRoute>('/v1/dashboard/jobs/:id/status', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/status') }, async (request, reply) => {
@@ -137,18 +148,50 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
     if (!job) {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found (finished jobs are pruned after retention window)'));
     }
-    return jobSummary(job);
+    const session = getFastifySession(request)!;
+    if (!canViewJobForUser(job, session.sub, session.permissions)) {
+      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
+    }
+    const summary = jobSummary(job);
+    if (!canViewOperationalDashboard(session.permissions)) {
+      const queue = summary.queue ? {
+        position: summary.queue.position,
+        predictedStartMs: summary.queue.predictedStartMs,
+        predictedCompletionMs: summary.queue.predictedCompletionMs,
+      } : undefined;
+      return { ...summary, deviceId: undefined, preferredDeviceId: undefined, transport: undefined, executionPath: undefined, offlineAttemptedAt: undefined, offlineAttemptDurationMs: undefined, offlineDeviceFallbackStartedAt: undefined, deviceFallbackDurationMs: undefined, offlineFailureReason: undefined, offlineCompatibility: undefined, priority: undefined, queueReason: undefined, queue };
+    }
+    return summary;
+  });
+
+  server.get('/v1/dashboard/jobs/:id/file', {
+    schema: { hide: true, params: { type: 'object', required: ['id'], properties: { id: { type: 'string', minLength: 1, maxLength: 128 } }, additionalProperties: false } },
+  }, async (request, reply) => {
+    const session = getFastifySession(request)!;
+    const job = getJob((request.params as { id: string }).id);
+    if (!job || !job.freeTierResult || job.billingOwnerId?.toLowerCase() !== session.sub.toLowerCase()) {
+      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'download not found'));
+    }
+    if (job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) {
+      return reply.code(410).send(createHttpErrorEnvelope(request.id, 410, 'the 30-minute download window has expired'));
+    }
+    await streamJobFile(job, request.raw, new Response(reply), false);
   });
 
   server.get<DashboardJobTimelineRoute>('/v1/dashboard/jobs/:id/timeline', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/timeline') }, async (request, reply) => {
     const session = getFastifySession(request)!;
     const active = getJob(request.params.id);
-    if (active) return dashboardJobTimeline(active, getDecryptQuotaReceipt(active.id, session.sub));
+    const memberView = !canViewOperationalDashboard(session.permissions);
+    if (active) {
+      if (!canViewJobForUser(active, session.sub, session.permissions)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
+      return dashboardJobTimeline(active, getDecryptQuotaReceipt(active.id, session.sub), memberView);
+    }
 
     const entry = getJobHistoryEntryById(request.params.id);
     if (!entry) {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
     }
-    return dashboardJobTimeline(entry, getDecryptQuotaReceipt(entry.id, session.sub));
+    if (!canViewJobForUser(entry, session.sub, session.permissions)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
+    return dashboardJobTimeline(entry, getDecryptQuotaReceipt(entry.id, session.sub), memberView);
   });
 };

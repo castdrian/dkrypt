@@ -15,6 +15,7 @@ import { PermissionFlag, hasPermission } from '#permissions.js';
 import { lookupAppMetadata } from '#appStoreMetadata.js';
 import type { TFBuild } from '#testflight.js';
 import { getMaintenanceStatus } from '#maintenance.js';
+import { getBillingEntitlements } from '#billing.js';
 
 const RESOURCE = `${config.publicBaseUrl.replace(/\/$/, '')}/v1/mcp`;
 const RESOURCE_METADATA = `${config.publicBaseUrl.replace(/\/$/, '')}/.well-known/oauth-protected-resource/mcp`;
@@ -244,6 +245,7 @@ function supportedScope(value: string): value is SupportedScope {
 }
 
 function userCanUseScope(userId: string, scope: SupportedScope): boolean {
+  if (getBillingEntitlements(userId).freeTier) return false;
   const permissions = getUserEffectivePermissions(userId);
   return scope === 'devices:read'
     ? hasPermission(permissions, PermissionFlag.viewDevices)
@@ -251,7 +253,7 @@ function userCanUseScope(userId: string, scope: SupportedScope): boolean {
 }
 
 function userCanUseAllScopes(userId: string, scopes: readonly SupportedScope[]): boolean {
-  return scopes.every((scope) => userCanUseScope(userId, scope));
+  return scopes.length > 0 && scopes.every((scope) => userCanUseScope(userId, scope));
 }
 
 function validRedirectUri(value: string): boolean {
@@ -733,7 +735,7 @@ function writeTokenIssue(issue: ReturnType<typeof createTokenIssue>): void {
 
 function verifyAccessToken(token: string): { record: AccessTokenRecord; authInfo: AuthInfo } | undefined {
   const record = readRecord<AccessTokenRecord>(recordId('access', hash(token)));
-  if (!record || record.type !== 'access_token' || record.revokedAt || record.expiresAt <= Date.now() || record.resource !== RESOURCE) return undefined;
+  if (!record || record.type !== 'access_token' || record.revokedAt || record.expiresAt <= Date.now() || record.resource !== RESOURCE || !userCanUseAllScopes(record.userId, record.scopes)) return undefined;
   const client = readRecord<McpClientRecord>(recordId('client', record.clientId));
   if (!client || client.type !== 'client') return undefined;
   const updated = { ...record, lastUsedAt: Date.now() };

@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'bun:test';
 import type { Job } from '#jobs/types.js';
+import { PermissionFlag } from '#permissions.js';
 import { DEFAULT_PROJECT_ID, createDevice, deleteDevice, recordJobHistory } from '#store/state.js';
 import { setCachedDeviceHealth } from '#deviceHealthCache.js';
 
@@ -40,7 +41,7 @@ test('dashboard overview reports each queued job estimated start and completion 
   });
 
   try {
-    const overview = buildDashboardOverview(0n, 'root');
+    const overview = buildDashboardOverview(PermissionFlag.viewDevices, 'root');
     expect(running.status).toBe('running');
     expect(queued.status).toBe('queued');
     expect(overview.activeJobs.find((job) => job.id === queued.id)?.queue).toMatchObject({
@@ -82,7 +83,7 @@ test('dashboard overview estimates queue times from workspace-wide job history',
   });
 
   try {
-    const activeJob = buildDashboardOverview(0n, 'root').activeJobs.find((job) => job.id === queued.id);
+    const activeJob = buildDashboardOverview(PermissionFlag.viewDevices, 'root').activeJobs.find((job) => job.id === queued.id);
     expect(running.status).toBe('running');
     expect(queued.status).toBe('queued');
     expect(activeJob?.queue?.predictedStartMs).toBeGreaterThan(0);

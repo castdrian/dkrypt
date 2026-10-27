@@ -8,6 +8,7 @@ import { PermissionFlag, hasPermission } from '#permissions.js';
 import { fastifyRequireSession, getFastifySession } from '#session.js';
 import { getEffectiveDevices, listAllowedUsers, searchAppCatalogEntries, type AppCatalogEntry, type DeviceRecord, type JobHistoryEntry } from '#store/state.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
+import { canViewJobForUser } from '#dashboardAccess.js';
 
 const quickSearchQuerySchema = Type.Object({
   q: Type.String({ maxLength: 120 }),
@@ -113,10 +114,12 @@ export function createDashboardQuickSearchRoutes(overrides: Partial<QuickSearchS
       const canSearchJobs = hasPermission(session.permissions, PermissionFlag.requestDecrypt) || hasPermission(session.permissions, PermissionFlag.viewLogs);
       if (canSearchJobs) {
         const historicalJobs = services.getAllJobHistory()
+          .filter((entry) => canViewJobForUser(entry, session.sub, session.permissions))
           .filter((entry) => matches(query, [entry.id, entry.bundleId, entry.versionLabel, catalog.get(entry.bundleId)?.displayName]))
           .slice(0, MAX_RESULTS_PER_KIND)
           .map((entry) => jobResult(entry, catalog));
         const activeJobs = services.getActiveJobs()
+          .filter((entry) => canViewJobForUser(entry, session.sub, session.permissions))
           .filter((entry) => matches(query, [entry.id, entry.bundleId, entry.versionLabel, catalog.get(entry.bundleId)?.displayName]))
           .slice(0, MAX_RESULTS_PER_KIND)
           .map((entry) => ({

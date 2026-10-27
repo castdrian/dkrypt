@@ -10,7 +10,7 @@ import { setSessionCookie } from '#session.js';
 import { buildTestServer } from '#testServer.js';
 import type { JobHistoryEntry } from '#store/state.js';
 
-function sessionCookie(permissions = 0n): string {
+function sessionCookie(permissions = PermissionFlag.viewDevices): string {
   let value = '';
   const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as Response;
   setSessionCookie(response, { sub: 'root', permissions });
@@ -101,7 +101,7 @@ test('queue SLO data remains manager-gated and includes the active queue objecti
   }));
 
   try {
-    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/slo', headers: { cookie: sessionCookie() } });
+    const denied = await server.inject({ method: 'GET', url: '/v1/dashboard/jobs/slo', headers: { cookie: sessionCookie(0n) } });
     const allowed = await server.inject({
       method: 'GET',
       url: '/v1/dashboard/jobs/slo?projectId=default',

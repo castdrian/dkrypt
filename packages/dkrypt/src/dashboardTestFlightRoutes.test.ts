@@ -267,7 +267,7 @@ test('TestFlight catalog shortcuts return cached device results and request refr
       headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ apps: [app], refreshing: true });
+    expect(response.json()).toMatchObject({ apps: [{ ...app, devices: [], available: true }], refreshing: true });
     expect(refreshes).toEqual([true]);
   } finally {
     await server.close();

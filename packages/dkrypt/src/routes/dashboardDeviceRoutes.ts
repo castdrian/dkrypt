@@ -144,50 +144,16 @@ function resolveDevice(id: string) {
   return getDevice(id) ?? (id === 'primary' ? getPrimaryDevice() : undefined);
 }
 
-function canReadDeviceStatus(permissions: bigint, id: string, force = false): boolean {
+function canReadDeviceStatus(permissions: bigint, force = false): boolean {
   if (hasPermission(permissions, PermissionFlag.manageDevices)) return true;
   if (force) return false;
-  return hasPermission(permissions, PermissionFlag.viewDevices) || id === 'primary';
+  return hasPermission(permissions, PermissionFlag.viewDevices);
 }
 
 function resolveReadableStatusDevice(permissions: bigint, id: string): { device: DeviceRecord } | { status: 403 | 404; message: string } {
-  if (!canReadDeviceStatus(permissions, id)) return { status: 403, message: 'device history is unavailable' };
+  if (!canReadDeviceStatus(permissions)) return { status: 403, message: 'device history is unavailable' };
   const device = resolveDevice(id);
   return device ? { device } : { status: 404, message: 'device not found' };
-}
-
-function serializeMemberDeviceHealth(health: DeviceHealth, refreshing: boolean): DeviceHealth & { refreshing: boolean } {
-  return {
-    reachable: health.reachable,
-    refreshing,
-    checkedAt: health.checkedAt,
-    error: health.error,
-    testFlightRunning: health.testFlightRunning,
-    testFlightBridgeReachable: health.testFlightBridgeReachable,
-    darkEnabled: health.darkEnabled,
-    displayMode: health.displayMode,
-    autoinstallPaused: health.autoinstallPaused,
-    autoinstallPauseReason: health.autoinstallPauseReason,
-    batteryPauseEnabled: health.batteryPauseEnabled,
-    batteryPauseThreshold: health.batteryPauseThreshold,
-    activeOperation: health.activeOperation,
-    batteryPercent: health.batteryPercent,
-    batteryCharging: health.batteryCharging,
-    batteryTemperatureC: health.batteryTemperatureC,
-    batteryCycleCount: health.batteryCycleCount,
-    batteryHealthPercent: health.batteryHealthPercent,
-    batteryDesignCapacityMah: health.batteryDesignCapacityMah,
-    batteryMaxCapacityMah: health.batteryMaxCapacityMah,
-    storageTotalBytes: health.storageTotalBytes,
-    storageUsedBytes: health.storageUsedBytes,
-    storageFreeBytes: health.storageFreeBytes,
-    storageUsedPercent: health.storageUsedPercent,
-    networkConnected: health.networkConnected,
-    internetAccess: health.internetAccess,
-    networkInterface: health.networkInterface,
-    networkIpAddress: health.networkIpAddress,
-    subsystems: health.subsystems,
-  };
 }
 
 const springBoardActions = {
@@ -530,7 +496,7 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
     const permissions = getFastifySession(request)!.permissions;
     const canViewDeviceData = hasPermission(permissions, PermissionFlag.viewDevices) || hasPermission(permissions, PermissionFlag.manageDevices);
     const force = request.query.force === 'true';
-    if (!canReadDeviceStatus(permissions, request.params.id, force)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'device status is unavailable'));
+    if (!canReadDeviceStatus(permissions, force)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'device status is unavailable'));
     const device = resolveDevice(request.params.id);
     if (!device) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'device not found'));
     try {
@@ -539,9 +505,7 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
         const staleAfterMs = cached.value.reachable && cached.value.testFlightBridgeReachable !== false ? 45_000 : 120_000;
         const refreshing = Date.now() - cached.at >= staleAfterMs;
         if (refreshing) void getDeviceHealth(device.id).catch(() => undefined);
-        return canViewDeviceData
-          ? { ...cached.value, refreshing, subsystemDetails: getDeviceSubsystemDetails(device.id, cached.value.subsystems) }
-          : serializeMemberDeviceHealth(cached.value, refreshing);
+        return { ...cached.value, refreshing, subsystemDetails: getDeviceSubsystemDetails(device.id, cached.value.subsystems) };
       }
       const snapshot = await resolveWithin(getDeviceHealth(device.id, force), force ? 8_000 : 1_000);
       if (!snapshot.completed) {
@@ -553,9 +517,7 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
           retryable: true,
         });
       }
-      return canViewDeviceData
-        ? { ...snapshot.value, refreshing: false, subsystemDetails: getDeviceSubsystemDetails(device.id, snapshot.value.subsystems) }
-        : serializeMemberDeviceHealth(snapshot.value, false);
+      return { ...snapshot.value, refreshing: false, subsystemDetails: getDeviceSubsystemDetails(device.id, snapshot.value.subsystems) };
     } catch (error) {
       return reply.code(502).send(createHttpErrorEnvelope(request.id, 502, canViewDeviceData ? `device health check failed: ${getErrorMessage(error)}` : 'device health check failed'));
     }

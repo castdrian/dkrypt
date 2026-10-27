@@ -16,6 +16,7 @@ export interface JobHistoryRepositoryFilter {
 export interface JobHistoryRepository {
   list(filter?: JobHistoryRepositoryFilter): JobHistoryEntry[];
   listForUser(username: string): JobHistoryEntry[];
+  delete(id: string): boolean;
 }
 
 function addContainsFilter(conditions: string[], parameters: Array<string | number>, field: string, value: string | undefined): void {
@@ -68,6 +69,9 @@ export function createJobHistoryRepository(database: Database): JobHistoryReposi
     listForUser(username) {
       const rows = byUser.all(username.toLowerCase()) as Array<{ payload: string }>;
       return rows.map((row) => JSON.parse(row.payload) as JobHistoryEntry);
+    },
+    delete(id) {
+      return database.query('DELETE FROM job_history WHERE id = ?').run(id).changes === 1;
     },
   };
 }

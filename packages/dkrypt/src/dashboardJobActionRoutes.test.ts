@@ -140,7 +140,7 @@ test('job cancellation and prioritization preserve project access and conflict b
   });
 
   try {
-    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) };
     const cancelled = await server.inject({ method: 'POST', url: '/v1/dashboard/jobs/job-1/cancel', headers });
     const prioritized = await server.inject({ method: 'POST', url: '/v1/dashboard/jobs/job-1/prioritize', headers });
 
@@ -165,7 +165,7 @@ test('queue reorder validates that every requested job belongs to the selected p
   });
 
   try {
-    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) };
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/reorder',
@@ -206,7 +206,7 @@ test('retry uses the requested primary device and retains source job metadata', 
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/history-1/retry',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
       payload: { preferPrimary: true },
     });
 
@@ -319,7 +319,7 @@ test('diagnostics include the authorized job timeline and attachment filename', 
     const response = await server.inject({
       method: 'GET',
       url: '/v1/dashboard/jobs/job-1/diagnostic',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
     });
 
     expect(response.statusCode).toBe(200);
@@ -367,7 +367,7 @@ test('job actions use one shared account scope after permission checks', async (
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/jobs/job-1/cancel',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
     });
 
     expect(response.statusCode).toBe(200);

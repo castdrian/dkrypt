@@ -172,6 +172,91 @@ test('quota receipt is available only to its owning account and reflects reserva
   }
 });
 
+test('free quota reservations settle to anonymous completion timestamps and expire after 30 days', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-free-quota-ledger-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    const database = openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']);
+    repository = createJobRepository(database);
+    const ownerId = 'free-member@example.test';
+    const startedAt = Date.now();
+
+    for (let index = 0; index < 3; index += 1) {
+      const job = createJob({ id: `free-quota-${index}`, bundleId: `com.example.free${index}`, createdAt: startedAt + index });
+      expect(repository.admit(job, ownerId, 3, true)).toBe(job.id);
+      repository.settleQuota(job.id, true);
+    }
+
+    const rows = database.query('SELECT owner_id, job_id, reserved_at, completed_at FROM free_decrypt_quota WHERE owner_id = ?').all(ownerId) as Array<{ owner_id: string; job_id: string | null; reserved_at: number | null; completed_at: number | null }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.job_id === null && row.reserved_at === null && typeof row.completed_at === 'number')).toBeTrue();
+    expect(repository.freeQuotaUsage(ownerId, Date.now() + 60_000)).toMatchObject({ limit: 3, used: 3, remaining: 0 });
+
+    const blocked = createJob({ id: 'free-quota-blocked', bundleId: 'com.example.blocked', createdAt: Date.now() + 60_000 });
+    expect(() => repository!.admit(blocked, ownerId, 3, true)).toThrow('free decrypt allowance exhausted');
+
+    const nextWindow = Math.max(...rows.map((row) => row.completed_at ?? 0)) + 30 * 24 * 60 * 60 * 1000 + 1;
+    expect(repository.freeQuotaUsage(ownerId, nextWindow)).toMatchObject({ limit: 3, used: 0, remaining: 3 });
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('free quota backup data contains only recent completion timestamps and restores usage', async () => {
+  const firstStateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-free-quota-backup-source-'));
+  const restoredStateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-free-quota-backup-target-'));
+  let source: ReturnType<typeof createJobRepository> | undefined;
+  let restored: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    source = createJobRepository(openStateCollectionDatabase({ stateDir: firstStateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const ownerId = 'quota-backup@example.test';
+    const now = Date.now();
+    for (let index = 0; index < 2; index += 1) {
+      const job = createJob({ id: `quota-backup-${index}`, createdAt: now + index });
+      source.admit(job, ownerId, 3, true);
+      source.settleQuota(job.id, true);
+    }
+    const pending = createJob({ id: 'quota-backup-pending', createdAt: now + 3 });
+    source.admit(pending, ownerId, 3, true);
+
+    const completionRecords = source.freeQuotaCompletions(now + 4);
+    expect(completionRecords).toHaveLength(2);
+    expect(completionRecords.every((record) => record.ownerId === ownerId && record.completedAt >= now && record.completedAt <= now + 4)).toBeTrue();
+    expect(completionRecords[0]).not.toHaveProperty('jobId');
+
+    restored = createJobRepository(openStateCollectionDatabase({ stateDir: restoredStateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    restored.replaceFreeQuotaCompletions(completionRecords);
+    expect(restored.freeQuotaUsage(ownerId, now + 4)).toMatchObject({ used: 2, remaining: 1 });
+    expect(restored.freeQuotaCompletions(Math.max(...completionRecords.map((entry) => entry.completedAt)) + 31 * 24 * 60 * 60 * 1000)).toEqual([]);
+  } finally {
+    source?.close();
+    restored?.close();
+    await rm(firstStateDir, { recursive: true, force: true });
+    await rm(restoredStateDir, { recursive: true, force: true });
+  }
+});
+
+test('free quota reservations are released when work fails or is cancelled', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-free-quota-release-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const ownerId = 'free-release@example.test';
+    const job = createJob({ id: 'free-quota-release', createdAt: Date.now() });
+    expect(repository.admit(job, ownerId, 3, true)).toBe(job.id);
+    expect(repository.freeQuotaUsage(ownerId).used).toBe(1);
+    repository.settleQuota(job.id, false);
+    expect(repository.freeQuotaUsage(ownerId).used).toBe(0);
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('burst credits reserve atomically, return after failed jobs, expire, and revoke on Stripe refunds', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-credit-ledger-'));
   let repository: ReturnType<typeof createJobRepository> | undefined;

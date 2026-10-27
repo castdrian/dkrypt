@@ -30,6 +30,7 @@ const defaultServices: DashboardJobAnalyticsServices = {
 };
 
 const canViewJobSlo = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation);
+const canViewOperationalAnalytics = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation, PermissionFlag.viewDevices, PermissionFlag.manageDevices, PermissionFlag.viewScheduler);
 
 export function createDashboardJobAnalyticsRoutes(overrides: Partial<DashboardJobAnalyticsServices> = {}): FastifyPluginAsyncTypebox {
   const services = { ...defaultServices, ...overrides };
@@ -40,6 +41,7 @@ export function createDashboardJobAnalyticsRoutes(overrides: Partial<DashboardJo
 
     server.get<DashboardJobEtaRoute>('/v1/dashboard/jobs/eta/:bundleId', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/eta/:bundleId'),
+      preHandler: canViewOperationalAnalytics,
     }, (request) => {
       const samples = services.getAllJobHistory()
         .filter((job) => job.bundleId === request.params.bundleId && (job.projectId ?? DEFAULT_PROJECT_ID) === DEFAULT_PROJECT_ID && job.status === 'done' && typeof job.startedAt === 'number' && job.finishedAt > job.startedAt)
@@ -58,12 +60,14 @@ export function createDashboardJobAnalyticsRoutes(overrides: Partial<DashboardJo
 
     server.get<DashboardJobStatsRoute>('/v1/dashboard/jobs/stats/:bundleId', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/stats/:bundleId'),
+      preHandler: canViewOperationalAnalytics,
     }, (request) => {
       return services.getBundleStats(request.params.bundleId);
     });
 
     server.get<DashboardJobVolumeRoute>('/v1/dashboard/jobs/volume', {
       schema: getRouteContract('GET', '/v1/dashboard/jobs/volume'),
+      preHandler: canViewOperationalAnalytics,
     }, (request) => {
       return { days: services.getDailyVolume(request.query.days ?? 14) };
     });

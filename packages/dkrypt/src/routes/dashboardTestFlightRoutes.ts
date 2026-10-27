@@ -12,6 +12,7 @@ import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
 import { getAuthProfile } from '#identity.js';
 import { PermissionFlag, hasPermission } from '#permissions.js';
+import { canViewOperationalDashboard } from '#dashboardAccess.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import {
   approveTestFlightSubscription,
@@ -108,6 +109,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function canViewTestFlightDeviceDetails(permissions: bigint): boolean {
+  return canViewOperationalDashboard(permissions);
+}
+
+function visibleSubscription(subscription: TestFlightSubscription, showDeviceDetails: boolean): TestFlightSubscription {
+  return showDeviceDetails ? subscription : { ...subscription, devices: [] };
+}
+
 function scheduleSync(services: TestFlightRouteServices, id: string, actor: string): void {
   void trackBackgroundWork('testflight-subscription-sync', () => services.syncSubscription(id, actor)).catch((error: unknown) => {
     log.warn('TestFlight subscription synchronization failed', { subscriptionId: id, error: errorMessage(error) });
@@ -133,6 +142,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
     }, (request) => {
       const session = getFastifySession(request)!;
       const manager = hasPermission(session.permissions, PermissionFlag.manageTestFlightSubscriptions);
+      const showDeviceDetails = canViewTestFlightDeviceDetails(session.permissions);
       const allSubscriptions = subscriptionsForUser(session.sub, manager);
       const { cursor, limit, offset } = request.query;
       const page = paginateCursor(allSubscriptions, {
@@ -144,7 +154,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       });
       return {
         subscriptions: page.items.map((subscription) => ({
-          ...subscription,
+          ...visibleSubscription(subscription, showDeviceDetails),
           requestedByDisplayName: getAuthProfile(subscription.requestedBy)?.displayName,
         })),
         total: allSubscriptions.length,
@@ -165,6 +175,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       }
       const session = getFastifySession(request)!;
       const manager = hasPermission(session.permissions, PermissionFlag.manageTestFlightSubscriptions);
+      const showDeviceDetails = canViewTestFlightDeviceDetails(session.permissions);
       const existing = findTestFlightSubscriptionByInviteCode(normalized.inviteCode);
       if (existing) {
         if (existing.status === 'approved') {
@@ -174,7 +185,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
           }
           const message = `${existing.displayName ?? existing.url} is already subscribed`;
           reply.code(409);
-          return dashboardErrorResponse(request.id, 409, message, { alreadySubscribed: true, subscription: existing });
+          return dashboardErrorResponse(request.id, 409, message, { alreadySubscribed: true, subscription: visibleSubscription(existing, showDeviceDetails) });
         }
         if (!manager && existing.requestedBy !== session.sub.toLowerCase()) {
           reply.code(409);
@@ -184,9 +195,9 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
           const approved = approveTestFlightSubscription(existing.id, session.sub);
           if (approved) scheduleSync(services, approved.id, session.sub);
           reply.code(202);
-          return { subscription: approved ?? existing };
+          return { subscription: visibleSubscription(approved ?? existing, showDeviceDetails) };
         }
-        return { subscription: existing };
+        return { subscription: visibleSubscription(existing, showDeviceDetails) };
       }
 
       try {
@@ -214,7 +225,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
         }
         if (manager) scheduleSync(services, subscription.id, session.sub);
         reply.code(manager ? 202 : 201);
-        return { subscription };
+        return { subscription: visibleSubscription(subscription, showDeviceDetails) };
       } catch (error) {
         const status = error instanceof TestFlightCatalogUnavailableError ? 503 : 422;
         reply.code(status);
@@ -243,7 +254,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       }
       scheduleSync(services, subscription.id, getFastifySession(request)!.sub);
       reply.code(202);
-      return { subscription };
+      return { subscription: visibleSubscription(subscription, canViewTestFlightDeviceDetails(getFastifySession(request)!.permissions)) };
     });
 
     server.post<DashboardTestFlightSubscriptionActionRoute>('/v1/dashboard/testflight/subscriptions/:id/deny', {
@@ -265,7 +276,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
         reply.code(404);
         return dashboardErrorResponse(request.id, 404, 'subscription not found');
       }
-      return { subscription };
+      return { subscription: visibleSubscription(subscription, canViewTestFlightDeviceDetails(getFastifySession(request)!.permissions)) };
     });
 
     server.post<DashboardTestFlightSubscriptionActionRoute>('/v1/dashboard/testflight/subscriptions/:id/sync', {
@@ -284,7 +295,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       }
       scheduleSync(services, subscription.id, getFastifySession(request)!.sub);
       reply.code(202);
-      return { subscription };
+      return { subscription: visibleSubscription(subscription, canViewTestFlightDeviceDetails(getFastifySession(request)!.permissions)) };
     });
 
     server.post<DashboardTestFlightSubscriptionActionRoute>('/v1/dashboard/testflight/subscriptions/:id/unsubscribe', {
@@ -308,7 +319,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       }
       scheduleUnsubscribe(services, subscription.id, session.sub);
       reply.code(202);
-      return { subscription };
+      return { subscription: visibleSubscription(subscription, canViewTestFlightDeviceDetails(session.permissions)) };
     });
 
     server.get<DashboardTestFlightCatalogRoute>('/v1/dashboard/testflight/catalog', {
@@ -319,7 +330,9 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       const forceRefresh = request.query.refresh === 'true';
       if (forceRefresh || cache.stale) services.refreshCatalogInBackground(forceRefresh);
       const current = services.getCatalogCacheState();
-      return { apps: cache.apps, fetchedAt: cache.fetchedAt, refreshing: forceRefresh || current.refreshing };
+      const showDeviceDetails = canViewTestFlightDeviceDetails(getFastifySession(request)!.permissions);
+      const apps = showDeviceDetails ? cache.apps : cache.apps.map((app) => ({ ...app, devices: [], available: true }));
+      return { apps, fetchedAt: cache.fetchedAt, refreshing: forceRefresh || current.refreshing };
     });
 
     server.post<DashboardTestFlightCatalogUnsubscribeRoute>('/v1/dashboard/testflight/catalog/:bundleId/unsubscribe', {

@@ -852,6 +852,7 @@ test('API key endpoints are not registered through the legacy adapter', () => {
 
 test('native API key routes preserve requester, owner, and manager permissions', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
+  const previousBilling = exportBillingSnapshot();
   const ownerId = `github:api-key-owner-${crypto.randomUUID()}`;
   const otherId = `github:api-key-other-${crypto.randomUUID()}`;
   const ownerRole = createRole({
@@ -868,8 +869,23 @@ test('native API key routes preserve requester, owner, and manager permissions',
   let keyOwnerId = ownerId;
 
   try {
+    replaceBillingSnapshot({ customers: [], subscriptions: [] });
     addAllowedUser(ownerId, [ownerRole.id], 'test setup');
     addAllowedUser(otherId, [ownerRole.id], 'test setup');
+    for (const userId of [ownerId, otherId]) {
+      upsertBillingSubscription({
+        provider: 'stripe',
+        subscriptionId: `sub_${crypto.randomUUID()}`,
+        customerId: `cus_${crypto.randomUUID()}`,
+        userId,
+        status: 'active',
+        planId: 'regular',
+        priceId: 'price_regular_test',
+        productId: 'prod_regular_test',
+        occurredAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     const invalid = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/keys/request',
@@ -976,6 +992,7 @@ test('native API key routes preserve requester, owner, and manager permissions',
     deleteUserPersonalData(ownerId);
     deleteUserPersonalData(otherId);
     deleteRole(ownerRole.id, 'test cleanup');
+    replaceBillingSnapshot(previousBilling);
     await server.close();
   }
 });
@@ -1512,7 +1529,7 @@ test('dashboard overview uses native Fastify routing and returns workspace-wide 
   }
 });
 
-test('dashboard overview gives ordinary members a device status without device configuration access', async () => {
+test('dashboard overview gives ordinary members only a simple service status', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const cookie = createSessionCookie('root', PermissionFlag.requestDecrypt);
   let device: ReturnType<typeof createDevice> | undefined;
@@ -1520,52 +1537,38 @@ test('dashboard overview gives ordinary members a device status without device c
   try {
     const baselineResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie } });
     expect(baselineResponse.statusCode).toBe(200);
-    expect(baselineResponse.json()).toMatchObject({
-      devices: [],
-      deviceStatus: {
-        configured: expect.any(Number),
-        enabled: expect.any(Number),
-        online: expect.any(Number),
-        ready: expect.any(Number),
-        attention: expect.any(Number),
-        checking: expect.any(Number),
-        unavailable: expect.any(Number),
-      },
-    });
-    const baseline = baselineResponse.json().deviceStatus as { configured: number; enabled: number; online: number; ready: number; attention: number; checking: number };
+    expect(baselineResponse.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
+    expect(baselineResponse.json()).not.toHaveProperty('statusDevices');
+    expect(baselineResponse.json()).not.toHaveProperty('deviceStatus');
+    expect(baselineResponse.json()).not.toHaveProperty('settings');
+    expect(baselineResponse.json()).not.toHaveProperty('maintenance');
     const noRoleResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie: createSessionCookie('root', 0n) } });
     expect(noRoleResponse.statusCode).toBe(200);
-    expect(noRoleResponse.json()).toMatchObject({ devices: [], deviceStatus: baseline });
+    expect(noRoleResponse.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
     device = createDevice({ name: `Member status ${crypto.randomUUID()}`, transport: 'wifi', host: '127.0.0.1' }, 'test');
     setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
 
     const onlineResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie } });
     expect(onlineResponse.statusCode).toBe(200);
-    expect(onlineResponse.json()).toMatchObject({
-      devices: [],
-      deviceStatus: { configured: baseline.configured + 1, enabled: baseline.enabled + 1, online: baseline.online + 1, ready: baseline.ready + 1, freshUntil: expect.any(Number) },
-    });
+    expect(onlineResponse.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
+    expect(onlineResponse.json()).not.toHaveProperty('statusDevices');
+    expect(onlineResponse.json()).not.toHaveProperty('deviceStatus');
 
     setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, testFlightBridgeReachable: false, checkedAt: Date.now() });
     const blockedResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie } });
-    expect(blockedResponse.json()).toMatchObject({
-      devices: [],
-      deviceStatus: { online: baseline.online + 1, ready: baseline.ready, attention: baseline.attention + 1 },
-    });
+    expect(blockedResponse.json()).not.toHaveProperty('deviceStatus');
 
     setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() - 660_000 });
     const staleResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie } });
-    expect(staleResponse.json()).toMatchObject({
-      devices: [],
-      deviceStatus: { online: baseline.online, checking: baseline.checking + 1 },
-    });
+    expect(staleResponse.json()).not.toHaveProperty('statusDevices');
+    expect(staleResponse.json()).not.toHaveProperty('deviceStatus');
   } finally {
     if (device) deleteDevice(device.id, 'test');
     await server.close();
   }
 });
 
-test('members can read primary operational status without device configuration or control access', async () => {
+test('members cannot read device health or history without device visibility permission', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const device = createDevice({ name: `Status device ${crypto.randomUUID()}`, transport: 'usb', udid: crypto.randomUUID(), isPrimary: true }, 'test');
   const memberCookie = createSessionCookie('root', PermissionFlag.requestDecrypt);
@@ -1585,28 +1588,24 @@ test('members can read primary operational status without device configuration o
   try {
     const overview = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie: memberCookie } });
     expect(overview.statusCode).toBe(200);
-    expect(overview.json()).toMatchObject({
-      devices: [],
-      statusDevices: expect.arrayContaining([expect.objectContaining({ id: device.id, name: device.name, isPrimary: true })]),
-    });
+    expect(overview.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
+    expect(overview.json()).not.toHaveProperty('statusDevices');
+    expect(overview.json()).not.toHaveProperty('deviceStatus');
     expect(JSON.stringify(overview.json())).not.toContain('192.0.2.44');
     const defaultOverview = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie: noRoleCookie } });
-    expect(defaultOverview.json()).toMatchObject({ devices: [], statusDevices: expect.arrayContaining([expect.objectContaining({ id: device.id })]) });
+    expect(defaultOverview.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
+    expect(defaultOverview.json()).not.toHaveProperty('statusDevices');
 
     const health = await server.inject({ method: 'GET', url: '/v1/dashboard/devices/primary/health', headers: { cookie: memberCookie } });
-    expect(health.statusCode).toBe(200);
-    expect(health.json()).toMatchObject({ reachable: true, batteryPercent: 83, networkConnected: true, networkInterface: 'en0', networkIpAddress: '192.0.2.44', testFlightBridgeReachable: true });
-    expect(health.json()).not.toHaveProperty('bridgeHeartbeats');
+    expect(health.statusCode).toBe(403);
     for (const cookie of [noRoleCookie, automationCookie]) {
       const readOnlyHealth = await server.inject({ method: 'GET', url: '/v1/dashboard/devices/primary/health', headers: { cookie } });
-      expect(readOnlyHealth.statusCode).toBe(200);
-      expect(readOnlyHealth.json()).toMatchObject({ reachable: true, batteryPercent: 83 });
+      expect(readOnlyHealth.statusCode).toBe(403);
     }
 
     for (const type of ['health', 'battery', 'temperature']) {
       const history = await server.inject({ method: 'GET', url: `/v1/dashboard/devices/primary/${type}-history?hours=1`, headers: { cookie: memberCookie } });
-      expect(history.statusCode).toBe(200);
-      expect(history.json().buckets).toHaveLength(1);
+      expect(history.statusCode).toBe(403);
     }
 
     for (const url of [
@@ -1620,6 +1619,9 @@ test('members can read primary operational status without device configuration o
     }
     const deniedViewerRefresh = await server.inject({ method: 'GET', url: '/v1/dashboard/devices/primary/health?force=true', headers: { cookie: deviceViewerCookie } });
     expect(deniedViewerRefresh.statusCode).toBe(403);
+    const deviceViewerHealth = await server.inject({ method: 'GET', url: '/v1/dashboard/devices/primary/health', headers: { cookie: deviceViewerCookie } });
+    expect(deviceViewerHealth.statusCode).toBe(200);
+    expect(deviceViewerHealth.json()).toMatchObject({ reachable: true, batteryPercent: 83, networkIpAddress: '192.0.2.44' });
   } finally {
     deleteDevice(device.id, 'test');
     await server.close();
@@ -2355,7 +2357,7 @@ test('Fastify sends the initial dashboard overview over SSE', async () => {
   }
 });
 
-test('member status overview updates when device health changes without exposing device records', async () => {
+test('member status updates never include device health or system details', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const device = createDevice({ name: `SSE status ${crypto.randomUUID()}`, transport: 'wifi', host: '127.0.0.1' }, 'test');
   const baseUrl = await server.listen({ port: 0, host: '127.0.0.1' });
@@ -2386,10 +2388,11 @@ test('member status overview updates when device health changes without exposing
     setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
     const update = await readEvent(reader);
     expect(update).toContain('event: overview');
-    const payload = JSON.parse(update.match(/^data: (.+)$/m)?.[1] ?? '{}') as { devices?: unknown[]; deviceStatus?: { online: number; ready: number } };
+    const payload = JSON.parse(update.match(/^data: (.+)$/m)?.[1] ?? '{}') as { devices?: unknown[]; deviceStatus?: unknown; statusDevices?: unknown; serviceStatus?: string };
     expect(payload.devices).toEqual([]);
-    expect(payload.deviceStatus?.online).toBeGreaterThanOrEqual(1);
-    expect(payload.deviceStatus?.ready).toBeGreaterThanOrEqual(1);
+    expect(payload).not.toHaveProperty('deviceStatus');
+    expect(payload).not.toHaveProperty('statusDevices');
+    expect(payload.serviceStatus).toMatch(/^(operational|maintenance)$/);
   } finally {
     clearTimeout(timeout);
     controller.abort();
@@ -3023,7 +3026,7 @@ test('Fastify previews retention and reports queue service objectives', async ()
   }
 });
 
-test('artifact storage preview requires decrypt and automation permissions', async () => {
+test('artifact storage preview is available to operational members with Free decrypt access', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const automationId = `github:storage-automation-${crypto.randomUUID()}`;
   const decryptId = `github:storage-decrypt-${crypto.randomUUID()}`;
@@ -3046,7 +3049,7 @@ test('artifact storage preview requires decrypt and automation permissions', asy
     const decryptOnly = await server.inject({ method: 'GET', url: '/v1/dashboard/settings/artifact-storage', headers: { cookie: decryptCookie } });
     const permitted = await server.inject({ method: 'GET', url: '/v1/dashboard/settings/artifact-storage', headers: { cookie: permittedCookie } });
 
-    expect(automationOnly.statusCode).toBe(403);
+    expect(automationOnly.statusCode).toBe(200);
     expect(decryptOnly.statusCode).toBe(403);
     expect(permitted.statusCode).toBe(200);
   } finally {
@@ -3305,6 +3308,7 @@ test('artifact pinning is scoped, persistent, audited, and available in the libr
 
 test('artifact pinning requires storage management permission', async () => {
   const { server } = await signIn();
+  const previousBilling = exportBillingSnapshot();
   const managerId = `github:artifact-pin-manager-${crypto.randomUUID()}`;
   const readerId = `github:artifact-pin-reader-${crypto.randomUUID()}`;
   const managerPermissions = PermissionFlag.requestDecrypt | PermissionFlag.manageAutomation;
@@ -3326,6 +3330,21 @@ test('artifact pinning requires storage management permission', async () => {
   });
 
   try {
+    replaceBillingSnapshot({ customers: [], subscriptions: [] });
+    for (const userId of [managerId, readerId]) {
+      upsertBillingSubscription({
+        provider: 'stripe',
+        subscriptionId: `sub_${userId}`,
+        customerId: `customer_${userId}`,
+        userId,
+        status: 'active',
+        planId: 'regular',
+        priceId: 'price_regular',
+        productId: 'product_regular',
+        occurredAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     const permitted = await server.inject({
       method: 'PUT',
       url: `/v1/dashboard/artifacts/${artifact.id}/pin`,
@@ -3341,6 +3360,7 @@ test('artifact pinning requires storage management permission', async () => {
     expect(permitted.statusCode).toBe(200);
     expect(missingPermission.statusCode).toBe(403);
   } finally {
+    replaceBillingSnapshot(previousBilling);
     await rm(artifact.filePath, { force: true });
     await rm(outputDir, { recursive: true, force: true });
     await server.close();

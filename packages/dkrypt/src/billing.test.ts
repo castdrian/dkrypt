@@ -48,6 +48,20 @@ describe('resolveBillingEntitlements', () => {
     });
   });
 
+  test('grants unpaid accounts the Free entitlement while keeping the internal root principal exempt', () => {
+    const userId = `free-${crypto.randomUUID()}@example.test`;
+    expect(getBillingEntitlements(userId)).toMatchObject({
+      planId: 'viewer',
+      decrypt: true,
+      api: false,
+      priority: -5,
+      freeTier: true,
+      rollingDecryptLimit: 3,
+      rollingDecryptWindowMs: 30 * 24 * 60 * 60 * 1000,
+    });
+    expect(getBillingEntitlements('root')).toEqual({ planId: 'viewer', decrypt: true, api: true, priority: 0 });
+  });
+
   test('grants decrypts without API access on the regular plan', () => {
     expect(resolveBillingEntitlements([subscription('regular')])).toMatchObject({
       planId: 'regular',
@@ -178,7 +192,15 @@ describe('prepaid billing access codes', () => {
       expect(redeemBillingAccessCode(expired!.code, userId, now + 24 * 60 * 60 * 1000)).toEqual({ error: 'invalid_or_expired' });
       expect(redeemBillingAccessCode(active!.code, userId, now + 1000)).toHaveProperty('accessCode');
       expect(revokeBillingAccessCode(active!.accessCode.id, now + 2000)).toMatchObject({ revokedAt: new Date(now + 2000).toISOString() });
-      expect(getBillingEntitlements(userId)).toMatchObject({ planId: 'viewer', decrypt: false, api: false });
+      expect(getBillingEntitlements(userId)).toMatchObject({
+        planId: 'viewer',
+        decrypt: true,
+        api: false,
+        priority: -5,
+        freeTier: true,
+        rollingDecryptLimit: 3,
+        rollingDecryptWindowMs: 30 * 24 * 60 * 60 * 1000,
+      });
       expect(listBillingAccessCodes().find((code) => code.id === active!.accessCode.id)).toHaveProperty('revokedAt');
     } finally {
       replaceBillingSnapshot(previousSnapshot);

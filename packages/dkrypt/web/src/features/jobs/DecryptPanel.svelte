@@ -40,7 +40,7 @@
 	import { liveState } from "#lib/live.svelte";
 	import { requestNotificationPermission } from "#lib/notifications";
 	import { PermissionFlag } from "#lib/permissions";
-	import { pushAppFavoritesPref, sessionHasPermission, sessionState } from "#lib/session.svelte";
+import { pushAppFavoritesPref, sessionCanViewOperationalDashboard, sessionHasPermission, sessionState } from "#lib/session.svelte";
 	import {
 		formatSearchResultMeta,
 		shouldShowSearchResultStatus,
@@ -142,6 +142,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	const canDecrypt = $derived(
 		sessionHasPermission(PermissionFlag.requestDecrypt),
 	);
+	const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
 	const canRequestTestFlight = $derived(
 		sessionHasPermission(PermissionFlag.requestTestFlightSubscriptions),
 	);
@@ -833,7 +834,7 @@ import { decryptSearchJumpState, showToast } from "#lib/ui.svelte";
 	bundleId={testflightBundleId}
 	appId={testflightAppId}
 	trackName={testflightTrackName}
-	devices={testflightDevices}
+	devices={canViewOperationalDashboard ? testflightDevices : []}
 	onOpenChange={(v) => (testflightOpen = v)}
 	onDecrypt={decryptTestFlightBuild}
 />

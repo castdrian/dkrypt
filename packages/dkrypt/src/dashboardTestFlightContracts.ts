@@ -141,6 +141,7 @@ export const testFlightCatalogAppResponseSchema = Type.Object({
   sellerName: Type.Optional(Type.String()),
   category: Type.Optional(Type.String()),
   devices: Type.Array(Type.Object({ id: identifierSchema, name: Type.String(), verifiedAt: Type.Optional(Type.Number()) }, { additionalProperties: true })),
+  available: Type.Optional(Type.Boolean()),
   lastVerifiedAt: Type.Number(),
   deviceSource: Type.Literal(true),
 }, { additionalProperties: true });

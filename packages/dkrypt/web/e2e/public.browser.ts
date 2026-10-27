@@ -59,7 +59,7 @@ async function waitForBrowserFrames(page: Page): Promise<void> {
   );
 }
 
-async function mockAuthenticatedSession(page: Page, permissions: string): Promise<void> {
+async function mockAuthenticatedSession(page: Page, permissions: string, freeTier = false): Promise<void> {
   await page.unroute('**/v1/auth/session');
   await page.route('**/v1/auth/session', async (route) => {
     await route.fulfill({
@@ -69,6 +69,7 @@ async function mockAuthenticatedSession(page: Page, permissions: string): Promis
         sub: 'member',
         displayName: 'Administrator',
         permissions,
+        freeTier,
         identities: [],
         linkedProviders: [],
         githubOauthEnabled: false,
@@ -86,8 +87,8 @@ async function mockAuthenticatedSession(page: Page, permissions: string): Promis
   });
 }
 
-async function mockAuthenticatedDashboard(page: Page, permissions: string): Promise<void> {
-  await mockAuthenticatedSession(page, permissions);
+async function mockAuthenticatedDashboard(page: Page, permissions: string, freeTier = false): Promise<void> {
+  await mockAuthenticatedSession(page, permissions, freeTier);
   await page.route('**/v1/dashboard/overview*', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -115,6 +116,44 @@ async function mockAuthenticatedDashboard(page: Page, permissions: string): Prom
     localStorage.setItem('onboardingDismissed', 'true');
   });
 }
+
+test('Free members get a clear upgrade path on desktop and mobile', async ({ page }) => {
+  await mockAuthenticatedDashboard(page, '2', true);
+  const plans = publicPricingPlans.map((plan) => ({ ...plan, priceId: `price_${plan.id}` }));
+  await page.route('**/v1/billing', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      enabled: true,
+      provider: 'stripe',
+      environment: 'live',
+      managedPayments: true,
+      missingConfiguration: [],
+      plans,
+      legacyBilling: false,
+      entitlement: { planId: 'viewer', decrypt: true, api: false, priority: -5, freeTier: true },
+      quota: { limit: 3, used: 1, remaining: 2, windowMs: 30 * 24 * 60 * 60 * 1000 },
+      decryptCredits: { available: 0, grants: [], purchaseEnabled: false, purchaseQuantity: 0 },
+      usageForecast: { sampleDays: 0, jobsInSample: 0, averagePerDay: 0, daysUntilAllowanceUsed: null },
+      providers: {
+        stripe: { enabled: true, ready: true, environment: 'live' },
+        crypto: { enabled: false, ready: false, environment: 'live', provider: 'nowpayments', assets: [] },
+      },
+    }) });
+  });
+
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?tab=home');
+    const banner = page.getByRole('region', { name: 'Free plan' });
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Three new decrypts every 30 days');
+    await expect(banner).toContainText('API access');
+    await expect(page.getByRole('button', { name: 'API keys', exact: true })).toHaveCount(0);
+    const comparePlans = banner.getByRole('link', { name: 'Compare plans' });
+    await expect(comparePlans).toBeVisible();
+    await comparePlans.click();
+    await expect(page.locator('h2').filter({ hasText: 'Choose your dkrypt plan' })).toBeVisible();
+  }
+});
 
 async function mockVisualDashboardData(page: Page): Promise<void> {
   await page.route('**/v1/dashboard/**', async (route) => {

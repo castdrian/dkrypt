@@ -32,6 +32,7 @@ import {
   createTestFlightSubscription,
   deleteDevice,
   deletePasskey,
+  deleteUserPersonalData,
   deleteBackupSnapshot,
   exportBackup,
   drillBackupSnapshot,
@@ -583,7 +584,7 @@ describe('exportBackup / importBackup', () => {
     addAllowedUser('roundtrip-user', [role.id], 'tester');
     const backup = exportBackup();
 
-    expect(backup.backupVersion).toBe(15);
+    expect(backup.backupVersion).toBe(16);
     expect(backup.allowedUsers.some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(backup).not.toHaveProperty('projects');
 
@@ -591,6 +592,29 @@ describe('exportBackup / importBackup', () => {
     expect(result.ok).toBe(true);
     expect(listAllowedUsers().some((u) => u.username === 'roundtrip-user')).toBe(true);
     expect(getRole(role.id)).toMatchObject({ id: role.id, name: 'Roundtrip Role' });
+  });
+
+  test('round-trips recent Free decrypt quota timestamps without job identifiers', () => {
+    const username = `free-quota-backup-${randomUUID()}@example.test`;
+    addAllowedUser(username, [], 'tests');
+    const database = openStateDatabase({
+      stateDir: config.stateDir,
+      filename: config.stateDatabaseFile,
+      busyTimeoutMs: config.stateDbBusyTimeoutMs,
+    });
+    const completedAt = Date.now();
+
+    try {
+      database.db.query('INSERT INTO free_decrypt_quota (owner_id, job_id, reserved_at, completed_at) VALUES (?, NULL, NULL, ?)').run(username, completedAt);
+      const backup = exportBackup();
+      expect(backup.freeDecryptQuotaCompletions).toContainEqual({ ownerId: username, completedAt });
+      expect(backup.freeDecryptQuotaCompletions[0]).not.toHaveProperty('jobId');
+      expect(importBackup(backup, 'tests').ok).toBeTrue();
+      expect(database.db.query('SELECT owner_id, completed_at FROM free_decrypt_quota WHERE owner_id = ?').all(username)).toEqual([{ owner_id: username, completed_at: completedAt }]);
+    } finally {
+      deleteUserPersonalData(username);
+      database.close();
+    }
   });
 
   test('restoring an older backup does not carry quota usage from the current installation', () => {

@@ -214,7 +214,7 @@
                   </div>
                   <div class="mt-0.5 truncate text-xs text-muted">{bundleId ?? 'Waiting for app metadata'}</div>
                   {#if app}
-                    <div class="mt-1 truncate text-[11px] text-muted">{app.devices.map((device) => device.name).join(', ')}</div>
+                    <div class="mt-1 truncate text-[11px] text-muted">{canViewDevices ? app.devices.map((device) => device.name).join(', ') : 'Available via TestFlight'}</div>
                   {:else if subscription && canManage}
                     <div class="mt-1 flex items-center gap-1 text-[11px] text-muted"><UserRound class="h-3 w-3" /> {subscription.requestedByDisplayName ?? subscription.requestedBy}</div>
                   {/if}

@@ -62,6 +62,13 @@ export function getRecentlyVerifiedTestFlightDevices(
   ).map(({ id, name }) => ({ id, name }));
 }
 
+export function isTestFlightAppAvailable(
+  app: { devices: Array<{ id: string; name: string; verifiedAt?: number }>; available?: boolean },
+  now = Date.now(),
+): boolean {
+  return app.available === true || getRecentlyVerifiedTestFlightDevices(app, now).length > 0;
+}
+
 export function parseBatchQueueEntries(raw: string, source: BatchQueueSource): BatchQueueParseResult {
   const seen = new Set<string>();
   const seenBundleIds = new Set<string>();

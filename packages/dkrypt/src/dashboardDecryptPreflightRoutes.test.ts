@@ -11,12 +11,14 @@ import type { DeviceHealth } from '#deviceHealth.js';
 import type { DeviceRecord } from '#store/state.js';
 import { TestFlightCatalogUnavailableError, type TestFlightCatalogApp } from '#testflightSubscriptions.js';
 
-function sessionCookie(permissions: bigint): string {
+function sessionCookie(permissions: bigint, userId = 'root'): string {
   let value = '';
   const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as Response;
-  setSessionCookie(response, { sub: 'root', permissions });
+  setSessionCookie(response, { sub: userId, permissions });
   return value.split(';', 1)[0]!;
 }
+
+const operatorPermissions = PermissionFlag.requestDecrypt | PermissionFlag.viewDevices;
 
 function createDevice(id: string, overrides: Partial<DeviceRecord> = {}): DeviceRecord {
   return {
@@ -101,7 +103,7 @@ test('decrypt preflight limits checks to enabled devices and returns shared queu
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app', versionLabel: ' v2 ', installSizeBytes: 64 },
     });
 
@@ -132,6 +134,39 @@ test('decrypt preflight limits checks to enabled devices and returns shared queu
   }
 });
 
+test('regular members receive only a simple preflight summary while the server checks devices internally', async () => {
+  const device = createDevice('private-device', { name: 'Private iPad' });
+  const checkedDevices: string[] = [];
+  const server = build({
+    getEffectiveDevices: () => [device],
+    getDeviceHealth: async (deviceId) => {
+      checkedDevices.push(deviceId);
+      return createHealth({ internetAccess: true });
+    },
+    getDeviceInstallBlocker: () => undefined,
+    getDeviceReadiness: () => ({ score: 100, state: 'ready', reasons: [] }),
+  });
+
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/decrypt/preflight',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt, `free-${crypto.randomUUID()}@example.test`) },
+      payload: { bundleId: 'com.example.free' },
+    });
+    const body = response.json() as Record<string, unknown>;
+
+    expect(response.statusCode).toBe(200);
+    expect(body).toMatchObject({ canQueue: true, quota: { freeTier: true, limit: 3, remaining: 3, windowMs: 30 * 24 * 60 * 60 * 1000 }, devices: [] });
+    expect(body).not.toHaveProperty('queueLength');
+    expect(body).not.toHaveProperty('estimatedDurationMs');
+    expect(response.body).not.toContain(device.name);
+    expect(checkedDevices).toEqual([device.id]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('App Store preflight reports the shared SpringBoard bridge outage', async () => {
   const device = createDevice('appstore-device');
   const server = build({
@@ -146,7 +181,7 @@ test('App Store preflight reports the shared SpringBoard bridge outage', async (
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app' },
     });
 
@@ -173,7 +208,7 @@ test('preflight does not wait indefinitely for an occupied device-health probe',
     const request = server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.myfitnesspal.mfp' },
     });
     const response = await Promise.race([
@@ -209,7 +244,7 @@ test('TestFlight preflight exposes only verified devices and rejects an ineligib
   });
 
   try {
-    const headers = { cookie: sessionCookie(PermissionFlag.requestDecrypt) };
+    const headers = { cookie: sessionCookie(operatorPermissions) };
     const selectedIneligible = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
@@ -252,7 +287,7 @@ test('TestFlight preflight rejects stale app access while allowing partial devic
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app', testflight: true },
     });
 
@@ -280,7 +315,7 @@ test('a failed device health lookup does not hide other ready devices', async ()
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app' },
     });
 
@@ -339,19 +374,19 @@ test('decrypt preflight enforces permission and enabled-device selection without
     const unscoped = await permissionServer.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app', projectId: 'hidden' },
     });
     const disabledDevice = await disabledDeviceServer.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app', deviceId: 'disabled-device' },
     });
     const drainingDevice = await drainingDeviceServer.inject({
       method: 'POST',
       url: '/v1/dashboard/decrypt/preflight',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(operatorPermissions) },
       payload: { bundleId: 'com.example.app', deviceId: 'draining-device' },
     });
 

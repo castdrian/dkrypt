@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import Fastify from 'fastify';
 import type { ArtifactRecord } from '#artifacts.js';
+import { exportBillingSnapshot, replaceBillingSnapshot, upsertBillingSubscription } from '#billing.js';
 import { config } from '#config.js';
 import { apiIdempotencyRegistry } from '#idempotency.js';
 import { DailyDecryptLimitError } from '#jobs/repository.js';
@@ -240,6 +241,7 @@ test('typed artifact routes enforce API-key bundle scopes and stream downloads',
 });
 
 test('public API keys use bundle scopes with one shared artifact library', async () => {
+  const previousBilling = exportBillingSnapshot();
   const ownerId = `api-account-owner-${crypto.randomUUID()}`;
   const role = createRole({ name: `API account role ${crypto.randomUUID()}`, color: '#3498db', permissions: serializeBits(PermissionFlag.createApiKeys) }, 'test');
   addAllowedUser(ownerId, [role.id], 'test');
@@ -275,6 +277,19 @@ test('public API keys use bundle scopes with one shared artifact library', async
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
 
   try {
+    replaceBillingSnapshot({ customers: [], subscriptions: [] });
+    upsertBillingSubscription({
+      provider: 'stripe',
+      subscriptionId: `sub_${ownerId}`,
+      customerId: `customer_${ownerId}`,
+      userId: ownerId,
+      status: 'active',
+      planId: 'developer',
+      priceId: 'price_developer',
+      productId: 'product_developer',
+      occurredAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
     await server.register(createArtifactCatalogRoutes({
       listArtifacts: () => ({ artifacts: [artifact], total: 1, totalBytes: 12, maxBytes: 100 }),
       getArtifactById: (id) => id === artifact.id ? artifact : undefined,
@@ -316,6 +331,7 @@ test('public API keys use bundle scopes with one shared artifact library', async
     revokeApiKey(apiKey.id, ownerId, true);
     revokeApiKey(outOfScopeKey.id, ownerId, true);
     await server.close();
+    replaceBillingSnapshot(previousBilling);
   }
 });
 

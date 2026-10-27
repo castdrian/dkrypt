@@ -218,12 +218,13 @@ const optionalVersionedProperties = {
   billing: Type.Optional(JsonObject),
   identities: Type.Optional(JsonObject),
   decryptQuotaLedger: Type.Optional(Type.Array(JsonObject)),
+  freeDecryptQuotaCompletions: Type.Optional(Type.Array(JsonObject)),
   decryptCreditRecords: Type.Optional(Type.Array(JsonObject)),
   mcpRecords: Type.Optional(Type.Array(JsonObject)),
   apiKeyRequestHistory: Type.Optional(Type.Record(Type.String(), Type.Array(JsonObject))),
 };
 
-function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
+function backupVersionSchema<const Version extends 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16>(version: Version, requiredVersionedProperties: Record<string, TSchema> = {}) {
   return Type.Object({
     backupVersion: Type.Literal(version),
     ...commonBackupProperties,
@@ -245,11 +246,12 @@ const BackupV12 = backupVersionSchema(12, { ...BackupV11Fields, apiKeyRequestHis
 const BackupV13 = backupVersionSchema(13, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject) });
 const BackupV14 = backupVersionSchema(14, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject), mcpRecords: Type.Array(JsonObject) });
 const BackupV15 = backupVersionSchema(15, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject), mcpRecords: Type.Array(JsonObject) });
+const BackupV16 = backupVersionSchema(16, { ...BackupV11Fields, apiKeyRequestHistory: Type.Record(Type.String(), Type.Array(JsonObject)), decryptCreditRecords: Type.Array(JsonObject), mcpRecords: Type.Array(JsonObject), freeDecryptQuotaCompletions: Type.Array(Type.Object({ ownerId: identifierSchema, completedAt: Type.Number() }, { additionalProperties: false })) });
 
-export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11, BackupV12, BackupV13, BackupV14, BackupV15]);
+export const backupImportBodySchema = Type.Union([BackupV3, BackupV4, BackupV5, BackupV6, BackupV7, BackupV8, BackupV9, BackupV10, BackupV11, BackupV12, BackupV13, BackupV14, BackupV15, BackupV16]);
 
 export const backupExportResponseSchema = Type.Object({
-  ...BackupV15.properties,
+  ...BackupV16.properties,
   exportedAt: Type.Number(),
 }, { additionalProperties: true });
 

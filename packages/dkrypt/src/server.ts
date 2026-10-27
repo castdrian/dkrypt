@@ -72,7 +72,7 @@ import { stopNotificationDigestScheduler } from '#notify.js';
 import { closeDashboardConnections } from '#events.js';
 import { startSpan, startTelemetry, stopTelemetry, traceContextFromHeader, type SpanHandle } from '#telemetry.js';
 import { FixedWindowRateLimiter, setRateLimitHeaders } from '#util/rateLimit.js';
-import { DailyDecryptLimitError } from '#jobs/repository.js';
+import { DailyDecryptLimitError, FreeDecryptLimitError } from '#jobs/repository.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { startRustDeviceEventMonitoring } from '#deviceBridgeEvents.js';
 import { createPublicOpenApiDocument, isPublicApiKeyRoute } from '#publicApi.js';
@@ -165,6 +165,11 @@ export async function buildServer(options: {
       return;
     }
     if (error instanceof DailyDecryptLimitError) {
+      reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
+      reply.code(429).send({ error: error.message, code: error.code, message: error.message, requestId: request.id, retryable: true, remediation: { nextAvailableAt: error.nextAvailableAt } });
+      return;
+    }
+    if (error instanceof FreeDecryptLimitError) {
       reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
       reply.code(429).send({ error: error.message, code: error.code, message: error.message, requestId: request.id, retryable: true, remediation: { nextAvailableAt: error.nextAvailableAt } });
       return;

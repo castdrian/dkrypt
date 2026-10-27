@@ -70,6 +70,11 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
+  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier) {
+    res.error('free_api_unavailable', 'API access is available on paid plans', 403, false);
+    return;
+  }
+
   res.locals.apiKeyScope = result.allowedBundleIds;
   res.locals.apiKeyOwner = result.ownerId;
   res.locals.apiKeyPriority = result.priority ?? 0;
@@ -102,6 +107,10 @@ export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyRepl
           return;
         }
         const ownerId = policy.billingOwnerId ?? 'root';
+        if (ownerId !== 'root' && getBillingEntitlements(ownerId).freeTier) {
+          reply.code(403).send({ error: 'API access is available on paid plans', code: 'free_api_unavailable', message: 'API access is available on paid plans', requestId: request.id, retryable: false });
+          return;
+        }
         if (policy.billingOwnerId && ownerId !== 'root' && !hasPermission(getUserEffectivePermissions(ownerId), PermissionFlag.requestDecrypt)) {
           reply.code(403).send({ error: 'the automation owner no longer has decrypt access', code: 'automation_owner_unavailable', message: 'the automation owner no longer has decrypt access', requestId: request.id, retryable: false });
           return;
@@ -118,6 +127,10 @@ export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyRepl
     return;
   }
   const keyId = result.keyId;
+  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier) {
+    reply.code(403).send({ error: 'API access is available on paid plans', code: 'free_api_unavailable', message: 'API access is available on paid plans', requestId: request.id, retryable: false });
+    return;
+  }
   if (keyId && !isPublicApiKeyRoute(request.method, request.routeOptions.url)) {
     rejectOutOfScopeApiKey(request, reply, keyId);
     return;

@@ -47,7 +47,7 @@ test('insights is served through the typed dashboard API and preserves bounded q
     const response = await server.inject({
       method: 'GET',
       url: '/v1/dashboard/insights?topApps=invalid&trendDays=999',
-      headers: { cookie: sessionCookie() },
+      headers: { cookie: sessionCookie(PermissionFlag.viewDevices) },
     });
 
     expect(response.statusCode).toBe(200);

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { expect, test } from 'bun:test';
+import { exportBillingSnapshot, replaceBillingSnapshot } from '#billing.js';
 import { buildTestServer } from '#testServer.js';
 import { config } from '#config.js';
 import { PermissionFlag } from '#permissions.js';
@@ -69,11 +70,57 @@ test('MCP requests require OAuth bearer authorization and do not accept an empty
   }
 });
 
+test('Free accounts cannot authorize MCP access', async () => {
+  const server = await buildTestServer({ includePublicRoutes: false });
+  const userId = `mcp-free-${randomBytes(8).toString('hex')}@example.test`;
+  const role = createRole({ name: `MCP Free ${randomBytes(4).toString('hex')}`, color: '#7958e8', permissions: PermissionFlag.administrator.toString() }, 'test setup');
+  addAllowedUser(userId, [role.id], 'test setup');
+  const client = await server.inject({
+    method: 'POST',
+    url: '/oauth/register',
+    payload: { client_name: 'free account test', redirect_uris: ['http://127.0.0.1:43125/callback'], token_endpoint_auth_method: 'none' },
+  });
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.json().client_id,
+    redirect_uri: 'http://127.0.0.1:43125/callback',
+    code_challenge: randomBytes(32).toString('base64url'),
+    code_challenge_method: 'S256',
+    resource: `${config.publicBaseUrl}/v1/mcp`,
+    scope: 'decrypt:plan',
+  });
+
+  try {
+    const response = await server.inject({ method: 'GET', url: `/oauth/authorize?${query}`, headers: { cookie: createSessionCookie(userId) } });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ error: 'insufficient_scope' });
+  } finally {
+    await server.close();
+  }
+});
+
 test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned agent revocation', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
+  const previousBilling = exportBillingSnapshot();
   const userId = `mcp-${randomBytes(8).toString('hex')}@example.test`;
   const role = createRole({ name: `MCP ${randomBytes(4).toString('hex')}`, color: '#7958e8', permissions: PermissionFlag.administrator.toString() }, 'test setup');
   addAllowedUser(userId, [role.id], 'test setup');
+  const now = new Date().toISOString();
+  replaceBillingSnapshot({
+    ...previousBilling,
+    subscriptions: [...previousBilling.subscriptions, {
+      provider: 'stripe',
+      subscriptionId: `sub_${randomBytes(8).toString('hex')}`,
+      customerId: `cus_${randomBytes(8).toString('hex')}`,
+      userId,
+      status: 'active',
+      planId: 'access',
+      priceId: 'price_access',
+      productId: 'product_access',
+      occurredAt: now,
+      updatedAt: now,
+    }],
+  });
   const cookie = createSessionCookie(userId);
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -188,6 +235,7 @@ test('MCP OAuth performs PKCE consent, one-time code exchange, and user-owned ag
     const mcpResponse = await server.inject({ method: 'POST', url: '/v1/mcp', headers: { authorization: `Bearer ${tokens.access_token}` }, payload: initializePayload });
     expect(mcpResponse.statusCode).toBe(401);
   } finally {
+    replaceBillingSnapshot(previousBilling);
     await server.close();
   }
 });

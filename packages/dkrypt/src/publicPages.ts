@@ -25,7 +25,7 @@ const pageContent: Record<string, string> = {
     <main>
       <h1>dkrypt</h1>
       <p>dkrypt is a subscription service for authorized iOS application decryption workflows, request tracking, downloadable results, and optional API access.</p>
-      <p>Every account begins with viewer access. Paid plans include IPA Library access and a rolling 24-hour decrypt allowance.</p>
+      <p>Free accounts include 3 new decrypts per rolling 30 days, read-only IPA Library metadata, and a 30-minute download window for each result. Paid plans include persistent IPA downloads and higher decrypt allowances.</p>
       <p><a href="/pricing">View pricing</a> or <a href="/#sign-in">sign in</a>.</p>
     </main>
   `,
@@ -43,6 +43,8 @@ const pageContent: Record<string, string> = {
         <p>Stripe plans renew monthly until canceled and show applicable card or bank taxes in Stripe checkout. Crypto access is granted for 30 days after a verified NOWPayments invoice and requires another payment to renew. Stripe Managed Payments handles eligible card or bank purchases as merchant of record. Crypto purchases are outside Stripe Managed Payments, do not use Stripe, and do not require a billing address in the configured checkout. NOWPayments sends funds to the merchant payout wallet, while dkrypt does not store full card details, crypto custody, or wallet private keys.</p>
         <h2>Cancellation and refunds</h2>
         <p>Stripe subscriptions can be canceled through the billing portal and normally end at the current period. Crypto renewal is stopped immediately from dkrypt. Refunds follow the provider-specific refund process, the <a href="/refund-policy">Refund Policy</a>, and mandatory consumer law.</p>
+        <h2>Free plan and result retention</h2>
+        <p>Free accounts receive up to 3 new decrypts in each rolling 30-day period. A successful result is available for download for 30 minutes, after which the file, download access, and associated job history are deleted. Shared IPA Library files are not included in the Free plan; Free accounts can browse app and build metadata only.</p>
         <h2>Service availability and liability</h2>
         <p>The service is provided on an as-available basis and may change or experience interruptions. To the fullest extent permitted by law, implied warranties are disclaimed and aggregate liability will not exceed the amount paid for dkrypt during the six months before the event giving rise to the claim.</p>
         <h2>Contact</h2>
@@ -59,7 +61,7 @@ const pageContent: Record<string, string> = {
         <h2>Data collected</h2>
         <p>dkrypt processes identity-provider account details, billing and subscription identifiers, service requests and results, API-key metadata, preferences, support communications, session identifiers, timestamps, request records, and security audit data. Stripe processes card or bank payment details, and NOWPayments processes crypto invoice and payment details. dkrypt does not store full card details or wallet private keys.</p>
         <h2>How data is used</h2>
-        <p>Data is used to authenticate users, provide requested features, administer subscriptions and entitlements, operate queues and notifications, provide support, secure the service, prevent abuse, diagnose faults, and meet legal obligations.</p>
+        <p>Data is used to authenticate users, provide requested features, administer subscriptions and entitlements, operate queues and notifications, provide support, secure the service, prevent abuse, diagnose faults, and meet legal obligations. Free decrypt results and their job history are retained for up to 30 minutes; minimal completion timestamps are retained for 30 days to enforce the Free allowance.</p>
         <h2>Sharing and processors</h2>
         <p>Data is shared only as needed with GitHub or Discord for authentication, Stripe for card or bank payment and subscription administration, NOWPayments for crypto invoices and payment status, infrastructure providers, Apple services needed to fulfill authorized requests, and authorities where required by law. Personal data is not sold or used for third-party behavioral advertising.</p>
         <h2>Cookies, retention, and security</h2>

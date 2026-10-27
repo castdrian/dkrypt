@@ -51,12 +51,26 @@
       <div class="text-accent mb-3 text-sm font-semibold tracking-wide uppercase">Simple monthly access</div>
       <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Choose a dkrypt plan</h1>
       <p class="mt-4 text-sm leading-6 text-muted">
-        Every account starts with viewer access. Paid plans add IPA Library access and new decrypts; higher tiers add API access and priority.
+        Start with three decrypts every 30 days. Upgrade for longer result access, downloadable IPA Library files, and higher limits.
       </p>
     </div>
 
     {#if loading}<p class="py-12 text-center text-sm text-muted">Loading plans…</p>{:else if loadError}<div class="py-12 text-center text-sm text-muted">Pricing is temporarily unavailable. <button class="underline" onclick={() => void loadPlans()}>Try again</button></div>{/if}
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <Card class="flex h-full flex-col" contentClass="flex flex-1 flex-col">
+        <div class="flex min-h-72 flex-1 flex-col">
+          <div class="mb-4 min-h-24"><div class="flex items-center gap-2"><h2 class="text-base font-semibold">Free</h2><Badge variant="secondary">Start here</Badge></div><p class="mt-1 text-sm leading-5 text-muted">Try dkrypt with a small monthly allowance.</p></div>
+          <div class="mb-5"><span class="text-3xl font-semibold">€0</span><span class="text-sm text-muted">/month</span></div>
+          <div class="mb-5 flex flex-1 flex-col gap-2 text-sm">
+            <div class="flex items-center gap-2"><Check class="h-4 w-4 text-ok" /> 3 new decrypts / rolling 30 days</div>
+            <div class="flex items-center gap-2"><Check class="h-4 w-4 text-ok" /> 30 minutes to download each result</div>
+            <div class="flex items-center gap-2"><Check class="h-4 w-4 text-ok" /> Browse IPA Library metadata</div>
+            <div class="flex items-center gap-2 text-muted"><X class="h-4 w-4" /> Shared IPA downloads and API access</div>
+            <div class="flex items-center gap-2 text-muted"><X class="h-4 w-4" /> Lowest queue priority</div>
+          </div>
+          <a href="/#sign-in" class="{buttonVariants('secondary')} w-full">Create a free account</a>
+        </div>
+      </Card>
       {#each plans as plan (plan.id)}
         <Card class={plan.id === 'unlimited_priority' || plan.id === 'priority_api' ? 'flex h-full flex-col border-accent shadow-lg shadow-accent/10' : 'flex h-full flex-col'} contentClass="flex flex-1 flex-col">
           <div class="flex min-h-72 flex-1 flex-col">

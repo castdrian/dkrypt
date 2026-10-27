@@ -12,6 +12,7 @@ import { DEFAULT_PROJECT_ID, getAllJobHistory, getDeviceActivityPage, getEffecti
 import { getOperationalIncidentStateAt, listOperationalIncidents, reconcileOperationalIncidents, updateOperationalIncident } from '#store/incidentRepository.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
+import { canViewJobForUser } from '#dashboardAccess.js';
 
 type IncidentEvent = {
   id: string;
@@ -156,9 +157,11 @@ export function createDashboardIncidentRoutes(overrides: Partial<DashboardIncide
       }
       if (canViewJobs) {
         for (const entry of services.getAllJobHistory()) {
+          if (!canViewJobForUser(entry, session.sub, session.permissions)) continue;
           events.push(...jobEvents(entry, false, since));
         }
         for (const entry of services.getActiveJobs()) {
+          if (!canViewJobForUser(entry, session.sub, session.permissions)) continue;
           events.push(...jobEvents(entry, true, since));
         }
       }

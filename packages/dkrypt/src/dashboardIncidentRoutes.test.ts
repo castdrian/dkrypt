@@ -60,6 +60,38 @@ test('incident timeline merges authorized jobs, device history, and deployment o
   }
 });
 
+test('member incident timelines include only their own job history', async () => {
+  const now = Date.now();
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+  await server.register(createDashboardIncidentRoutes({
+    getEffectiveDevices: () => [],
+    getDeviceActivityPage: () => ({ entries: [], total: 0 }),
+    getAllJobHistory: () => [
+      { id: 'member-job', bundleId: 'com.example.member', queuedBy: 'root', status: 'done', source: 'manual', createdAt: now - 100, finishedAt: now - 50, timeline: [{ at: now - 50, label: 'Finished', status: 'done' }] },
+      { id: 'other-job', bundleId: 'com.example.other', queuedBy: 'another-user', status: 'done', source: 'manual', createdAt: now - 100, finishedAt: now - 50, timeline: [{ at: now - 50, label: 'Finished', status: 'done' }] },
+    ] as never,
+    getActiveJobs: () => [
+      { id: 'member-active', bundleId: 'com.example.active', billingOwnerId: 'root', status: 'running', source: 'manual', createdAt: now - 100, timeline: [{ at: now - 20, label: 'Started', status: 'running' }] },
+      { id: 'other-active', bundleId: 'com.example.active', billingOwnerId: 'another-user', status: 'running', source: 'manual', createdAt: now - 100, timeline: [{ at: now - 20, label: 'Started', status: 'running' }] },
+    ] as never,
+    getRecentLogs: () => ({ logs: [], total: 0 }),
+    listNotifications: () => ({ notifications: [], unread: 0 }),
+  }));
+
+  try {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/v1/dashboard/incidents?since=${now - 1000}`,
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().events.map((event: { jobId: string }) => event.jobId).filter(Boolean).sort()).toEqual(['member-active', 'member-job']);
+  } finally {
+    await server.close();
+  }
+});
+
 test('Action Center separates view and management permissions and includes the shared workspace', async () => {
   const incident = openIncident({ projectId: 'default', sourceKey: `job:${randomUUID()}`, sourceId: randomUUID(), kind: 'job', title: 'Decrypt failed', detail: 'com.example.app' });
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();

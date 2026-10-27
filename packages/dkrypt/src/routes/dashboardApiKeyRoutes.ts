@@ -58,6 +58,7 @@ import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { publicApiOperations } from '#publicApi.js';
 import { getActiveJobs } from '#jobs/store.js';
 import { isBundleIdAllowed } from '#apiKeyAccess.js';
+import { getBillingEntitlements } from '#billing.js';
 
 const canRequestApiKeys = fastifyRequirePermission(PermissionFlag.requestApiKeys);
 const canAccessApi = fastifyRequirePermission(PermissionFlag.createApiKeys);
@@ -140,6 +141,11 @@ const rawBodies = new WeakMap<FastifyRequest, unknown>();
 export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.addHook('preHandler', fastifyRequireSession);
   server.addHook('preHandler', recordFastifyDashboardActivity);
+  server.addHook('preHandler', (request, reply, done) => {
+    const userId = getFastifySession(request)?.sub;
+    if (!userId || !getBillingEntitlements(userId).freeTier) return done();
+    reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'API keys are available on paid plans'));
+  });
   server.addHook('preValidation', async (request) => {
     rawBodies.set(request, request.body === undefined ? undefined : structuredClone(request.body));
   });
@@ -190,7 +196,9 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   }, (request, reply) => {
     const input = parseApiKeyInput(request);
     if (!input) return respondWithError(request, reply, 400, 'name is required');
-    const record = requestApiKey(input.name, getFastifySession(request)!.sub, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
+    const ownerId = getFastifySession(request)!.sub;
+    if (getBillingEntitlements(ownerId).freeTier) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
+    const record = requestApiKey(input.name, ownerId, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
     void notify('keyRequest', {
       title: 'New API key request',
       description: `**${getFastifySession(request)!.sub}** requested a new key ("${input.name}") - approve it on the API Keys tab.`,
@@ -207,6 +215,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   }, (request, reply) => {
     const input = parseApiKeyInput(request);
     if (!input) return respondWithError(request, reply, 400, 'name is required');
+    if (getBillingEntitlements(getFastifySession(request)!.sub).freeTier) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
     reply.code(201);
     return createApiKey(input.name, getFastifySession(request)!.sub, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
   });

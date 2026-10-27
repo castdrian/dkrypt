@@ -183,6 +183,9 @@ export interface BillingEntitlements {
   scheduledChangeAction?: string;
   scheduledChangeAt?: string;
   dailyDecryptLimit?: number;
+  rollingDecryptLimit?: number;
+  rollingDecryptWindowMs?: number;
+  freeTier?: boolean;
   apiRatePerMinute?: number;
   legacy?: boolean;
 }
@@ -483,12 +486,10 @@ export function listBillingEntitlementHistory(subscriptionId?: string): BillingE
 
 export function getBillingEntitlements(userId: string): BillingEntitlements {
   const subscriptionEntitlements = resolveBillingEntitlements(billingRepository.listSubscriptions({ userId }));
-  if (subscriptionEntitlements.planId !== 'viewer') return subscriptionEntitlements;
+  if (subscriptionEntitlements.planId !== 'viewer' && !subscriptionEntitlements.paused) return subscriptionEntitlements;
   const accessCode = activeBillingAccessCode(userId);
-  if (!accessCode) return subscriptionEntitlements;
-  const plan = planDefinitions.find((definition) => definition.id === accessCode.planId);
-  if (!plan) return subscriptionEntitlements;
-  return {
+  const plan = accessCode ? planDefinitions.find((definition) => definition.id === accessCode.planId) : undefined;
+  if (accessCode && plan) return {
     planId: plan.id,
     decrypt: plan.decrypt,
     api: plan.api,
@@ -501,6 +502,29 @@ export function getBillingEntitlements(userId: string): BillingEntitlements {
     apiRatePerMinute: plan.apiRatePerMinute,
     legacy: plan.legacy,
   };
+  if (userId.trim().toLowerCase() === 'root') return { planId: 'viewer', decrypt: true, api: true, priority: 0 };
+  if (subscriptionEntitlements.paused) return {
+    ...subscriptionEntitlements,
+    planId: 'viewer',
+    decrypt: true,
+    api: false,
+    priority: -5,
+    freeTier: true,
+    rollingDecryptLimit: 3,
+    rollingDecryptWindowMs: 30 * 24 * 60 * 60 * 1000,
+    dailyDecryptLimit: undefined,
+    apiRatePerMinute: undefined,
+    legacy: false,
+  };
+  if (!accessCode) return {
+    ...subscriptionEntitlements,
+    decrypt: true,
+    priority: -5,
+    freeTier: true,
+    rollingDecryptLimit: 3,
+    rollingDecryptWindowMs: 30 * 24 * 60 * 60 * 1000,
+  };
+  return subscriptionEntitlements;
 }
 
 export function createBillingAccessCode(input: { planId: string; durationDays: number; redeemWithinDays: number; createdBy?: string; now?: number }): { code: string; accessCode: BillingAccessCode } | undefined {

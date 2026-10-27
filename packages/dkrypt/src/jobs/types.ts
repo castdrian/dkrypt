@@ -41,6 +41,9 @@ export interface Job {
   source: JobSource;
   queuedBy?: string;
   billingOwnerId?: string;
+  freeTierResult?: boolean;
+  temporaryResultExpiresAt?: number;
+  temporaryResultSharedCache?: boolean;
   apiKeyId?: string;
   preferredDeviceId?: string;
   priority: number;

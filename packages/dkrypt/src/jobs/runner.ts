@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '#config.js';
 import { emitJobsChanged } from '#events.js';
@@ -297,6 +297,21 @@ async function finalizeDecryptedIpa(
   }
 
   ensureNotCancelled();
+  if (job.freeTierResult) {
+    const temporaryDirectory = path.join(config.stateDir, 'free-results');
+    const temporaryPath = path.join(temporaryDirectory, `${job.id}.ipa`);
+    await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
+    try {
+      await rename(outputPath, temporaryPath);
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EXDEV') throw error;
+      await copyFile(outputPath, temporaryPath);
+      await rm(outputPath, { force: true });
+    }
+    job.filePath = temporaryPath;
+    return;
+  }
+
   const artifact = await promoteArtifact({
     key: artifactKeyForJob(job),
     bundleId: job.bundleId,

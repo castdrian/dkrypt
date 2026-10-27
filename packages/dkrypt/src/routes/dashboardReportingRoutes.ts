@@ -54,6 +54,7 @@ function boundedQueryInteger(value: string | undefined, fallback: number, minimu
 export function createDashboardReportingRoutes(overrides: Partial<DashboardReportingServices> = {}): FastifyPluginAsyncTypebox {
   const services = { ...defaultServices, ...overrides };
   const canViewAutomation = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation);
+  const canViewOperationalAnalytics = fastifyRequirePermission(PermissionFlag.viewAutomation, PermissionFlag.manageAutomation, PermissionFlag.viewDevices, PermissionFlag.manageDevices, PermissionFlag.viewScheduler);
 
   return async (server) => {
     server.addHook('preHandler', fastifyRequireSession);
@@ -61,6 +62,7 @@ export function createDashboardReportingRoutes(overrides: Partial<DashboardRepor
 
     server.get<DashboardInsightsRoute>('/v1/dashboard/insights', {
       schema: getRouteContract('GET', '/v1/dashboard/insights'),
+      preHandler: canViewOperationalAnalytics,
     }, (request) => {
       return services.getInsightsSummary(
         boundedQueryInteger(request.query.topApps, 5, 1, 25),

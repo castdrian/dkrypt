@@ -64,6 +64,7 @@ export interface TestFlightCatalogApp {
   sellerName?: string;
   category?: string;
   devices: Array<{ id: string; name: string; verifiedAt?: number }>;
+  available?: boolean;
   lastVerifiedAt: number;
   deviceSource: true;
 }
@@ -359,14 +360,14 @@ export async function getVerifiedTestFlightCatalog(options: { requireAllDevices?
   return refreshTestFlightCatalog(true, true);
 }
 
-export async function decorateSearchResults<T extends { bundleId: string; trackId: number }>(results: T[]): Promise<Array<T & { testflight?: Pick<TestFlightCatalogApp, 'appId' | 'devices' | 'lastVerifiedAt'> }>> {
+export async function decorateSearchResults<T extends { bundleId: string; trackId: number }>(results: T[]): Promise<Array<T & { testflight?: Pick<TestFlightCatalogApp, 'appId' | 'devices' | 'available' | 'lastVerifiedAt'> }>> {
   const catalog = await getVerifiedTestFlightCatalog();
   const byBundle = new Map(catalog.map((entry) => [entry.bundleId, entry]));
   const byApp = new Map(catalog.map((entry) => [entry.appId, entry]));
   return results.map((result) => {
     const catalog = byBundle.get(result.bundleId) ?? byApp.get(result.trackId);
     if (!catalog) return result;
-    return { ...result, testflight: { appId: catalog.appId, devices: catalog.devices, lastVerifiedAt: catalog.lastVerifiedAt } };
+    return { ...result, testflight: { appId: catalog.appId, devices: catalog.devices, available: true, lastVerifiedAt: catalog.lastVerifiedAt } };
   });
 }
 

@@ -42,6 +42,7 @@
 	const overview = $derived(liveState.overview);
 	let now = $state(Date.now());
 	const canViewDevices = $derived(sessionHasAnyPermission([PermissionFlag.viewDevices, PermissionFlag.manageDevices]));
+	const canViewOperations = $derived(sessionHasAnyPermission([PermissionFlag.viewDevices, PermissionFlag.manageDevices, PermissionFlag.viewAutomation, PermissionFlag.manageAutomation, PermissionFlag.viewScheduler]));
 	const canManageDevices = $derived(sessionHasAnyPermission([PermissionFlag.manageDevices]));
 	const statusDevices = $derived(overview?.statusDevices ?? overview?.devices.map((device) => ({
 		id: device.id,
@@ -52,11 +53,7 @@
 		reachable: undefined as boolean | undefined,
 	})) ?? []);
 	const primaryStatusDeviceId = $derived(statusDevices.find((device) => device.enabled && !device.draining && device.isPrimary)?.id ?? statusDevices.find((device) => device.enabled && !device.draining)?.id);
-	const primaryDeviceId = $derived(
-		canViewDevices
-			? primaryStatusDeviceId
-			: primaryStatusDeviceId ? "primary" : undefined,
-	);
+	const primaryDeviceId = $derived(canViewDevices ? primaryStatusDeviceId : undefined);
 
 	const diskColor = $derived.by(() => {
 		const pct = overview?.disk?.usedPercent ?? 0;
@@ -126,6 +123,7 @@
 	});
 
 	$effect(() => {
+		if (!canViewOperations) return;
 		return observeJobVolume((snapshot) => {
 			const days = snapshot.data?.days;
 			if (Array.isArray(days)) {
@@ -445,7 +443,7 @@
 
 <Card title="Status" class="status-surface">
 	{#snippet headerExtra()}
-		{#if health}
+		{#if canViewDevices && health}
 			<div
 				class="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-xs text-muted"
 			>
@@ -487,6 +485,16 @@
 			</div>
 		{/if}
 	{/snippet}
+	{#if !canViewOperations}
+		<div class="flex flex-wrap items-center justify-between gap-3 py-2" role="status">
+			<Badge variant={overview?.serviceStatus === "maintenance" ? "warning" : "success"}>
+				{overview?.serviceStatus === "maintenance" ? "Maintenance in progress" : "All systems operational"}
+			</Badge>
+			<span class="text-sm text-muted">
+				{activeJobs === 0 ? "No active decrypts" : `${fmtNumber(activeJobs, 0)} active decrypt${activeJobs === 1 ? "" : "s"}`}
+			</span>
+		</div>
+	{:else}
 	{#if healthError}
 		<p role="status" class="mb-2 text-xs text-warning">{healthError}</p>
 	{/if}
@@ -917,5 +925,6 @@
 				Retry
 			</Button>
 		</div>
+	{/if}
 	{/if}
 </Card>

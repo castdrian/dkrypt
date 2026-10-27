@@ -46,7 +46,7 @@ test('TestFlight browse routes pass through an explicitly selected enabled devic
   }));
 
   try {
-    const cookie = sessionCookie(0n);
+    const cookie = sessionCookie(PermissionFlag.viewDevices);
     const trains = await server.inject({
       method: 'GET',
       url: `/v1/dashboard/testflight/12345/trains?deviceId=${device.id}`,
@@ -147,7 +147,7 @@ test('TestFlight decrypt queues only for a device with verified access', async (
   }));
 
   try {
-    const cookie = sessionCookie(PermissionFlag.requestDecrypt);
+    const cookie = sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices);
     const accepted = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
@@ -209,7 +209,7 @@ test('TestFlight decrypt rejects stale per-device access without requiring every
     const response = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
-      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices) },
       payload: { bundleId: build.bundleId, appId: 12345, build, deviceId: device.id },
     });
 
@@ -237,7 +237,7 @@ test('TestFlight decrypt rejects build mismatches and returns retryable unavaila
   }));
 
   try {
-    const cookie = sessionCookie(PermissionFlag.requestDecrypt);
+    const cookie = sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices);
     const mismatch = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
@@ -278,7 +278,7 @@ test('TestFlight upstream failures return a safe retryable error envelope', asyn
     const response = await server.inject({
       method: 'GET',
       url: '/v1/dashboard/testflight/12345/trains',
-      headers: { cookie: sessionCookie(0n) },
+      headers: { cookie: sessionCookie(PermissionFlag.viewDevices) },
     });
     const body = response.json() as Record<string, unknown>;
     expect(response.statusCode).toBe(502);

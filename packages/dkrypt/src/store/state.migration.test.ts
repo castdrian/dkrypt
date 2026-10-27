@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openStateDatabase, readStateCollection } from '#store/sqlite.js';
+import { PermissionFlag } from '#permissions.js';
 
 async function runStateModule(stateDir: string, script = "await import('./src/store/state.ts')"): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn(
@@ -30,6 +31,46 @@ async function runStateModule(stateDir: string, script = "await import('./src/st
 }
 
 describe('state migrations', () => {
+  test('removes inherited log access from the default member role in existing state', async () => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-default-role-permissions-'));
+    try {
+      const initialLoad = await runStateModule(stateDir);
+      expect(initialLoad.exitCode).toBe(0);
+
+      const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
+      try {
+        const state = database.readState() as Record<string, unknown>;
+        const roles = state.roles as Array<Record<string, unknown>>;
+        const defaultRole = roles.find((role) => role.isDefault)!;
+        expect(defaultRole.permissions).toBe('0');
+        const defaultRoleId = defaultRole.id as string;
+        const legacyRole = { ...defaultRole, permissions: PermissionFlag.viewLogs.toString() };
+        state.roles = roles.map((role) => role.id === defaultRoleId ? legacyRole : role);
+        const payload = JSON.stringify(state);
+        database.db.query('UPDATE state_snapshots SET payload = ?, sha256 = ?, updated_at = ? WHERE id = 1;')
+          .run(payload, createHash('sha256').update(payload).digest('hex'), Date.now());
+        database.db.query('UPDATE roles SET payload = ?, updated_at = ? WHERE id = ?;')
+          .run(JSON.stringify(legacyRole), Date.now(), defaultRoleId);
+      } finally {
+        database.close();
+      }
+
+      const reload = await runStateModule(stateDir);
+      expect(reload.exitCode).toBe(0);
+      const normalizedDatabase = openStateDatabase({ stateDir, filename: 'state.sqlite' });
+      try {
+        const normalizedState = normalizedDatabase.readState() as { roles: Array<{ id: string; permissions: string; isDefault: boolean }> };
+        const defaultRole = normalizedState.roles.find((role) => role.isDefault)!;
+        expect(defaultRole.permissions).toBe('0');
+        expect(readStateCollection(normalizedDatabase.db, 'roles')).toContainEqual(expect.objectContaining({ id: defaultRole.id, permissions: '0' }));
+      } finally {
+        normalizedDatabase.close();
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   test('persists normalized scheduler history before validating its SQLite repository', async () => {
     const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-scheduler-normalization-'));
     try {

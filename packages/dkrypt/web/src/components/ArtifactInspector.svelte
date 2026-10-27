@@ -239,7 +239,7 @@
         <div><dt class="text-muted">Size</dt><dd class="mt-1 font-medium">{fmtSize(artifact.fileSizeBytes)}</dd></div>
         <div><dt class="text-muted">Build</dt><dd class="mt-1 font-medium">{artifact.buildNumber ?? 'Unavailable'}</dd></div>
         <div><dt class="text-muted">Created</dt><dd class="mt-1 font-medium">{fmtTime(Date.parse(artifact.createdAt))}</dd></div>
-        <div><dt class="text-muted">Last accessed</dt><dd class="mt-1 font-medium">{fmtTime(Date.parse(artifact.lastAccessedAt))}</dd></div>
+        <div><dt class="text-muted">Last accessed</dt><dd class="mt-1 font-medium">{artifact.lastAccessedAt ? fmtTime(Date.parse(artifact.lastAccessedAt)) : '—'}</dd></div>
         <div><dt class="text-muted">Access count</dt><dd class="mt-1 font-medium">{artifact.accessCount}</dd></div>
         <div><dt class="text-muted">Source job</dt><dd class="mt-1 break-all font-mono" data-sensitive="true">{artifact.sourceJobId ?? 'Unavailable'}</dd></div>
         <div class="sm:col-span-2"><dt class="text-muted">SHA-256</dt><dd class="mt-1 break-all font-mono" data-sensitive="true">{artifact.sha256}</dd></div>
