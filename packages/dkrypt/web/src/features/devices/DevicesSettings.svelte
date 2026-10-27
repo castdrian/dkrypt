@@ -225,9 +225,8 @@
     const taskId = startBackgroundTask('device_recovery', `Recover ${device.name}`, initial.stage, '/?tab=settings&stab=devices', initial.id);
     recoveringId = new Set(recoveringId).add(device.id);
     let operation = initial;
-    const deadlineAt = Date.now() + 140_000;
     try {
-      while (Date.now() < deadlineAt && !['complete', 'failed', 'interrupted'].includes(operation.status)) {
+      while (!['complete', 'failed', 'interrupted'].includes(operation.status)) {
         rememberRecoveryOperation(operation);
         updateBackgroundTask(taskId, 'running', operation.stage);
         await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -247,7 +246,7 @@
         updateBackgroundTask(taskId, 'failed', operation.stage, operation.error);
         showToast(operation.error ?? `${device.name} recovery could not be verified`, 'error');
       } else {
-        updateBackgroundTask(taskId, 'interrupted', 'Recovery is still running', 'Open the device again to check its latest recovery receipt.');
+        updateBackgroundTask(taskId, 'running', 'Recovery is still running', 'dkrypt is still checking the device recovery receipt.');
       }
     } finally {
       activeRecoveryPolls.delete(initial.id);

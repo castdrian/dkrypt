@@ -17,9 +17,6 @@ export interface WebhookPostResult {
 }
 
 async function retryDelayMs(res: Response): Promise<number> {
-  const retryAfter = res.headers.get('retry-after');
-  const headerDelay = retryAfterDelayMs(retryAfter);
-  if (headerDelay !== undefined) return headerDelay;
   if (res.status !== 429) return RETRY_DELAY_MS;
   try {
     const body = (await res.clone().json()) as { retry_after?: number };
@@ -95,16 +92,15 @@ export async function postJsonWithRetry(url: string, body: unknown, headers: Rec
       const response = pinnedAddress
         ? await postPinnedHttps(url, payload, headers, pinnedAddress)
         : undefined;
-      const res = response ? undefined : await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: payload, redirect: 'error', signal: AbortSignal.timeout(10_000) });
+      const res = response ? undefined : await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: payload });
       const status = response?.status ?? res?.status ?? 0;
       const ok = response ? status >= 200 && status < 300 : res?.ok === true;
       const signatureAcknowledged = response?.signatureAcknowledged ?? res?.headers.get('x-dkrypt-signature-verified')?.toLowerCase() === 'true';
       if (ok) return { ok: true, status, durationMs: Date.now() - startedAt, signatureAcknowledged };
       if (attempt === 0) {
-        const delay = response
+        await sleep(response
           ? retryAfterDelayMs(response.retryAfter) ?? RETRY_DELAY_MS
-          : res ? await retryDelayMs(res) : RETRY_DELAY_MS;
-        await sleep(Number.isFinite(delay) ? delay : RETRY_DELAY_MS);
+          : res ? await retryDelayMs(res) : RETRY_DELAY_MS);
         continue;
       }
       return { ok: false, status, durationMs: Date.now() - startedAt, signatureAcknowledged };

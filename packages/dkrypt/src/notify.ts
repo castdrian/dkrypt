@@ -124,18 +124,20 @@ function webhookSigningConfigError(): string | undefined {
   return 'outbound webhook signing rotation is invalid: current and previous secrets must be distinct and at least 16 characters';
 }
 
-function webhookHeaders(event: string, payload: Record<string, unknown>, eventId: string): Record<string, string> {
+function webhookHeaders(event: string, payload: Record<string, unknown>, eventId?: string): Record<string, string> {
   const signingConfigError = webhookSigningConfigError();
   if (signingConfigError) throw new Error(signingConfigError);
-  if (!config.outboundWebhookSecret) return { 'X-Dkrypt-Event': event, 'X-Dkrypt-Event-Id': eventId };
+  if (!config.outboundWebhookSecret) {
+    return eventId ? { 'X-Dkrypt-Event': event, 'X-Dkrypt-Event-Id': eventId } : {};
+  }
   const timestamp = new Date().toISOString();
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
     'X-Dkrypt-Event': event,
-    'X-Dkrypt-Event-Id': eventId,
     'X-Dkrypt-Timestamp': timestamp,
     'X-Dkrypt-Signature': webhookSignature(config.outboundWebhookSecret, timestamp, body),
   };
+  if (eventId) headers['X-Dkrypt-Event-Id'] = eventId;
   if (config.outboundWebhookSecretPrevious && config.outboundWebhookSecretPrevious !== config.outboundWebhookSecret) {
     headers['X-Dkrypt-Signature-Previous'] = webhookSignature(config.outboundWebhookSecretPrevious, timestamp, body);
   }
@@ -199,7 +201,7 @@ async function postWebhook(
   const payload = buildPayload(embed, format);
   let result;
   try {
-    result = await postJsonWithRetry(url, payload, webhookHeaders(event, payload, randomUUID()));
+    result = await postJsonWithRetry(url, payload, webhookHeaders(event, payload));
   } catch (error) {
     result = { ok: false, error: String(error), durationMs: 0 };
   }

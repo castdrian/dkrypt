@@ -240,7 +240,7 @@ async function runSingleAction(config, dependencies = {}) {
         throw new Error('dkrypt did not return valid resolved release metadata');
       }
       const build = job.build ?? '';
-      if (locked.entry && (job.resolvedVersion !== locked.entry.resolvedVersion || (locked.entry.build && String(build) !== locked.entry.build))) {
+      if (locked.entry && (job.channel !== locked.entry.source || job.resolvedVersion !== locked.entry.resolvedVersion || (locked.entry.build && String(build) !== locked.entry.build))) {
         throw new Error(`resolved release does not match the dkrypt.lock entry for ${bundleId}`);
       }
       if (locked.updateLockfile) await writeDkryptLockEntry(config, bundleId, job.channel, job.resolvedVersion, build);

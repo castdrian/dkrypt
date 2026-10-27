@@ -243,7 +243,7 @@ export const dashboardDeviceRoutes: FastifyPluginAsyncTypebox = async (server) =
         if (closing) return;
         const agentReady = lastHealth?.subsystems?.agent === 'ready' || (lastHealth?.agentHeartbeatAt !== undefined && Date.now() - lastHealth.agentHeartbeatAt < 90_000);
         const springboardReady = lastHealth?.testFlightBridgeReachable === true || isBridgeHeartbeatFresh(lastHealth?.bridgeHeartbeats?.springboard);
-        if (lastHealth?.reachable && (agentReady || springboardReady)) {
+        if (lastHealth?.reachable && agentReady && springboardReady) {
           recoveryOperations.complete(operation.id, {
             commandExitCode: command.code ?? 0,
             reachable: true,

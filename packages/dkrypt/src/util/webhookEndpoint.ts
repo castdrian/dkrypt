@@ -16,10 +16,31 @@ function isPublicIpv4(address: string): boolean {
 }
 
 function isPublicIpv6(address: string): boolean {
-  const firstGroup = Number.parseInt(address.split(':')[0] || '0', 16);
+  let normalized = address.toLowerCase();
+  if (normalized.includes('.')) {
+    const separator = normalized.lastIndexOf(':');
+    const octets = normalized.slice(separator + 1).split('.').map(Number);
+    if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    const high = ((octets[0] << 8) | octets[1]).toString(16);
+    const low = ((octets[2] << 8) | octets[3]).toString(16);
+    normalized = `${normalized.slice(0, separator)}:${high}:${low}`;
+  }
+  const halves = normalized.split('::');
+  if (halves.length > 2) return false;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missingGroups = 8 - left.length - right.length;
+  if ((halves.length === 1 && missingGroups !== 0) || (halves.length === 2 && missingGroups < 1)) return false;
+  const groups = [...left, ...Array.from({ length: missingGroups }, () => '0'), ...right];
+  if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return false;
+  const value = groups.reduce((result, group) => (result << 16n) | BigInt(`0x${group}`), 0n);
+  const firstGroup = Number(value >> 112n);
   if (firstGroup < 0x2000 || firstGroup > 0x3fff) return false;
-  const value = address.toLowerCase();
-  if (value.startsWith('2001:0:') || value.startsWith('2001:2:') || value.startsWith('2001:db8:') || value.startsWith('2001:10:') || value.startsWith('2001:20:') || value.startsWith('2002:') || value.startsWith('3fff:')) return false;
+  if ((value >> 105n) === (0x2001n << 7n)) return false;
+  const firstTwoGroups = Number(value >> 96n);
+  if ((firstTwoGroups >> 16) === 0x2001 && ((firstTwoGroups & 0xffff) === 0x0002 || (firstTwoGroups & 0xfff0) === 0x0010 || (firstTwoGroups & 0xfff0) === 0x0020)) return false;
+  if ((firstTwoGroups >> 16) === 0x2001 && (firstTwoGroups & 0xffff) === 0x0db8) return false;
+  if ((firstTwoGroups >> 16) === 0x2002 || firstGroup === 0x3fff) return false;
   return true;
 }
 
