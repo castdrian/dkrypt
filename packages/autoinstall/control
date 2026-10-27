@@ -1,6 +1,6 @@
 Name: autoinstall
 Description: TestFlight and App Store bridge for dkrypt, with on-device controls and an authenticated USB device agent
-Version: 1.5.0
+Version: 1.6.0
 Package: dev.adrian.autoinstall
 Architecture: iphoneos-arm64
 Maintainer: Adrian Castro

@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <StoreKit/StoreKit.h>
 #import <CommonCrypto/CommonHMAC.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
@@ -2422,7 +2423,7 @@ static BOOL appStoreIsForeground(void) {
 static NSDictionary *appStoreBridgeStatus(void) {
     return @{
         @"bridgeVersion": BRIDGE_VERSION,
-        @"capabilities": @[@"install", @"status", @"diagnostics", @"foreground_status", @"localized_install_titles", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"],
+        @"capabilities": @[@"install", @"status", @"diagnostics", @"foreground_status", @"localized_install_titles", @"storefront", @"protocol_v1", @"authenticated_requests", @"operation_responses", @"heartbeats", @"stale_artifact_cleanup"],
         @"foreground": @(appStoreIsForeground()),
         @"install": readJSONFile(kASInstallStatusPath) ?: @{},
     };
@@ -2442,6 +2443,25 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
 
     if ([action isEqualToString:@"diagnostics"]) {
         respond(@{@"ok": @YES, @"data": @{ @"bridge": appStoreBridgeStatus(), @"recentLog": recentBridgeLogEntries() }});
+        return;
+    }
+
+    if ([action isEqualToString:@"storefront"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            @autoreleasepool {
+                @try {
+                    SKStorefront *storefront = [SKPaymentQueue defaultQueue].storefront;
+                    NSString *countryCode = [storefront.countryCode uppercaseString];
+                    if (countryCode.length != 3 || !storefront.identifier.length) {
+                        respond(@{@"ok": @NO, @"error": @"StoreKit could not verify the signed-in App Store storefront"});
+                        return;
+                    }
+                    respond(@{@"ok": @YES, @"countryCode": countryCode, @"storefrontId": storefront.identifier});
+                } @catch (NSException *exception) {
+                    respond(@{@"ok": @NO, @"error": [NSString stringWithFormat:@"StoreKit storefront lookup failed: %@", exception.reason ?: exception.name]});
+                }
+            }
+        });
         return;
     }
 
