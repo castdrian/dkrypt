@@ -2429,6 +2429,9 @@ static NSDictionary *appStoreBridgeStatus(void) {
     };
 }
 
+static dispatch_queue_t gASBridgeQueue = nil;
+static dispatch_source_t gASBridgeTimer = nil;
+
 static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSString *requestId) {
     void (^respond)(id) = ^(id response) { writeBridgeResponse(responsePath, requestId, response); };
     NSString *action = req[@"action"];
@@ -2449,17 +2452,27 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
     if ([action isEqualToString:@"storefront"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             @autoreleasepool {
-                @try {
-                    SKStorefront *storefront = [SKPaymentQueue defaultQueue].storefront;
-                    NSString *countryCode = [storefront.countryCode uppercaseString];
-                    if (countryCode.length != 3 || !storefront.identifier.length) {
-                        respond(@{@"ok": @NO, @"error": @"StoreKit could not verify the signed-in App Store storefront"});
+            __block BOOL completed = NO;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12 * NSEC_PER_SEC), gASBridgeQueue, ^{
+                if (completed) return;
+                completed = YES;
+                respond(@{@"ok": @NO, @"error": @"StoreKit account storefront lookup timed out"});
+            });
+            SKCloudServiceController *controller = [SKCloudServiceController new];
+            [controller requestStorefrontCountryCodeWithCompletionHandler:^(NSString *countryCode, NSError *error) {
+                dispatch_async(gASBridgeQueue, ^{
+                    if (completed) return;
+                    completed = YES;
+                    NSString *normalizedCountryCode = [countryCode uppercaseString];
+                    if (error || (normalizedCountryCode.length != 2 && normalizedCountryCode.length != 3)) {
+                        NSString *detail = error.localizedDescription ?: @"StoreKit returned no account storefront country";
+                        respond(@{@"ok": @NO, @"error": [NSString stringWithFormat:@"StoreKit account storefront lookup failed: %@", detail]});
                         return;
                     }
-                    respond(@{@"ok": @YES, @"countryCode": countryCode, @"storefrontId": storefront.identifier});
-                } @catch (NSException *exception) {
-                    respond(@{@"ok": @NO, @"error": [NSString stringWithFormat:@"StoreKit storefront lookup failed: %@", exception.reason ?: exception.name]});
-                }
+                    respond(@{@"ok": @YES, @"countryCode": normalizedCountryCode});
+                    (void)controller;
+                });
+            }];
             }
         });
         return;
@@ -2577,9 +2590,6 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
         }
     });
 }
-
-static dispatch_queue_t gASBridgeQueue = nil;
-static dispatch_source_t gASBridgeTimer = nil;
 
 static void startAppStoreSide(void) {
     autoinstallEnableAX();
