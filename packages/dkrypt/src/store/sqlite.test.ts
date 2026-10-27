@@ -25,6 +25,15 @@ function rewindToSchemaVersion16(database: ReturnType<typeof openStateDatabase>)
   database.db.exec(`
     DROP INDEX decrypt_quota_by_owner_time;
     DROP TABLE decrypt_quota_ledger;
+    DROP TABLE abuse_ip_reputation;
+    DROP TABLE abuse_signup_challenges;
+    DROP TABLE abuse_signup_events;
+    DROP INDEX free_decrypt_abuse_quota_by_expiry;
+    DROP INDEX free_decrypt_abuse_quota_by_turnstile;
+    DROP INDEX free_decrypt_abuse_quota_by_browser;
+    DROP INDEX free_decrypt_abuse_quota_by_address;
+    DROP INDEX free_decrypt_abuse_quota_by_network;
+    DROP TABLE free_decrypt_abuse_quota;
     DROP INDEX worker_instances_by_heartbeat;
     DROP TABLE worker_instances;
     DROP INDEX billing_events_by_provider_event;
@@ -59,7 +68,7 @@ function rewindToSchemaVersion16(database: ReturnType<typeof openStateDatabase>)
     ALTER TABLE billing_events DROP COLUMN event_id;
     ALTER TABLE billing_events DROP COLUMN occurred_at;
     ALTER TABLE billing_events DROP COLUMN processed_at;
-    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35);
+    DELETE FROM schema_migrations WHERE version IN (17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37);
   `);
 }
 
@@ -153,7 +162,7 @@ test('SQLite migration adds persisted Apple Account authentication operations', 
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-sqlite-apple-auth-migration-'));
   try {
     const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
-    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33);');
+    database.db.exec('DROP TABLE abuse_ip_reputation; DROP TABLE abuse_signup_challenges; DROP TABLE abuse_signup_events; DROP INDEX free_decrypt_abuse_quota_by_expiry; DROP INDEX free_decrypt_abuse_quota_by_turnstile; DROP INDEX free_decrypt_abuse_quota_by_browser; DROP INDEX free_decrypt_abuse_quota_by_address; DROP INDEX free_decrypt_abuse_quota_by_network; DROP TABLE free_decrypt_abuse_quota; DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34, 35, 36, 37);');
     database.close();
 
     const migrated = openStateDatabase({ stateDir, filename: 'state.sqlite' });
@@ -572,7 +581,7 @@ test('SQLite backup verification accepts an older schema when its applied migrat
     const databasePath = path.join(stateDir, 'state.sqlite');
     const database = openStateDatabase({ stateDir, filename: 'state.sqlite' });
     database.writeState({ version: 29, settings: {} });
-    database.db.exec('DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DROP TABLE mcp_records; DROP TABLE decrypt_credit_records; DROP TABLE service_monitor_state; DROP INDEX free_decrypt_quota_by_owner_completion; DROP INDEX free_decrypt_quota_by_owner_reservation; DROP TABLE free_decrypt_quota; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34, 35);');
+    database.db.exec('DROP TABLE abuse_ip_reputation; DROP TABLE abuse_signup_challenges; DROP TABLE abuse_signup_events; DROP INDEX free_decrypt_abuse_quota_by_expiry; DROP INDEX free_decrypt_abuse_quota_by_turnstile; DROP INDEX free_decrypt_abuse_quota_by_browser; DROP INDEX free_decrypt_abuse_quota_by_address; DROP INDEX free_decrypt_abuse_quota_by_network; DROP TABLE free_decrypt_abuse_quota; DROP TABLE appstore_offline_authentication_operations; DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DROP INDEX worker_instances_by_heartbeat; DROP TABLE worker_instances; DROP TABLE mcp_records; DROP TABLE decrypt_credit_records; DROP TABLE service_monitor_state; DROP INDEX free_decrypt_quota_by_owner_completion; DROP INDEX free_decrypt_quota_by_owner_reservation; DROP TABLE free_decrypt_quota; DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34, 35, 36, 37);');
     database.close();
 
     expect(verifyDatabaseBackup(databasePath)).toEqual({ schemaVersion: 28, integrity: 'ok', hasStateSnapshot: true });

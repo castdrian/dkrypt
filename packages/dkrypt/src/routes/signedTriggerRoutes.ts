@@ -2,12 +2,14 @@ import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { normalizeVersionSelector, resolveDecryptTarget, VERSION_SELECTOR_RE } from '#decryptTarget.js';
+import { getBillingEntitlements } from '#billing.js';
 import { AutomationOwnerUnavailableError, enqueueDecryptJob } from '#jobs/store.js';
-import { DailyDecryptLimitError } from '#jobs/repository.js';
+import { DailyDecryptLimitError, FreeAbuseContextUnavailableError, FreeAbuseLimitError, FreeDecryptLimitError } from '#jobs/repository.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { getUserEffectivePermissions } from '#store/state.js';
 import { finishIntegrationDelivery, getIntegrationDelivery, getSignedTriggerPolicy, releaseIntegrationDelivery, reserveIntegrationDelivery, verifySignedTrigger } from '#store/integrationRepository.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
+import { requestAbuseContext } from '#abuseProtection.js';
 
 const triggerBody = Type.Object({ bundleId: Type.String({ minLength: 3, maxLength: 200, pattern: '^[A-Za-z0-9.-]+$' }), source: Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]), version: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })) }, { additionalProperties: false });
 
@@ -43,7 +45,8 @@ export const signedTriggerRoutes: FastifyPluginAsyncTypebox = async (server) => 
     try {
       const target = await resolveDecryptTarget(input.bundleId, normalizeVersionSelector(input.version));
       if (target.channel !== input.source) throw new Error('resolved release does not match the allowed source');
-      const job = enqueueDecryptJob(input.bundleId, 'manual', { externalVersionId: target.externalVersionId, testflight: target.testflight, versionLabel: target.versionLabel, projectId: policy.projectId, queuedBy: `integration:${policy.id}`, billingOwnerId: policy.billingOwnerId, minimumOsVersion: target.minimumOsVersion });
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, Boolean(policy.billingOwnerId && getBillingEntitlements(policy.billingOwnerId).freeTier));
+      const job = enqueueDecryptJob(input.bundleId, 'manual', { externalVersionId: target.externalVersionId, testflight: target.testflight, versionLabel: target.versionLabel, projectId: policy.projectId, queuedBy: `integration:${policy.id}`, billingOwnerId: policy.billingOwnerId, minimumOsVersion: target.minimumOsVersion, abuseNetworkHash: abuse.networkHash, abuseAddressHash: abuse.addressHash, abuseBrowserHash: abuse.browserHash, abuseTurnstileHash: abuse.turnstileHash, abuseNetworkDecryptLimit: abuse.networkDecryptLimit, abuseAddressDecryptLimit: abuse.addressDecryptLimit });
       finishIntegrationDelivery(delivery, 'accepted', job.id);
       return reply.code(202).send({ jobId: job.id, duplicate: false });
     } catch (error) {
@@ -51,6 +54,15 @@ export const signedTriggerRoutes: FastifyPluginAsyncTypebox = async (server) => 
         releaseIntegrationDelivery(delivery);
         reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
         return reply.code(429).send({ ...createHttpErrorEnvelope(request.id, 429, error.message, { nextAvailableAt: error.nextAvailableAt }), code: error.code, retryable: true });
+      }
+      if (error instanceof FreeDecryptLimitError || error instanceof FreeAbuseLimitError) {
+        releaseIntegrationDelivery(delivery);
+        reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
+        return reply.code(429).send({ ...createHttpErrorEnvelope(request.id, 429, error.message, { nextAvailableAt: error.nextAvailableAt }), code: error.code, retryable: true });
+      }
+      if (error instanceof FreeAbuseContextUnavailableError) {
+        releaseIntegrationDelivery(delivery);
+        return reply.code(503).send({ ...createHttpErrorEnvelope(request.id, 503, error.message), code: error.code, retryable: true });
       }
       if (error instanceof AutomationOwnerUnavailableError) {
         releaseIntegrationDelivery(delivery);

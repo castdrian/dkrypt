@@ -21,6 +21,12 @@
   let submitting = $state(false);
   let showPassword = $state(false);
   let passwordEl: HTMLInputElement | undefined = $state();
+  let signupProvider = $state<'github' | 'discord' | undefined>();
+  let signupReturnTo = $state<string | undefined>();
+  let signupChallengeEl: HTMLDivElement | undefined = $state();
+  let signupChallengeError = $state('');
+  let signupChallengeSubmitting = $state(false);
+  let signupChallengeWidgetId: string | undefined;
 
   $effect(() => {
     if (detailsOpen) passwordEl?.focus();
@@ -32,16 +38,100 @@
     failed: 'GitHub sign-in failed - check the server logs.',
     discord_disabled: "Discord sign-in isn't configured.",
     discord_failed: 'Discord sign-in failed - check the server logs.',
+    signup_email_unverified: 'New accounts need a verified GitHub or Discord email. Temporary email services cannot create accounts.',
+    signup_email_in_use: 'This verified email already has an account. Sign in to it, then connect the other sign-in method in Settings.',
+    signup_limited: 'Too many new accounts were created from this network recently. Try again later or sign in to your existing account.',
+    signup_verification_required: 'Complete this quick check to finish creating your account.',
+    signup_verification_failed: 'The account check expired or could not be verified. Please try again.',
+    signup_verification_unavailable: 'New account creation is temporarily unavailable because the required signup check is not configured. Existing accounts can still sign in.',
   };
 
   $effect(() => {
     const params = new URLSearchParams(location.search);
     const code = params.get('auth_error');
-    if (!code) return;
-    const message = OAUTH_ERROR_MESSAGES[code];
-    oauthError = typeof message === 'function' ? message(params.get('user')) : (message ?? 'GitHub sign-in failed.');
-    history.replaceState(null, '', location.pathname);
+    if (code === 'signup_verification_required') {
+      const provider = params.get('signup_provider');
+      if (provider === 'github' || provider === 'discord') {
+        signupProvider = provider;
+        signupReturnTo = params.get('return_to') ?? undefined;
+      }
+    }
+    if (code) {
+      const message = OAUTH_ERROR_MESSAGES[code];
+      oauthError = typeof message === 'function' ? message(params.get('user')) : (message ?? 'GitHub sign-in failed.');
+      history.replaceState(null, '', location.pathname);
+    }
   });
+
+  $effect(() => {
+    const provider = signupProvider;
+    const siteKey = sessionState.signupTurnstileSiteKey;
+    const container = signupChallengeEl;
+    if (!provider || !siteKey || !container || typeof window === 'undefined') return;
+    let cancelled = false;
+    let widgetId: string | undefined;
+
+    const render = async () => {
+      try {
+        if (!window.turnstile) {
+          let script = document.querySelector<HTMLScriptElement>('script[data-dkrypt-turnstile]');
+          if (!script) {
+            script = document.createElement('script');
+            script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+            script.async = true;
+            script.defer = true;
+            script.dataset.dkryptTurnstile = 'true';
+            document.head.append(script);
+          }
+          await new Promise<void>((resolve, reject) => {
+            if (window.turnstile) return resolve();
+            script!.addEventListener('load', () => resolve(), { once: true });
+            script!.addEventListener('error', () => reject(new Error('Could not load account verification.')), { once: true });
+          });
+        }
+        if (cancelled || !window.turnstile) return;
+        widgetId = window.turnstile.render(container, {
+          sitekey: siteKey,
+          action: 'signup',
+          callback: (token) => void finishSignupChallenge(provider, token),
+          'error-callback': () => (signupChallengeError = 'The account check could not load. Please retry.'),
+          'expired-callback': () => (signupChallengeError = 'The account check expired. Please complete it again.'),
+        });
+        signupChallengeWidgetId = widgetId;
+      } catch (error) {
+        signupChallengeError = error instanceof Error ? error.message : 'Could not load account verification.';
+      }
+    };
+
+    void render();
+    return () => {
+      cancelled = true;
+      if (widgetId) window.turnstile?.remove(widgetId);
+    };
+  });
+
+  async function finishSignupChallenge(provider: 'github' | 'discord', token: string): Promise<void> {
+    signupChallengeSubmitting = true;
+    signupChallengeError = '';
+    try {
+      const response = await fetch('/v1/auth/signup-challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new Error(body.message ?? body.error ?? 'Account verification failed.');
+      }
+      const returnTo = signupReturnTo ?? (new URLSearchParams(location.search).get('continue') === 'decrypt' ? '/?continue=decrypt' : undefined);
+      const query = returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : '';
+      window.location.assign(`/v1/auth/${provider}/login${query}`);
+    } catch (error) {
+      signupChallengeError = error instanceof Error ? error.message : 'Account verification failed.';
+      if (signupChallengeWidgetId) window.turnstile?.reset(signupChallengeWidgetId);
+      signupChallengeSubmitting = false;
+    }
+  }
 
   async function submit(): Promise<void> {
     submitting = true;
@@ -90,9 +180,9 @@
   }
 
   function oauthLoginUrl(provider: 'github' | 'discord'): string {
-    const continueRequest = new URLSearchParams(location.search).get('continue') === 'decrypt';
-    const returnTo = continueRequest ? `?return_to=${encodeURIComponent('/?continue=decrypt')}` : '';
-    return `/v1/auth/${provider}/login${returnTo}`;
+    const params = new URLSearchParams(location.search);
+    const returnTo = params.get('return_to') ?? (params.get('continue') === 'decrypt' ? '/?continue=decrypt' : undefined);
+    return `/v1/auth/${provider}/login${returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''}`;
   }
 </script>
 
@@ -109,7 +199,7 @@
     </div>
     <h2 class="mb-6.5 text-[19px] font-semibold">Sign in</h2>
 
-    {#if sessionState.githubOauthEnabled}
+    {#if sessionState.githubOauthEnabled && !signupProvider}
       <a
         href={oauthLoginUrl('github')}
         class={cn(buttonVariants('github'), 'w-full')}
@@ -122,7 +212,7 @@
         Sign in with GitHub
       </a>
     {/if}
-    {#if sessionState.discordOauthEnabled}
+    {#if sessionState.discordOauthEnabled && !signupProvider}
       <a
         href={oauthLoginUrl('discord')}
         class={cn(buttonVariants('discord'), 'mt-3 w-full')}
@@ -135,6 +225,15 @@
         </svg>
         Sign in with Discord
       </a>
+    {/if}
+    {#if signupProvider}
+      <div class="mt-4 flex flex-col items-center gap-3">
+        <p class="text-xs text-muted">Verify once to complete your {signupProvider === 'github' ? 'GitHub' : 'Discord'} sign-up.</p>
+        <div bind:this={signupChallengeEl} class="min-h-[65px]"></div>
+        {#if signupChallengeSubmitting}<p class="text-xs text-muted">Finishing sign-in…</p>{/if}
+        {#if signupChallengeError}<p class="text-xs text-err" role="alert">{signupChallengeError}</p>{/if}
+        <a class="text-xs text-muted underline hover:text-text" href="/">Use an existing account instead</a>
+      </div>
     {/if}
     <Button variant="secondary" class="mt-3 w-full" loading={submitting} onclick={() => void submitPasskey()}>
       <KeyRound class="h-4 w-4" />

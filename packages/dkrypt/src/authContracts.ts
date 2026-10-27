@@ -10,6 +10,7 @@ export const authLoginBodySchema = Type.Object(
 );
 
 export const authTokenBodySchema = Type.Object({ token: Type.String({ minLength: 1, maxLength: 100 }) }, { additionalProperties: true });
+export const authSignupChallengeBodySchema = Type.Object({ token: Type.String({ minLength: 1, maxLength: 2048 }) }, { additionalProperties: false });
 export const authReauthenticateBodySchema = Type.Object(
   {
     password: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
@@ -36,6 +37,7 @@ export const authOAuthCallbackQuerySchema = Type.Object(
 
 export type AuthLoginRoute = { Body: Static<typeof authLoginBodySchema> };
 export type AuthTokenRoute = { Body: Static<typeof authTokenBodySchema> };
+export type AuthSignupChallengeRoute = { Body: Static<typeof authSignupChallengeBodySchema> };
 export type AuthReauthenticateRoute = { Body: Static<typeof authReauthenticateBodySchema> };
 export type AuthPrivacyDeleteRoute = { Body: Static<typeof authPrivacyDeleteBodySchema> };
 export type AuthProfileRoute = { Body: Static<typeof authProfileBodySchema> };

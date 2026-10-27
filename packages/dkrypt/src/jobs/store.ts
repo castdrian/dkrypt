@@ -674,6 +674,12 @@ export interface EnqueueDecryptJobOptions {
   projectId?: string;
   minimumOsVersion?: string;
   deferWhenNoDispatchableDevice?: boolean;
+  abuseNetworkHash?: string;
+  abuseAddressHash?: string;
+  abuseBrowserHash?: string;
+  abuseTurnstileHash?: string;
+  abuseNetworkDecryptLimit?: number;
+  abuseAddressDecryptLimit?: number;
 }
 
 export class ScheduledJobDeferredError extends Error {
@@ -793,7 +799,14 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
       if (quotaLimit !== undefined) previousUsage = getDecryptQuotaUsage(billingOwnerId, quotaLimit).used;
     }
   }
-  const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit, freeTierResult);
+  const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit, freeTierResult, {
+    networkHash: options.abuseNetworkHash,
+    addressHash: options.abuseAddressHash,
+    browserHash: options.abuseBrowserHash,
+    turnstileHash: options.abuseTurnstileHash,
+    networkDecryptLimit: options.abuseNetworkDecryptLimit,
+    addressDecryptLimit: options.abuseAddressDecryptLimit,
+  });
   if (admittedId !== job.id) {
     syncPersistedJobsFromRepository(true);
     const existing = jobs.get(admittedId);

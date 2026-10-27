@@ -11,8 +11,10 @@ import {
   type AuthPrivacyDeleteRoute,
   type AuthProfileRoute,
   type AuthReauthenticateRoute,
+  type AuthSignupChallengeRoute,
   type AuthTokenRoute,
 } from '#authContracts.js';
+import { abuseAddressHash, admitNewOauthAccount, assessSignupAdmission, blockedEmailDomain, consumeSignupChallenge, ensureAbuseBrowserSignal, getSignupAbuseSignals, isSignupChallengeConfigured, refreshIpReputation, signupChallengeSiteKey, verifySignupChallenge } from '#abuseProtection.js';
 import { linkOauthAccount, resolveOauthAccount } from '#account.js';
 import { getRouteContract } from '#contracts.js';
 import { getBillingEntitlements } from '#billing.js';
@@ -21,6 +23,8 @@ import { fetchMemberRoleIds } from '#discord.js';
 import {
   type AuthIdentity,
   getAuthProfile,
+  findAuthProfileByEmail,
+  findAuthProfileByIdentity,
   getLinkedAuthIdentities,
   getLinkedAuthProviders,
   removeAuthIdentity,
@@ -101,7 +105,7 @@ setInterval(() => {
 }, 60_000).unref();
 
 const publicAuthRateLimit = (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
-  const key = request.ip ?? 'unknown';
+  const key = abuseAddressHash(request.ip) ?? 'unknown';
   const decision = publicAuthRateLimiter.consume(key);
   reply.header('X-RateLimit-Limit', String(decision.limit));
   reply.header('X-RateLimit-Remaining', String(decision.remaining));
@@ -134,6 +138,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.get(SESSION_ROUTE, { schema: getRouteContract('GET', SESSION_ROUTE) }, async (request, reply) => {
     const session = getFastifySession(request);
     const profile = session ? getAuthProfile(session.sub) : undefined;
+    if (session && getBillingEntitlements(session.sub).freeTier) ensureAbuseBrowserSignal(reply, request.headers.cookie);
     return reply.send({
       loggedIn: !!session,
       freeTier: session ? getBillingEntitlements(session.sub).freeTier === true : false,
@@ -149,8 +154,24 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
       discordOauthEnabled: isDiscordOauthEnabled(),
       deployment: { ref: getDeploymentMetadata().ref },
       publicBaseUrl: config.publicBaseUrl,
+      signupVerificationEnabled: isSignupChallengeConfigured(),
+      signupTurnstileSiteKey: signupChallengeSiteKey(),
       mfa: session ? { ...mfaStatus(session.sub), required: !session.mfaVerified } : undefined,
     });
+  });
+
+  server.post<AuthSignupChallengeRoute>('/v1/auth/signup-challenge', {
+    schema: getRouteContract('POST', '/v1/auth/signup-challenge'),
+    preHandler: publicAuthRateLimit,
+  }, async (request, reply) => {
+    try {
+      await verifySignupChallenge(request.body.token, request.ip, request.headers.cookie, reply);
+      return reply.send({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const unavailable = message.includes('unavailable');
+      return sendAuthError(request, reply, unavailable ? 'signup_verification_unavailable' : 'signup_verification_failed', message, unavailable ? 503 : 400, unavailable);
+    }
   });
 
   server.get(MFA_ROUTE, { schema: getRouteContract('GET', MFA_ROUTE), preHandler: fastifyRequireSession }, async (request, reply) => {
@@ -496,6 +517,32 @@ const oauthProviders: Record<OAuthProvider, OAuthProviderConfig> = {
 
 const oauthConnections = new Map<string, { provider: OAuthProvider; userId?: string; codeVerifier: string; returnTo?: string; expiresAt: number }>();
 
+function signupRedirect(code: string, provider: OAuthProvider, returnTo?: string): string {
+  const params = new URLSearchParams({ auth_error: code, signup_provider: provider });
+  if (returnTo) params.set('return_to', returnTo);
+  return `/?${params.toString()}`;
+}
+
+async function approveOauthSignup(request: FastifyRequest, reply: FastifyReply, provider: OAuthProvider, email: string | undefined, returnTo: string | undefined): Promise<{ allowed: true } | { allowed: false; redirect: string }> {
+  if (!email || blockedEmailDomain(email)) return { allowed: false, redirect: signupRedirect('signup_email_unverified', provider, returnTo) };
+  if (!isSignupChallengeConfigured()) return { allowed: false, redirect: signupRedirect('signup_verification_unavailable', provider, returnTo) };
+  if (findAuthProfileByEmail(email)) return { allowed: false, redirect: signupRedirect('signup_email_in_use', provider, returnTo) };
+  await refreshIpReputation(request.ip).catch(() => undefined);
+  let signals = getSignupAbuseSignals(request.ip, request.headers.cookie);
+  const networkCheck = assessSignupAdmission(request.ip, email, signals);
+  if (!networkCheck.allowed) return { allowed: false, redirect: signupRedirect(networkCheck.reason === 'account' ? 'signup_email_in_use' : 'signup_limited', provider, returnTo) };
+
+  if (isSignupChallengeConfigured()) {
+    const challenge = consumeSignupChallenge(request.headers.cookie, request.ip, reply);
+    if (!challenge.valid) return { allowed: false, redirect: signupRedirect('signup_verification_required', provider, returnTo) };
+    signals = { browserHash: challenge.browserHash ?? signals.browserHash, turnstileHash: challenge.turnstileHash ?? signals.turnstileHash };
+  }
+
+  const admission = admitNewOauthAccount(request.ip, email, signals);
+  if (!admission.allowed) return { allowed: false, redirect: signupRedirect(admission.reason === 'account' ? 'signup_email_in_use' : 'signup_limited', provider, returnTo) };
+  return { allowed: true };
+}
+
 interface OAuthTokenResponse {
   access_token?: string;
   error?: string;
@@ -518,6 +565,13 @@ async function exchangeOAuthTokenWithRotation(
 function oauthCookie(name: string, value: string, maxAge: number): string {
   const secure = config.publicBaseUrl.startsWith('https://') ? '; Secure' : '';
   return `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`;
+}
+
+function appendSetCookie(reply: FastifyReply, cookie: string): void {
+  const existing = reply.getHeader('Set-Cookie');
+  const cookies = existing === undefined ? [] : Array.isArray(existing) ? existing.map(String) : [String(existing)];
+  cookies.push(cookie);
+  reply.header('Set-Cookie', cookies);
 }
 
 function oauthUserId(provider: OAuthProvider, providerId: string, username: string): string {
@@ -567,9 +621,10 @@ function startOAuthLogin(request: FastifyRequest, reply: FastifyReply, provider:
     sendValidationError(request, reply, 404, `${provider === 'github' ? 'GitHub' : 'Discord'} OAuth is not configured`);
     return;
   }
+  if (!userId) ensureAbuseBrowserSignal(reply, request.headers.cookie);
   const query = request.query as Record<string, unknown>;
   const { state, codeVerifier } = createOauthState(provider, userId, oauthReturnPath(query.return_to));
-  reply.header('Set-Cookie', oauthCookie(providerConfig.stateCookieName, state, 600));
+  appendSetCookie(reply, oauthCookie(providerConfig.stateCookieName, state, 600));
   const url = new URL(providerConfig.authorizationUrl);
   url.searchParams.set('client_id', providerConfig.clientId());
   url.searchParams.set('redirect_uri', `${config.publicBaseUrl}${providerConfig.callbackPath}`);
@@ -665,16 +720,13 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
         email?: string | null;
         avatar_url?: string;
       };
-      let email = user.email ?? undefined;
-      if (!email) {
-        const emailsRes = await fetch('https://api.github.com/user/emails', {
-          headers: { Authorization: `Bearer ${tokenBody.access_token}`, Accept: 'application/vnd.github+json' },
-        });
-        if (emailsRes.ok) {
-          const emails = (await emailsRes.json()) as { email: string; primary: boolean; verified: boolean }[];
-          email = emails.find((candidate) => candidate.primary && candidate.verified)?.email;
-        }
-      }
+      const emailsRes = await fetch('https://api.github.com/user/emails', {
+        headers: { Authorization: `Bearer ${tokenBody.access_token}`, Accept: 'application/vnd.github+json' },
+      });
+      const verifiedEmail = emailsRes.ok
+        ? ((await emailsRes.json()) as { email: string; primary: boolean; verified: boolean }[]).find((candidate) => candidate.primary && candidate.verified)?.email
+        : undefined;
+      const email = verifiedEmail;
       const identity: AuthIdentity = {
         provider: 'github',
         providerId: String(user.id),
@@ -688,6 +740,11 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
       if (linkUserId) {
         const pending = createPendingOauthLink(linkUserId, identity);
         return reply.redirect(`/?link_review=${encodeURIComponent(pending.id)}`);
+      }
+      const existingProfile = findAuthProfileByIdentity('github', String(user.id));
+      if (!existingProfile) {
+        const admission = await approveOauthSignup(request, reply, 'github', verifiedEmail, oauthConnection?.returnTo);
+        if (!admission.allowed) return reply.redirect(admission.redirect);
       }
       const profile = resolveOauthAccount({ fallbackUserId: oauthUserId('github', String(user.id), user.login), identity });
       const userId = profile.userId;
@@ -741,6 +798,7 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
         username: string;
         global_name?: string | null;
         email?: string;
+        verified?: boolean;
         avatar?: string | null;
       };
       const updatedAt = new Date().toISOString();
@@ -749,7 +807,7 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
         providerId: user.id,
         username: user.username,
         displayName: user.global_name || user.username,
-        email: user.email,
+        email: user.verified ? user.email : undefined,
         avatarUrl: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : undefined,
         source: 'oauth',
         updatedAt,
@@ -757,6 +815,11 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
       if (linkUserId) {
         const pending = createPendingOauthLink(linkUserId, identity);
         return reply.redirect(`/?link_review=${encodeURIComponent(pending.id)}`);
+      }
+      const existingProfile = findAuthProfileByIdentity('discord', user.id);
+      if (!existingProfile) {
+        const admission = await approveOauthSignup(request, reply, 'discord', user.verified ? user.email : undefined, oauthConnection?.returnTo);
+        if (!admission.allowed) return reply.redirect(admission.redirect);
       }
       const profile = resolveOauthAccount({ fallbackUserId: oauthUserId('discord', user.id, `discord:${user.username}`), identity });
       const userId = profile.userId;

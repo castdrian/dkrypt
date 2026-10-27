@@ -10,6 +10,8 @@ import type {
 } from '#dashboardJobContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
+import { getBillingEntitlements } from '#billing.js';
+import { requestAbuseContext } from '#abuseProtection.js';
 import { fastifyBlockDuringMaintenance, fastifyBlockManualMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
 import {
@@ -136,6 +138,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         currentMinimumOsVersion: request.body.minimumOsVersion,
         action: 'dispatch',
       });
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
       const job = services.enqueueDecryptJob(
         bundleId,
         'manual',
@@ -147,6 +150,12 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
           preferredDeviceId,
           projectId,
           minimumOsVersion,
+          abuseNetworkHash: abuse.networkHash,
+          abuseAddressHash: abuse.addressHash,
+          abuseBrowserHash: abuse.browserHash,
+          abuseTurnstileHash: abuse.turnstileHash,
+          abuseNetworkDecryptLimit: abuse.networkDecryptLimit,
+          abuseAddressDecryptLimit: abuse.addressDecryptLimit,
         },
       );
       reply.code(202);
@@ -278,6 +287,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         testflight: entry.testflight !== undefined,
         action: 'retry',
       });
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
       const job = services.enqueueDecryptJob(
         entry.bundleId,
         'manual',
@@ -290,6 +300,12 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
           preferredDeviceId,
           projectId,
           minimumOsVersion,
+          abuseNetworkHash: abuse.networkHash,
+          abuseAddressHash: abuse.addressHash,
+          abuseBrowserHash: abuse.browserHash,
+          abuseTurnstileHash: abuse.turnstileHash,
+          abuseNetworkDecryptLimit: abuse.networkDecryptLimit,
+          abuseAddressDecryptLimit: abuse.addressDecryptLimit,
         },
       );
       reply.code(202);

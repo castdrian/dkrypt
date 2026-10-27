@@ -220,6 +220,12 @@ export function findAuthProfileByIdentity(provider: AuthProvider, providerId: st
   );
 }
 
+export function findAuthProfileByEmail(email: string): AuthProfile | undefined {
+  const normalizedEmail = email.trim().toLowerCase();
+  return state.profiles.find((profile) => profile.email?.trim().toLowerCase() === normalizedEmail
+    || (profile.identities ?? [legacyIdentity(profile)]).some((identity) => identity.email?.trim().toLowerCase() === normalizedEmail));
+}
+
 export function resolveAuthUserId(userId: string): string {
   return getAuthProfile(userId)?.userId ?? userId;
 }

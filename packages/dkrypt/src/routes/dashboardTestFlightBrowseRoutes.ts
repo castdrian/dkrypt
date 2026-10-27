@@ -7,6 +7,8 @@ import type {
 } from '#dashboardTestFlightContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
+import { getBillingEntitlements } from '#billing.js';
+import { requestAbuseContext } from '#abuseProtection.js';
 import { fastifyBlockDuringMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
 import { enqueueDecryptJob } from '#jobs/store.js';
@@ -251,6 +253,7 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
         ?? (request.body.preferPrimary && recentlyVerifiedDevices.some((device) => device.id === primaryDeviceId)
           ? primaryDeviceId
           : recentlyVerifiedDevices[0]?.id);
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
       const job = services.enqueueDecryptJob(
         bundleId,
         'manual',
@@ -260,6 +263,12 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
           priority: getUserPriority(session.sub),
           preferredDeviceId,
           projectId,
+          abuseNetworkHash: abuse.networkHash,
+          abuseAddressHash: abuse.addressHash,
+          abuseBrowserHash: abuse.browserHash,
+          abuseTurnstileHash: abuse.turnstileHash,
+          abuseNetworkDecryptLimit: abuse.networkDecryptLimit,
+          abuseAddressDecryptLimit: abuse.addressDecryptLimit,
         },
       );
       reply.code(202);

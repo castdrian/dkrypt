@@ -113,13 +113,13 @@ interface SessionCookieOpts {
 
 export function setSessionCookie(res: Response, session: Omit<Session, 'exp' | 'ver' | 'sid'>, opts: SessionCookieOpts = {}): number {
   const cookie = createSessionCookie(session, opts);
-  res.setHeader('Set-Cookie', cookie.value);
+  appendFastifyCookie(res.reply, cookie.value);
   return cookie.expiresAtMs;
 }
 
 export function setFastifySessionCookie(reply: FastifyReply, session: Omit<Session, 'exp' | 'ver' | 'sid'>, opts: SessionCookieOpts = {}): number {
   const cookie = createSessionCookie(session, opts);
-  reply.header('Set-Cookie', cookie.value);
+  appendFastifyCookie(reply, cookie.value);
   return cookie.expiresAtMs;
 }
 
@@ -167,11 +167,17 @@ export function fastifyRequireRecentAuthentication(maxAgeMs = 10 * 60_000) {
 }
 
 export function clearSessionCookie(res: Response): void {
-  res.setHeader('Set-Cookie', emptySessionCookie());
+  appendFastifyCookie(res.reply, emptySessionCookie());
 }
 
 export function clearFastifySessionCookie(reply: FastifyReply): void {
-  reply.header('Set-Cookie', emptySessionCookie());
+  appendFastifyCookie(reply, emptySessionCookie());
+}
+
+function appendFastifyCookie(reply: FastifyReply, cookie: string): void {
+  const existing = reply.getHeader('Set-Cookie');
+  const cookies = existing === undefined ? [] : Array.isArray(existing) ? existing.map(String) : [String(existing)];
+  reply.header('Set-Cookie', [...cookies, cookie]);
 }
 
 function emptySessionCookie(): string {

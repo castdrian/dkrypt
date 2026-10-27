@@ -52,6 +52,16 @@ export const config = {
   backupManifestSecret: optional('BACKUP_MANIFEST_SECRET', ''),
   backupManifestSecretPrevious: optionalList('BACKUP_MANIFEST_SECRET_PREVIOUS', ''),
   publicBaseUrl: optional('PUBLIC_BASE_URL', 'http://localhost:8080'),
+  trustedProxyAddresses: optionalList('TRUSTED_PROXY_ADDRESSES', 'loopback'),
+  abuseSignalSecret: optional('ABUSE_SIGNAL_SECRET', ''),
+  turnstileSiteKey: optional('TURNSTILE_SITE_KEY', ''),
+  turnstileSecretKey: optional('TURNSTILE_SECRET_KEY', ''),
+  ipInfoToken: optional('IPINFO_TOKEN', ''),
+  abuseBlockedEmailDomains: optionalList('ABUSE_BLOCKED_EMAIL_DOMAINS', 'mailinator.com,guerrillamail.com,10minutemail.com,temp-mail.org,tempmail.com,yopmail.com,maildrop.cc,getnada.com,dispostable.com,trashmail.com').map((value) => value.toLowerCase()),
+  freeNetworkDecryptLimit: Math.max(1, optionalInt('FREE_NETWORK_DECRYPT_LIMIT', 60)),
+  freeAnonymousNetworkDecryptLimit: Math.max(1, optionalInt('FREE_ANONYMOUS_NETWORK_DECRYPT_LIMIT', 24)),
+  freeAddressDecryptLimit: Math.max(1, optionalInt('FREE_ADDRESS_DECRYPT_LIMIT', 12)),
+  freeAnonymousAddressDecryptLimit: Math.max(1, optionalInt('FREE_ANONYMOUS_ADDRESS_DECRYPT_LIMIT', 6)),
 
   adminPassword: required('ADMIN_PASSWORD'),
   adminPasswordPrevious: optional('ADMIN_PASSWORD_PREVIOUS', ''),
@@ -167,6 +177,10 @@ export const config = {
   smtpPassPrevious: optional('SMTP_PASS_PREVIOUS', ''),
   smtpFrom: optional('SMTP_FROM', 'dkrypt <dkrypt@dylib.dev>'),
 };
+
+if (Boolean(config.turnstileSiteKey) !== Boolean(config.turnstileSecretKey)) throw new Error('TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY must be configured together');
+if (config.trustedProxyAddresses.some((address) => ['*', '0.0.0.0/0', '::/0'].includes(address.toLowerCase()))) throw new Error('TRUSTED_PROXY_ADDRESSES must not trust every proxy');
+if (config.abuseSignalSecret.length > 0 && config.abuseSignalSecret.length < 32) throw new Error('ABUSE_SIGNAL_SECRET must be at least 32 characters');
 
 export function isGithubOauthEnabled(): boolean {
   return config.githubOauthClientId !== '' && config.githubOauthClientSecret !== '';

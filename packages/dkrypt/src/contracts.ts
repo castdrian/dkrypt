@@ -12,6 +12,7 @@ import {
   authPrivacyDeleteBodySchema,
   authProfileBodySchema,
   authReauthenticateBodySchema,
+  authSignupChallengeBodySchema,
   authTokenBodySchema,
 } from '#authContracts.js';
 import {
@@ -524,6 +525,8 @@ const AuthSessionResponse = object({
   discordOauthEnabled: Type.Boolean(),
   deployment: object({ ref: Type.String() }),
   publicBaseUrl: Type.String(),
+  signupVerificationEnabled: Type.Boolean(),
+  signupTurnstileSiteKey: Type.Optional(Type.String()),
   mfa: Type.Optional(object({ ...AuthMfaResponse.properties, required: Type.Boolean() })),
 });
 const AuthSessionListResponse = Type.Array(
@@ -1124,6 +1127,7 @@ register('GET', '/v1/billing/webhooks/inbox', { querystring: billingWebhookInbox
 
 const remainingContracts: Array<[ContractMethod, string]> = [
   ['GET', '/v1/auth/session'],
+  ['POST', '/v1/auth/signup-challenge'],
   ['GET', '/v1/auth/mfa'],
   ['POST', '/v1/auth/mfa/setup'],
   ['GET', '/v1/auth/privacy/export'],
@@ -1278,6 +1282,7 @@ register('GET', '/v1/dashboard/jobs/:id/status', { params: dashboardJobParamsSch
 register('GET', '/v1/dashboard/jobs/:id/timeline', { params: dashboardJobParamsSchema, response: { 200: JobTimelineResponse, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/testflight/catalog', { querystring: testFlightCatalogQuerySchema, response: { 200: testFlightCatalogResponseSchema } });
 register('GET', '/v1/auth/session', { response: { 200: AuthSessionResponse } });
+register('POST', '/v1/auth/signup-challenge', { body: authSignupChallengeBodySchema, response: { 200: OkResponse, 400: ErrorEnvelope, 429: ErrorEnvelope, 503: ErrorEnvelope } });
 register('GET', '/v1/auth/mfa', { response: { 200: AuthMfaResponse } });
 register('POST', '/v1/auth/mfa/setup', { response: { 200: object({ secret: Type.String(), otpauthUrl: Type.String() }) } });
 register('POST', '/v1/auth/mfa/confirm', { response: { 200: object({ enabled: Type.Boolean(), recoveryCodes: Type.Array(Type.String()) }) } });

@@ -64,6 +64,13 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | --- | --- |
 | `API_KEY` | Self-hosted service credential for direct API and health checks; separate from dashboard-generated user keys |
 | `SESSION_SIGNING_SECRET` | Dashboard session signing |
+| `ABUSE_SIGNAL_SECRET` | Stable key for pseudonymous signup and Free-tier network counters; use a separate random value of at least 32 characters |
+| `TRUSTED_PROXY_ADDRESSES` | Exact proxy IPs or CIDRs whose forwarded client addresses Fastify may trust; never use a catch-all range |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Paired Cloudflare Turnstile keys required for every new OAuth account |
+| `IPINFO_TOKEN` | Optional IPinfo Plus, Max, or privacy API token for VPN, proxy, Tor, relay, residential proxy, and hosting-network classification |
+| `ABUSE_BLOCKED_EMAIL_DOMAINS` | Comma-separated disposable email domains blocked for new accounts |
+| `FREE_NETWORK_DECRYPT_LIMIT`, `FREE_ANONYMOUS_NETWORK_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across an IPv4 `/24` or IPv6 `/56`; the lower cap applies to classified VPN/proxy/Tor/relay/hosting networks |
+| `FREE_ADDRESS_DECRYPT_LIMIT`, `FREE_ANONYMOUS_ADDRESS_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across one exact IP address; the lower cap applies to classified VPN/proxy/Tor/relay/hosting addresses |
 | `BACKUP_MANIFEST_SECRET` | Stable key for encrypted backup manifests; keep it independent from session rotation |
 | `BACKUP_MANIFEST_SECRET_PREVIOUS` | Comma-separated previous manifest keys retained while older snapshots still exist |
 | `ADMIN_PASSWORD` | Local administrator sign-in |
@@ -87,6 +94,19 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `STATE_DIR` | SQLite database, pairing material, backups, and mirrors |
 
 For a reverse proxy, preserve the browser-facing `Host` header. If the proxy rewrites it, set `PUBLIC_BASE_URL` to the exact external origin, including the scheme and port. Direct LAN access by IP address works without changing `PUBLIC_BASE_URL`, but OAuth callbacks and secure cookies still require the correct public origin.
+
+<details>
+<summary>Account-abuse controls</summary>
+
+New OAuth accounts require a verified GitHub or Discord email. One account can be created per verified email in a 30-day window, configured disposable email domains are rejected, and signup velocity is limited using keyed hashes of the exact address, coarse network prefix, and short-lived first-party browser signal. Free decrypts also have account, exact-address, coarse-network, and short-lived browser-signal limits. Configure `ABUSE_SIGNAL_SECRET` independently so those hashes remain stable when rotating the dashboard session key.
+
+Cloudflare Turnstile is mandatory for every new OAuth account. Until both keys are configured, new account creation is blocked while existing users can still sign in. dkrypt also sets a random, signed, first-party browser signal for up to seven days. Turnstile's optional ephemeral identifier is stored as a separate short-lived signal, not a hardware ID. dkrypt does not read persistent hardware identifiers or build a browser fingerprint.
+
+For network reputation checks, configure an IPinfo Plus, Max, or privacy API token. IPinfo receives the request IP only when signup checks or a Free decrypt need a missing classification; dkrypt caches only VPN, proxy, Tor, relay, residential-proxy, hosting, and anonymous-network flags against a keyed exact-address hash for up to 12 hours. Classified networks receive lower signup and Free-tier limits rather than an automatic ban. If classification is configured but temporarily unavailable, dkrypt applies those lower limits until a lookup succeeds. The dashboard doctor reports which optional controls are configured without exposing keys.
+
+If dkrypt is behind a reverse proxy, set `TRUSTED_PROXY_ADDRESSES` to that proxy's exact IP or narrow CIDR so rate limits use the real client network. dkrypt rejects catch-all proxy trust settings because they let clients forge forwarded IP headers. Shared limits use both one exact address and an IPv4 `/24` or IPv6 `/56` range; set the values high enough for households, offices, and schools that legitimately share a network.
+
+</details>
 
 The Bun API runs as an unprivileged service account; the USB bridge retains root access for direct device transport, with a small root supervisor managing both processes. Startup migrates existing state and artifact volume permissions once and keeps pairing records root-only. dkrypt creates its own Ed25519 SSH key in a separate persistent `dkrypt_device_ssh` Docker volume; it does not import or scan the host's personal SSH keys. USB setup installs the public half through the authenticated device agent and only reports decrypt readiness after SSH and SFTP respond. Preserve this volume across container replacements. If it is deleted, run USB setup again so the device can authorize the newly generated key. Protect access to the volume like any other service credential. Use an HTTPS reverse proxy when exposing the dashboard beyond localhost.
 

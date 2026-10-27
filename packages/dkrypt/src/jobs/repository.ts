@@ -6,6 +6,7 @@ import type { Database, SQLQueryBindings } from 'bun:sqlite';
 type StoredJob = Omit<Job, 'childProcess' | 'waiters'>;
 const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 const FREE_QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const DEVICE_SIGNAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface DecryptQuotaUsage {
   limit: number | null;
@@ -42,6 +43,26 @@ export class FreeDecryptLimitError extends Error {
   constructor(readonly nextAvailableAt: number) {
     super('free decrypt allowance exhausted');
     this.name = 'FreeDecryptLimitError';
+  }
+}
+
+export class FreeAbuseLimitError extends Error {
+  readonly statusCode = 429;
+  readonly code = 'free_shared_limit';
+
+  constructor(readonly nextAvailableAt: number, message: string) {
+    super(message);
+    this.name = 'FreeAbuseLimitError';
+  }
+}
+
+export class FreeAbuseContextUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly code = 'free_abuse_protection_unavailable';
+
+  constructor() {
+    super('Free decrypt access cannot verify this connection right now. Please try again shortly.');
+    this.name = 'FreeAbuseContextUnavailableError';
   }
 }
 const exactBuildFilter = `
@@ -124,7 +145,7 @@ export interface JobRepository {
   deleteFreeQuotaOwner(ownerId: string): void;
   quotaJournal(ownerId: string, limit?: number): Array<{ jobId: string; ownerId: string; admittedAt: number; state: 'reserved' | 'consumed'; bundleId?: string; projectId?: string; source?: string; status?: string; versionLabel?: string; executionPath?: string }>;
   quotaReceipt(jobId: string, ownerId: string): { admittedAt: number; state: 'reserved' | 'consumed' } | undefined;
-  admit(job: Job, ownerId?: string, limit?: number, freeTier?: boolean): string;
+  admit(job: Job, ownerId?: string, limit?: number, freeTier?: boolean, abuseContext?: { networkHash?: string; addressHash?: string; browserHash?: string; turnstileHash?: string; networkDecryptLimit?: number; addressDecryptLimit?: number }): string;
   settleQuota(jobId: string, success: boolean): void;
   reconcileQuota(): void;
   mergeQuotaOwner(targetUserId: string, sourceUserId: string): void;
@@ -305,7 +326,25 @@ function replaceFreeQuotaCompletions(database: Database, completions: readonly F
   }
 }
 
-function admitJob(database: Database, job: Job, ownerId?: string, limit?: number, freeTier = false): string {
+function freeAbuseWindowRows(database: Database, field: 'network_hash' | 'address_hash' | 'browser_hash' | 'turnstile_hash', value: string, now: number): Array<{ window_start: number }> {
+  database.query('DELETE FROM free_decrypt_abuse_quota WHERE completed_at <= ?').run(now - FREE_QUOTA_WINDOW_MS);
+  database.query('UPDATE free_decrypt_abuse_quota SET browser_hash = NULL, browser_expires_at = NULL WHERE browser_hash IS NOT NULL AND browser_expires_at <= ?').run(now);
+  database.query('UPDATE free_decrypt_abuse_quota SET turnstile_hash = NULL, turnstile_expires_at = NULL WHERE turnstile_hash IS NOT NULL AND turnstile_expires_at <= ?').run(now);
+  const windowMs = field === 'browser_hash' || field === 'turnstile_hash' ? DEVICE_SIGNAL_RETENTION_MS : FREE_QUOTA_WINDOW_MS;
+  return database.query(`
+    SELECT COALESCE(completed_at, reserved_at) AS window_start
+    FROM free_decrypt_abuse_quota
+    WHERE ${field} = ? AND (completed_at > ? OR job_id IS NOT NULL)
+    ORDER BY COALESCE(completed_at, reserved_at) ASC, id ASC;
+  `).all(value, now - windowMs) as Array<{ window_start: number }>;
+}
+
+function freeAbuseNextAvailableAt(rows: Array<{ window_start: number }>, limit: number, windowMs: number): number {
+  const blockingRow = rows[rows.length - limit];
+  return (blockingRow?.window_start ?? Date.now()) + windowMs;
+}
+
+function admitJob(database: Database, job: Job, ownerId?: string, limit?: number, freeTier = false, abuseContext?: { networkHash?: string; addressHash?: string; browserHash?: string; turnstileHash?: string; networkDecryptLimit?: number; addressDecryptLimit?: number }): string {
   const normalizedOwnerId = ownerId?.trim().toLowerCase();
   database.exec('BEGIN IMMEDIATE;');
   try {
@@ -325,6 +364,18 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
     if (normalizedOwnerId && freeTier) {
       const usage = freeQuotaUsage(database, normalizedOwnerId, job.createdAt);
       if (usage.used >= 3) throw new FreeDecryptLimitError(usage.nextAvailableAt ?? job.createdAt + FREE_QUOTA_WINDOW_MS);
+      if (!abuseContext?.networkHash || !abuseContext.addressHash) throw new FreeAbuseContextUnavailableError();
+      const sharedLimits = [
+        { field: 'network_hash' as const, value: abuseContext.networkHash, limit: Math.max(1, abuseContext.networkDecryptLimit ?? config.freeNetworkDecryptLimit), windowMs: FREE_QUOTA_WINDOW_MS, message: 'free decrypt access is temporarily limited for this network' },
+        { field: 'address_hash' as const, value: abuseContext.addressHash, limit: Math.max(1, abuseContext.addressDecryptLimit ?? config.freeAddressDecryptLimit), windowMs: FREE_QUOTA_WINDOW_MS, message: 'free decrypt access is temporarily limited for this connection' },
+        { field: 'browser_hash' as const, value: abuseContext.browserHash, limit: 6, windowMs: DEVICE_SIGNAL_RETENTION_MS, message: 'free decrypt access is temporarily limited for this browser' },
+        { field: 'turnstile_hash' as const, value: abuseContext.turnstileHash, limit: 6, windowMs: DEVICE_SIGNAL_RETENTION_MS, message: 'free decrypt access is temporarily limited for this browser' },
+      ];
+      for (const signal of sharedLimits) {
+        if (!signal.value) continue;
+        const rows = freeAbuseWindowRows(database, signal.field, signal.value, job.createdAt);
+        if (rows.length >= signal.limit) throw new FreeAbuseLimitError(freeAbuseNextAvailableAt(rows, signal.limit, signal.windowMs), signal.message);
+      }
     }
     if (normalizedOwnerId) {
       const usage = freeTier ? undefined : quotaUsage(database, normalizedOwnerId, limit, job.createdAt);
@@ -353,7 +404,19 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(job.id, JSON.stringify(serializableJob(job)), job.createdAt, job.status, job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, job.projectId ?? 'default', job.source, job.priority, job.createdAt, null, null, job.attempt ?? null, job.deadlineAt ?? null, null, job.correlationId ?? null, null, null);
     database.query('INSERT INTO job_timelines (id, payload, updated_at) VALUES (?, ?, ?)').run(job.id, JSON.stringify({ jobId: job.id, events: job.timeline ?? [] }), job.createdAt);
-    if (normalizedOwnerId && freeTier) database.query('INSERT INTO free_decrypt_quota (owner_id, job_id, reserved_at, completed_at) VALUES (?, ?, ?, NULL)').run(normalizedOwnerId, job.id, job.createdAt);
+    if (normalizedOwnerId && freeTier) {
+      database.query('INSERT INTO free_decrypt_quota (owner_id, job_id, reserved_at, completed_at) VALUES (?, ?, ?, NULL)').run(normalizedOwnerId, job.id, job.createdAt);
+      database.query('INSERT INTO free_decrypt_abuse_quota (job_id, network_hash, address_hash, browser_hash, browser_expires_at, turnstile_hash, turnstile_expires_at, reserved_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(
+        job.id,
+        abuseContext!.networkHash!,
+        abuseContext!.addressHash!,
+        abuseContext!.browserHash ?? null,
+        abuseContext!.browserHash ? job.createdAt + DEVICE_SIGNAL_RETENTION_MS : null,
+        abuseContext!.turnstileHash ?? null,
+        abuseContext!.turnstileHash ? job.createdAt + DEVICE_SIGNAL_RETENTION_MS : null,
+        job.createdAt,
+      );
+    }
     else if (normalizedOwnerId) database.query('INSERT INTO decrypt_quota_ledger (job_id, owner_id, admitted_at, state) VALUES (?, ?, ?, ?)').run(job.id, normalizedOwnerId, job.createdAt, 'reserved');
     database.exec('COMMIT;');
     return job.id;
@@ -391,7 +454,17 @@ function reconcileQuota(database: Database): void {
           completed_at = COALESCE((SELECT finished_at FROM jobs WHERE jobs.id = free_decrypt_quota.job_id), ?)
       WHERE job_id IN (SELECT id FROM jobs WHERE status = 'done');
     `).run(Date.now());
+    database.query(`
+      UPDATE free_decrypt_abuse_quota
+      SET job_id = NULL, reserved_at = NULL,
+          completed_at = COALESCE((SELECT finished_at FROM jobs WHERE jobs.id = free_decrypt_abuse_quota.job_id), ?)
+      WHERE job_id IN (SELECT id FROM jobs WHERE status = 'done');
+    `).run(Date.now());
     database.exec("DELETE FROM free_decrypt_quota WHERE job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
+    database.exec("DELETE FROM free_decrypt_abuse_quota WHERE job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued', 'running', 'done'))");
+    database.query('DELETE FROM free_decrypt_abuse_quota WHERE completed_at <= ?').run(Date.now() - FREE_QUOTA_WINDOW_MS);
+    database.query('UPDATE free_decrypt_abuse_quota SET browser_hash = NULL, browser_expires_at = NULL WHERE browser_hash IS NOT NULL AND browser_expires_at <= ?').run(Date.now());
+    database.query('UPDATE free_decrypt_abuse_quota SET turnstile_hash = NULL, turnstile_expires_at = NULL WHERE turnstile_hash IS NOT NULL AND turnstile_expires_at <= ?').run(Date.now());
     database.exec('COMMIT;');
   } catch (error) {
     database.exec('ROLLBACK;');
@@ -733,8 +806,8 @@ export function createJobRepository(database: Database): JobRepository {
       const row = database.query('SELECT admitted_at, state FROM decrypt_quota_ledger WHERE job_id = ? AND owner_id = ?').get(jobId, ownerId.trim().toLowerCase()) as { admitted_at: number; state: 'reserved' | 'consumed' } | null;
       return row ? { admittedAt: row.admitted_at, state: row.state } : undefined;
     },
-    admit(job, ownerId, limit, freeTier) {
-      const admittedId = admitJob(database, job, ownerId, limit, freeTier);
+    admit(job, ownerId, limit, freeTier, abuseContext) {
+      const admittedId = admitJob(database, job, ownerId, limit, freeTier, abuseContext);
       if (admittedId === job.id) knownPayloads.set(job.id, JSON.stringify(serializableJob(job)));
       return admittedId;
     },
@@ -744,10 +817,12 @@ export function createJobRepository(database: Database): JobRepository {
         const usageRow = database.query("SELECT id, payload FROM decrypt_credit_records WHERE json_extract(payload, '$.type') = 'usage' AND json_extract(payload, '$.jobId') = ? AND json_extract(payload, '$.state') = 'reserved'").get(jobId) as { id: string; payload: string } | null;
         if (success) {
           database.query('UPDATE free_decrypt_quota SET job_id = NULL, reserved_at = NULL, completed_at = ? WHERE job_id = ?').run(Date.now(), jobId);
+          database.query('UPDATE free_decrypt_abuse_quota SET job_id = NULL, reserved_at = NULL, completed_at = ? WHERE job_id = ?').run(Date.now(), jobId);
           database.query("UPDATE decrypt_quota_ledger SET state = 'consumed' WHERE job_id = ? AND state = 'reserved'").run(jobId);
           if (usageRow) database.query("UPDATE decrypt_credit_records SET payload = json_set(payload, '$.state', 'consumed'), updated_at = ? WHERE id = ?").run(Date.now(), usageRow.id);
         } else {
           database.query('DELETE FROM free_decrypt_quota WHERE job_id = ?').run(jobId);
+          database.query('DELETE FROM free_decrypt_abuse_quota WHERE job_id = ?').run(jobId);
           database.query("DELETE FROM decrypt_quota_ledger WHERE job_id = ? AND state = 'reserved'").run(jobId);
           if (usageRow) {
             const usage = JSON.parse(usageRow.payload) as { grantId: string };
@@ -957,8 +1032,8 @@ export function getDecryptQuotaReceipt(jobId: string, ownerId: string): ReturnTy
   return repository.quotaReceipt(jobId, ownerId);
 }
 
-export function admitPersistedJob(job: Job, ownerId?: string, limit?: number, freeTier = false): string {
-  return repository.admit(job, ownerId, limit, freeTier);
+export function admitPersistedJob(job: Job, ownerId?: string, limit?: number, freeTier = false, abuseContext?: { networkHash?: string; addressHash?: string; browserHash?: string; turnstileHash?: string; networkDecryptLimit?: number; addressDecryptLimit?: number }): string {
+  return repository.admit(job, ownerId, limit, freeTier, abuseContext);
 }
 
 export function settleDecryptQuota(jobId: string, success: boolean): void {

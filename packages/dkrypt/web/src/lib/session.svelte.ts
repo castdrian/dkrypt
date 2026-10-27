@@ -74,6 +74,8 @@ export interface SessionInfo {
   discordOauthEnabled: boolean;
   deployment?: { ref: string };
   publicBaseUrl?: string;
+  signupVerificationEnabled?: boolean;
+  signupTurnstileSiteKey?: string;
   mfa?: { enabled: boolean; recoveryCodesRemaining: number; required: boolean };
 }
 

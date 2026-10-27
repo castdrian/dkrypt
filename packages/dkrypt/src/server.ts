@@ -74,7 +74,7 @@ import { stopNotificationDigestScheduler } from '#notify.js';
 import { closeDashboardConnections } from '#events.js';
 import { startSpan, startTelemetry, stopTelemetry, traceContextFromHeader, type SpanHandle } from '#telemetry.js';
 import { FixedWindowRateLimiter, setRateLimitHeaders } from '#util/rateLimit.js';
-import { DailyDecryptLimitError, FreeDecryptLimitError } from '#jobs/repository.js';
+import { DailyDecryptLimitError, FreeAbuseContextUnavailableError, FreeAbuseLimitError, FreeDecryptLimitError } from '#jobs/repository.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { startRustDeviceEventMonitoring } from '#deviceBridgeEvents.js';
 import { createPublicOpenApiDocument, isPublicApiKeyRoute } from '#publicApi.js';
@@ -83,6 +83,7 @@ import { closeIncidentRepository, reconcileOperationalIncidents } from '#store/i
 import { closeIntegrationRepository } from '#store/integrationRepository.js';
 import { closeOauthLinkReviewRepository } from '#store/oauthLinkReview.js';
 import { closeServiceCreditDatabase, startServiceOutageMonitor, stopServiceOutageMonitor } from '#serviceCredits.js';
+import { closeAbuseProtectionDatabase, isSignupChallengeConfigured } from '#abuseProtection.js';
 import { closeMcpDatabase, mcpRoutes } from '#routes/mcpRoutes.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -156,7 +157,7 @@ export async function buildServer(options: {
   stripeClient?: () => Stripe;
   stripeWebhookHealth?: () => Promise<StripeWebhookHealth>;
 } = {}): Promise<FastifyInstance> {
-  const server = Fastify({ bodyLimit: 5 * 1024 * 1024, trustProxy: 'loopback' }).withTypeProvider<TypeBoxTypeProvider>();
+  const server = Fastify({ bodyLimit: 5 * 1024 * 1024, trustProxy: config.trustedProxyAddresses }).withTypeProvider<TypeBoxTypeProvider>();
 
   server.setNotFoundHandler((request, reply) => reply.code(404).send({ error: 'not found', code: 'not_found', message: 'not found', requestId: request.id, retryable: false }));
   server.setErrorHandler((error, request, reply) => {
@@ -174,6 +175,15 @@ export async function buildServer(options: {
     if (error instanceof FreeDecryptLimitError) {
       reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
       reply.code(429).send({ error: error.message, code: error.code, message: error.message, requestId: request.id, retryable: true, remediation: { nextAvailableAt: error.nextAvailableAt } });
+      return;
+    }
+    if (error instanceof FreeAbuseLimitError) {
+      reply.header('Retry-After', String(Math.max(1, Math.ceil((error.nextAvailableAt - Date.now()) / 1000))));
+      reply.code(429).send({ error: error.message, code: error.code, message: error.message, requestId: request.id, retryable: true, remediation: { nextAvailableAt: error.nextAvailableAt } });
+      return;
+    }
+    if (error instanceof FreeAbuseContextUnavailableError) {
+      reply.code(503).send({ error: error.message, code: error.code, message: error.message, requestId: request.id, retryable: true });
       return;
     }
     const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number' ? (error as { statusCode: number }).statusCode : 500;
@@ -304,6 +314,7 @@ export async function buildServer(options: {
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), usb=()');
     const isScalarReferenceDocument = request.url.split('?', 1)[0] === '/reference/';
+    const challengeOrigin = isSignupChallengeConfigured() ? ' https://challenges.cloudflare.com' : '';
     if (isScalarReferenceDocument) {
       const nonce = randomBytes(18).toString('base64url');
       const html = typeof normalizedPayload === 'string'
@@ -316,9 +327,9 @@ export async function buildServer(options: {
           .replace(/<script\b/gi, `<script nonce="${nonce}"`)
           .replace('</head>', `<meta property="csp-nonce" content="${nonce}" />\n  </head>`);
       }
-      reply.header('Content-Security-Policy', `default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data: https:; style-src 'self'; style-src-elem 'self' 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'; connect-src 'self'; font-src 'self' data:`);
+      reply.header('Content-Security-Policy', `default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data: https:; style-src 'self'; style-src-elem 'self' 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'${challengeOrigin}; connect-src 'self'${challengeOrigin}; frame-src 'self'${challengeOrigin}; font-src 'self' data:`);
     } else {
-      reply.header('Content-Security-Policy', "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:");
+      reply.header('Content-Security-Policy', `default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; script-src 'self'${challengeOrigin}; connect-src 'self'${challengeOrigin}; frame-src 'self'${challengeOrigin}; font-src 'self' data:`);
     }
     if (config.publicBaseUrl.startsWith('https://')) reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     done(null, normalizedPayload);
@@ -497,6 +508,7 @@ export function registerShutdownHandlers(
         closeOauthLinkReviewRepository();
         closeMcpDatabase();
         closeServiceCreditDatabase();
+        closeAbuseProtectionDatabase();
         closeStateDatabase();
         log.info('graceful shutdown completed', { signal });
         stopLogFlusher();
