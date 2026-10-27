@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-27",
+    "title": "feat: add public request checks and QR pickup",
+    "description": "Released in 9e9943a."
+  },
+  {
+    "date": "2026-10-27",
     "title": "feat(billing): add free tier and simplify member dashboard",
     "description": "Released in 56debe3."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-27",
     "title": "fix: harden billing self-service edge cases",
     "description": "Released in c7f73cc."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "feat: improve API and billing self-service",
-    "description": "Released in b83e1ea."
   }
 ] as const;

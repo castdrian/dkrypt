@@ -7,6 +7,7 @@
 	import AppIcon from "#components/AppIcon.svelte";
 	import JobDetailsDialog from "#components/JobDetailsDialog.svelte";
 	import CopyButton from "#components/CopyButton.svelte";
+	import PickupQrButton from "#components/PickupQrButton.svelte";
 	import EmptyState from "#components/EmptyState.svelte";
 	import RelativeTime from "#components/RelativeTime.svelte";
 	import VirtualizedList from "#components/VirtualizedList.svelte";
@@ -1164,6 +1165,9 @@
 												title="Decrypt again"
 												><RotateCcw class="h-4 w-4" /></Button
 											>
+										{/if}
+										{#if (j.artifactId || j.freeTierResult) && j.fileAvailable}
+											<PickupQrButton artifactId={j.freeTierResult ? undefined : j.artifactId} jobId={j.freeTierResult ? j.id : undefined} compact />
 										{/if}
 										{#if j.artifactId && j.fileAvailable}
 											<CopyButton

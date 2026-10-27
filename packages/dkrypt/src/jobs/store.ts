@@ -1226,20 +1226,22 @@ export function prioritizeQueuedJob(id: string, projectId?: string): boolean {
 }
 
 function applyBillingPriorityToQueuedJobs(userId: string): void {
+  syncPersistedJobsFromRepository(true);
   const entitlement = getBillingEntitlements(userId);
   if (entitlement.freeTier) return;
   const accountId = userId.toLowerCase();
   let changed = false;
-  for (const id of [...queue]) {
-    const job = jobs.get(id);
-    if (!job || job.status !== 'queued' || job.pausedAt !== undefined) continue;
+  for (const job of jobs.values()) {
+    if (job.status !== 'queued') continue;
     if ((job.billingOwnerId ?? job.queuedBy)?.toLowerCase() !== accountId) continue;
     const upgradedPriority = Math.max(job.priority, entitlement.priority);
     if (upgradedPriority <= job.priority) continue;
-    removeQueuedJob(job.id);
     job.priority = upgradedPriority;
     appendJobTimelineEvent(job, 'Paid plan priority applied while queued', 'queued');
-    insertByPriority(job.id, upgradedPriority);
+    if (job.pausedAt === undefined) {
+      removeQueuedJob(job.id);
+      insertByPriority(job.id, upgradedPriority);
+    }
     changed = true;
   }
   if (!changed) return;

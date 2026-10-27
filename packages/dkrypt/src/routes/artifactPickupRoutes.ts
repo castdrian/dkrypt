@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
-import { artifactFileAvailable, getArtifactById, getArtifactForJob } from '#artifacts.js';
+import { artifactFileAvailable, getArtifactById, getArtifactForJob, touchArtifact } from '#artifacts.js';
 import { config } from '#config.js';
 import { getBillingEntitlements } from '#billing.js';
 import { PermissionFlag } from '#permissions.js';
@@ -82,6 +82,7 @@ export const artifactPickupRoutes: FastifyPluginAsyncTypebox = async (server) =>
     if (kind === 'artifact') {
       const artifact = getArtifactById(id);
       if (!artifact || !artifact.projectIds.includes(DEFAULT_PROJECT_ID) || !artifactFileAvailable(artifact)) return reply.code(404).type('text/plain').send('This artifact is no longer available.');
+      await touchArtifact(artifact);
       await streamFilePath(artifact.filePath, request.raw, new Response(reply), name, artifact.fileSizeBytes, artifact.id, artifact.sha256);
       return;
     }
