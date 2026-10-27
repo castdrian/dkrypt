@@ -48,6 +48,9 @@ test('GitHub OAuth falls back to its previous secret only for incorrect client c
     if (url === 'https://api.github.com/user') {
       return new Response(JSON.stringify({ id: 987654321, login: 'rotation-test', email: 'rotation@example.test' }), { status: 200 });
     }
+    if (url === 'https://api.github.com/user/emails') {
+      return new Response(JSON.stringify([{ email: 'rotation@example.test', primary: true, verified: true }]), { status: 200 });
+    }
     throw new Error(`unexpected OAuth provider request: ${url}`);
   }) as typeof fetch;
   const server = await buildTestServer({ includePublicRoutes: false });
