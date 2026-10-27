@@ -67,6 +67,12 @@ function sortById<T extends { id: string }>(records: T[]): T[] {
 }
 
 function restoreSchemaAtVersion(database: ReturnType<typeof openStateDatabase>, version: number): void {
+  if (version < 37) {
+    database.db.exec('DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_expiry; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_turnstile; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_browser; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_address; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_network; DROP TABLE IF EXISTS free_decrypt_abuse_quota;');
+  }
+  if (version < 36) {
+    database.db.exec('DROP INDEX IF EXISTS abuse_signup_events_by_expiry; DROP INDEX IF EXISTS abuse_signup_events_by_email_time; DROP INDEX IF EXISTS abuse_signup_events_by_turnstile_time; DROP INDEX IF EXISTS abuse_signup_events_by_browser_time; DROP INDEX IF EXISTS abuse_signup_events_by_address_time; DROP INDEX IF EXISTS abuse_signup_events_by_network_time; DROP TABLE IF EXISTS abuse_ip_reputation; DROP INDEX IF EXISTS abuse_signup_challenges_by_expiry; DROP TABLE IF EXISTS abuse_signup_challenges; DROP TABLE IF EXISTS abuse_signup_events;');
+  }
   if (version < 32) {
     database.db.exec('DROP TABLE job_worker_leases; DROP TABLE job_worker_generations; DELETE FROM schema_migrations WHERE version = 32;');
   }
