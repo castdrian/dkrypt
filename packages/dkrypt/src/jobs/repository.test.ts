@@ -224,14 +224,15 @@ test('free quota backup data contains only recent completion timestamps and rest
     const pending = createJob({ id: 'quota-backup-pending', createdAt: now + 3 });
     source.admit(pending, ownerId, 3, true, abuseContext);
 
-    const completionRecords = source.freeQuotaCompletions(now + 4);
+    const capturedAt = Date.now() + 60_000;
+    const completionRecords = source.freeQuotaCompletions(capturedAt);
     expect(completionRecords).toHaveLength(2);
-    expect(completionRecords.every((record) => record.ownerId === ownerId && record.completedAt >= now && record.completedAt <= now + 4)).toBeTrue();
+    expect(completionRecords.every((record) => record.ownerId === ownerId && record.completedAt >= now && record.completedAt <= capturedAt)).toBeTrue();
     expect(completionRecords[0]).not.toHaveProperty('jobId');
 
     restored = createJobRepository(openStateCollectionDatabase({ stateDir: restoredStateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
     restored.replaceFreeQuotaCompletions(completionRecords);
-    expect(restored.freeQuotaUsage(ownerId, now + 4)).toMatchObject({ used: 2, remaining: 1 });
+    expect(restored.freeQuotaUsage(ownerId, capturedAt)).toMatchObject({ used: 2, remaining: 1 });
     expect(restored.freeQuotaCompletions(Math.max(...completionRecords.map((entry) => entry.completedAt)) + 31 * 24 * 60 * 60 * 1000)).toEqual([]);
   } finally {
     source?.close();

@@ -9,7 +9,6 @@
   import Input from '#lib/components/ui/Input.svelte';
   import Select from '#lib/components/ui/Select.svelte';
   import { fmtDateTime } from '#lib/format.svelte';
-  import { sessionCanViewOperationalDashboard } from '#lib/session.svelte';
 
   interface Props {
     open: boolean;
@@ -142,7 +141,6 @@
   });
 
   const deviceOptions = $derived(devices.map((device) => ({ value: device.id, label: device.name })));
-  const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
 </script>
 
 <Dialog {open} {onOpenChange} class="max-w-lg">
@@ -162,12 +160,12 @@
       </Button>
     {/if}
   </div>
-  {#if canViewOperationalDashboard && deviceOptions.length > 1}
+  {#if deviceOptions.length > 1}
     <div class="mb-3">
       <label for="testflight-device" class="mb-1 block text-xs text-muted">Use device</label>
       <Select id="testflight-device" ariaLabel="Use device" items={deviceOptions} bind:value={selectedDeviceId} onValueChange={() => load(appId)} />
     </div>
-  {:else if canViewOperationalDashboard && deviceOptions.length === 1}
+  {:else if deviceOptions.length === 1}
     <div class="mb-3 text-xs text-muted">Verified on {deviceOptions[0].label}</div>
   {/if}
   <RateLimitHint bucket="external" />

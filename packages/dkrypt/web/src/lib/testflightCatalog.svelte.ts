@@ -1,5 +1,5 @@
 import { fetchTestFlightCatalog, type TestFlightCatalogApp } from '#lib/api';
-import { sessionCanViewOperationalDashboard, sessionState } from '#lib/session.svelte';
+import { sessionState } from '#lib/session.svelte';
 import { persistTestFlightCatalog, readPersistedTestFlightCatalog } from '#lib/testFlightCatalogPersistence';
 import { resetTestFlightCatalogState, testFlightCatalogState } from '#lib/testFlightCatalogState.svelte';
 
@@ -26,8 +26,7 @@ function isCurrentCatalogGeneration(userId: string, generation: number): boolean
 }
 
 function catalogForCurrentViewer(apps: TestFlightCatalogApp[]): TestFlightCatalogApp[] {
-  const canViewDevices = sessionCanViewOperationalDashboard();
-  return canViewDevices ? apps : apps.map((app) => ({ ...app, devices: [], available: true }));
+  return apps;
 }
 
 function ensureCatalogOwner(userId: string): number {

@@ -134,7 +134,7 @@ test('decrypt preflight limits checks to enabled devices and returns shared queu
   }
 });
 
-test('regular members receive only a simple preflight summary while the server checks devices internally', async () => {
+test('regular members receive a simple preflight summary while the server checks devices internally', async () => {
   const device = createDevice('private-device', { name: 'Private iPad' });
   const checkedDevices: string[] = [];
   const server = build({

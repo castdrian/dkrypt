@@ -41,7 +41,7 @@
 	import { liveState } from "#lib/live.svelte";
 	import { requestNotificationPermission } from "#lib/notifications";
 	import { PermissionFlag } from "#lib/permissions";
-	import { sessionCanViewOperationalDashboard, sessionHasPermission } from "#lib/session.svelte";
+	import { sessionHasPermission } from "#lib/session.svelte";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { showToast } from "#lib/ui.svelte";
 	import { cn } from "#lib/utils";
@@ -75,7 +75,6 @@
 	const pastedInvalid = $derived(pastedInputs.some((row) => row.kind === "invalid"));
 	const pastedQueueable = $derived(pastedInputs.filter((row) => row.kind === "bundle" || row.kind === "appstore"));
 	const canRequestTestFlight = $derived(sessionHasPermission(PermissionFlag.requestTestFlightSubscriptions));
-	const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
 	const parsed = $derived(parsedResult.entries);
 	const activeTemplate = $derived(BATCH_QUEUE_TEMPLATES.find((template) => template.source === source)!);
 	const missingTestFlightSelectors = $derived(source === "testflight" ? parsed.filter((entry) => !entry.selector) : []);
@@ -287,7 +286,7 @@
 					if (!app || testFlightCatalogState.error) throw new Error("not available via TestFlight on an enabled device");
 					const deviceOptions = getRecentlyVerifiedTestFlightDevices(app, Date.now());
 					const selectedDeviceId = selectedDeviceByBundleId[bundleId];
-					if (canViewOperationalDashboard && (!selectedDeviceId || !deviceOptions.some((device) => device.id === selectedDeviceId))) {
+					if (!selectedDeviceId || !deviceOptions.some((device) => device.id === selectedDeviceId)) {
 						throw new Error("no recently verified device has access");
 					}
 					if (!selector) throw new Error("add a version_build selector");
@@ -303,7 +302,7 @@
 					trackName = appDisplayName(app.bundleId, app.bundleId);
 					versionLabel = `TestFlight ${selector}`;
 					testflight = { appId: app.appId, build };
-					response = await queueTestFlightDecrypt(bundleId, app.appId, build, false, canViewOperationalDashboard ? selectedDeviceId : undefined, true);
+					response = await queueTestFlightDecrypt(bundleId, app.appId, build, false, selectedDeviceId, true);
 				} else {
 					response = await queueDecrypt(bundleId, selector, undefined, false, undefined, true);
 				}
@@ -433,7 +432,7 @@
 							</div>
 							{#if !selection.available}
 								<span class="shrink-0 text-xs text-warn">Unavailable</span>
-							{:else if !canViewOperationalDashboard || selection.devices.length === 0}
+							{:else if selection.devices.length === 0}
 								<span class="shrink-0 text-xs text-muted">Available via TestFlight</span>
 							{:else if selection.devices.length === 1}
 								<span class="shrink-0 text-xs text-muted">{selection.devices[0]!.name}</span>

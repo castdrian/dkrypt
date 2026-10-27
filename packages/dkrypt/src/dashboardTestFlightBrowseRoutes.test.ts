@@ -32,6 +32,14 @@ test('TestFlight browse routes pass through an explicitly selected enabled devic
   const seenDeviceIds: Array<string | undefined> = [];
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardTestFlightBrowseRoutes({
+    getVerifiedCatalog: async () => [{
+      appId: 12345,
+      bundleId: build.bundleId,
+      displayName: 'TestFlight app',
+      devices: [{ id: device.id, name: device.name, verifiedAt: Date.now() }],
+      lastVerifiedAt: Date.now(),
+      deviceSource: true,
+    }],
     listTrains: async (appId, selectedDevice) => {
       expect(appId).toBe(12345);
       seenDeviceIds.push(selectedDevice?.id);
@@ -147,7 +155,7 @@ test('TestFlight decrypt queues only for a device with verified access', async (
   }));
 
   try {
-    const cookie = sessionCookie(PermissionFlag.requestDecrypt | PermissionFlag.viewDevices);
+    const cookie = sessionCookie(PermissionFlag.requestDecrypt);
     const accepted = await server.inject({
       method: 'POST',
       url: '/v1/dashboard/testflight/decrypt',
@@ -267,8 +275,17 @@ test('TestFlight decrypt rejects build mismatches and returns retryable unavaila
 });
 
 test('TestFlight upstream failures return a safe retryable error envelope', async () => {
+  const device = createEnabledDevice(`TestFlight upstream ${crypto.randomUUID()}`);
   const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
   await server.register(createDashboardTestFlightBrowseRoutes({
+    getVerifiedCatalog: async () => [{
+      appId: 12345,
+      bundleId: build.bundleId,
+      displayName: 'TestFlight app',
+      devices: [{ id: device.id, name: device.name, verifiedAt: Date.now() }],
+      lastVerifiedAt: Date.now(),
+      deviceSource: true,
+    }],
     listTrains: async () => {
       throw new Error('private upstream token details');
     },
@@ -290,5 +307,6 @@ test('TestFlight upstream failures return a safe retryable error envelope', asyn
     expect(JSON.stringify(body)).not.toContain('private upstream token details');
   } finally {
     await server.close();
+    deleteDevice(device.id, 'test cleanup');
   }
 });

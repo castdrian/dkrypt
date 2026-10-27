@@ -82,6 +82,12 @@
       <div class="border-warn/40 bg-warn/10 mb-4 rounded-lg border p-3 text-xs text-warn">{preflight.devices.some((device) => device.checking) ? 'Device verification is still running. You can queue now; the worker will recheck before starting.' : 'No device currently passes every check. You can still queue this job and resolve the device issue afterward.'}</div>
     {/if}
     {:else}
+      {#if preflight.devices.some((device) => device.checking)}
+        <div class="mb-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn" role="status">Device health check is still running. Try again shortly.</div>
+      {/if}
+      {#if !preflight.canQueue}
+        <div class="mb-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn" role="status">dkrypt could not confirm an available device yet. You can still queue; availability will be checked again when the job starts.</div>
+      {/if}
       <div class="mb-4 rounded-lg border border-border px-3 py-2 text-xs text-muted">dkrypt will select and verify an available device automatically when the job starts.</div>
     {/if}
     <div class="flex justify-end gap-2">

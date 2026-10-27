@@ -36,7 +36,7 @@ export function buildDashboardOverview(permissions: bigint, userId: string) {
       isPrimary: device.isPrimary,
       reachable: health?.reachable,
     };
-  }) : [];
+  }) : undefined;
   const enabledDevices = deviceRecords.filter((device) => device.enabled);
   const recentHealth = enabledDevices.map((device) => freshHealthForDevice(device.id))
     .filter((health): health is NonNullable<typeof health> => health !== undefined);

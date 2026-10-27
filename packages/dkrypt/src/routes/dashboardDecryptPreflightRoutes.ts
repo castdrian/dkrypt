@@ -70,7 +70,7 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
       const testflight = request.body.testflight === true;
       const versionLabel = request.body.versionLabel?.trim().slice(0, 64) || undefined;
       const installSizeBytes = request.body.installSizeBytes;
-      const requestedDeviceId = operationalView ? request.body.deviceId?.trim() ?? '' : '';
+      const requestedDeviceId = operationalView || testflight ? request.body.deviceId?.trim() ?? '' : '';
       const requestedDevice = requestedDeviceId ? services.getDevice(requestedDeviceId) : undefined;
       if (requestedDeviceId && (!requestedDevice || !requestedDevice.enabled || requestedDevice.draining)) {
         return sendPreflightError(request.id, reply, 400, 'deviceId must refer to an enabled device accepting jobs');

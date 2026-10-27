@@ -894,9 +894,10 @@ test('job history groups version and status while keeping actions beside the app
   await expectVisualSnapshot(page, row, 'job-history-mobile.png');
 });
 
-test('regular members see operational Status details without device controls', async ({ page }) => {
+test('regular members see a simple service status without device details', async ({ page }) => {
   await mockAuthenticatedDashboard(page, '0');
   await mockStableDashboardEvents(page);
+  let detailedHealthRequests = 0;
   await page.unroute('**/v1/dashboard/overview*');
   await page.route('**/v1/dashboard/overview*', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
@@ -909,16 +910,17 @@ test('regular members see operational Status details without device controls', a
       activeJobs: [],
     }) });
   });
-  await page.route('**/v1/dashboard/devices/primary/health', async (route) => {
+  await page.route('**/v1/dashboard/devices/*/health', async (route) => {
+    detailedHealthRequests += 1;
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ reachable: true, checkedAt: Date.now(), testFlightBridgeReachable: true, testFlightRunning: true, batteryPercent: 83, batteryCharging: true, batteryTemperatureC: 31, networkConnected: true, internetAccess: true, networkInterface: 'en0', networkIpAddress: '192.0.2.44', storageUsedPercent: 0.2 }) });
   });
-  await page.route('**/v1/dashboard/devices/primary/health-history?*', async (route) => {
+  await page.route('**/v1/dashboard/devices/*/health-history?*', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ buckets: [{ hourStart: Date.now() - 3600_000, reachablePercent: 1, transitions: 0 }], uptimePercent: 1 }) });
   });
-  await page.route('**/v1/dashboard/devices/primary/battery-history?*', async (route) => {
+  await page.route('**/v1/dashboard/devices/*/battery-history?*', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ buckets: [{ hourStart: Date.now() - 3600_000, batteryPercent: 83 }] }) });
   });
-  await page.route('**/v1/dashboard/devices/primary/temperature-history?*', async (route) => {
+  await page.route('**/v1/dashboard/devices/*/temperature-history?*', async (route) => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ buckets: [{ hourStart: Date.now() - 3600_000, batteryTemperatureC: 31 }] }) });
   });
 
@@ -926,18 +928,19 @@ test('regular members see operational Status details without device controls', a
   await page.getByRole('button', { name: 'Open status drawer' }).click();
   const status = page.locator('.status-surface:visible').first();
   await expect(status.getByText('Scheduler on')).toHaveCount(0);
-  await expect(status.getByText('Device online')).toBeVisible();
-  await expect(status.getByText('83%')).toBeVisible();
-  await expect(status.getByText('Device reachability · last 24h')).toBeVisible();
+  await expect(status.getByText('All systems operational')).toBeVisible();
+  await expect(status.getByText('No active decrypts')).toBeVisible();
+  await expect(status.getByText('Device online')).toHaveCount(0);
+  await expect(status.getByText('83%')).toHaveCount(0);
+  await expect(status.getByText('Device reachability · last 24h')).toHaveCount(0);
   await expect(status.getByText('Recent scheduler checks')).toHaveCount(0);
-  await expect(status.getByText('Staging disk')).toBeVisible();
+  await expect(status.getByText('Staging disk')).toHaveCount(0);
   await expect(status.getByRole('button', { name: 'Refresh device status' })).toHaveCount(0);
   await expect(status.getByRole('button', { name: /Copy debug info/ })).toHaveCount(0);
-  await status.getByRole('button', { name: 'Internet' }).click();
-  await expect(page.getByText('192.0.2.44')).toBeVisible();
+  expect(detailedHealthRequests).toBe(0);
 });
 
-test('device ready status expires when its health sample becomes stale', async ({ page }) => {
+test('member Status stays simple when device health changes or expires', async ({ page }) => {
   const statusNow = Date.now();
   await page.clock.install({ time: statusNow });
   await mockAuthenticatedDashboard(page, '0');
@@ -954,16 +957,18 @@ test('device ready status expires when its health sample becomes stale', async (
       activeJobs: [],
     }) });
   });
-  await page.route('**/v1/dashboard/devices/primary/health', async (route) => {
+  await page.route('**/v1/dashboard/devices/*/health', async (route) => {
     await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'health unavailable' }) });
   });
 
   await page.goto('/?tab=home');
   await page.getByRole('button', { name: 'Open status drawer' }).click();
   const status = page.locator('.status-surface:visible').first();
-  await expect(status.getByText('1 device ready')).toBeVisible();
+  await expect(status.getByText('All systems operational')).toBeVisible();
+  await expect(status.getByText('1 device ready')).toHaveCount(0);
   await page.clock.fastForward(15_000);
-  await expect(status.getByText('Device status outdated')).toBeVisible();
+  await expect(status.getByText('All systems operational')).toBeVisible();
+  await expect(status.getByText('Device status outdated')).toHaveCount(0);
 });
 
 test('live updates suspend while hidden and refresh immediately when visible again', async ({ page }) => {
@@ -1936,8 +1941,7 @@ test('queue objective details stay hidden from members without automation access
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Insights', exact: true }).click();
-
+  await expect(page.getByRole('button', { name: 'Insights', exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Queue objective' })).toHaveCount(0);
   expect(sloRequests).toBe(0);
 });
@@ -2190,20 +2194,27 @@ test('pricing plan checkout actions share a bottom baseline', async ({ page }) =
     const paymentDetails = page.getByText('Stripe checkout · crypto where available', { exact: true });
     await expect(buttons).toHaveCount(6);
     await expect(paymentDetails).toHaveCount(6);
-    const cardLayout = await page.locator('main > div.grid > [data-slot="card"]').evaluateAll((cards) => cards.map((card) => {
-      const rect = card.getBoundingClientRect();
-      const button = card.querySelector('a[href="/#sign-in"]');
-      const price = card.querySelector('.text-3xl');
-      const paymentDetails = [...card.querySelectorAll('div')].find((element) => element.textContent?.trim() === 'Stripe checkout · crypto where available');
-      return {
-        top: rect.top,
-        buttonBottom: button?.getBoundingClientRect().bottom ?? Number.NaN,
-        buttonWidth: button?.getBoundingClientRect().width ?? Number.NaN,
-        priceTop: price?.getBoundingClientRect().top ?? Number.NaN,
-        paymentDetailsTop: paymentDetails?.getBoundingClientRect().top ?? Number.NaN,
-        paymentDetailsWidth: paymentDetails?.getBoundingClientRect().width ?? Number.NaN,
-      };
-    }));
+    const cardLayout = [];
+    for (let index = 0; index < await buttons.count(); index += 1) {
+      const button = buttons.nth(index);
+      const card = button.locator('xpath=ancestor::*[@data-slot="card"][1]');
+      const cardBox = await card.boundingBox();
+      const buttonBox = await button.boundingBox();
+      const priceBox = await card.locator('.text-3xl').first().boundingBox();
+      const paymentDetailsBox = await card.getByText('Stripe checkout · crypto where available', { exact: true }).boundingBox();
+      expect(cardBox).not.toBeNull();
+      expect(buttonBox).not.toBeNull();
+      expect(priceBox).not.toBeNull();
+      expect(paymentDetailsBox).not.toBeNull();
+      cardLayout.push({
+        top: cardBox!.y,
+        buttonBottom: buttonBox!.y + buttonBox!.height,
+        buttonWidth: buttonBox!.width,
+        priceTop: priceBox!.y,
+        paymentDetailsTop: paymentDetailsBox!.y,
+        paymentDetailsWidth: paymentDetailsBox!.width,
+      });
+    }
     const rows = new Map<number, typeof cardLayout>();
     for (const card of cardLayout) {
       const rowTop = [...rows.keys()].find((top) => Math.abs(top - card.top) <= 2) ?? card.top;
@@ -2498,7 +2509,7 @@ test('system doctor is hidden from accounts without device-management permission
     });
   });
   await mockStableDashboardEvents(page);
-  await mockAuthenticatedDashboard(page, '2097152');
+  await mockAuthenticatedDashboard(page, '2');
   let doctorRequests = 0;
   await page.route('**/v1/dashboard/doctor', async (route) => {
     doctorRequests += 1;
@@ -2507,16 +2518,15 @@ test('system doctor is hidden from accounts without device-management permission
 
   await page.goto('/?tab=settings&stab=doctor');
 
-  await expect(page.getByRole('button', { name: 'Operations', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Personal', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'System', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Operations', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'System Doctor' })).toHaveCount(0);
   expect(doctorRequests).toBe(0);
 });
 
 test('status panel handles an unavailable job volume response without an unhandled rejection', async ({ page }) => {
   await mockStableDashboardEvents(page);
-  await mockAuthenticatedDashboard(page, '2');
+  await mockAuthenticatedDashboard(page, '2097152');
   await page.addInitScript(() => {
     const target = window as typeof window & { jobVolumeRejections: string[] };
     target.jobVolumeRejections = [];
@@ -3558,7 +3568,7 @@ test('mobile managers can reach a member role assignment without sideways scroll
   await expect.poll(() => savedRoleIds).toEqual(['operator']);
 });
 
-test('ordinary and paid members see device availability in the status pane without health permissions', async ({ page }) => {
+test('ordinary and paid members see the same simple Status summary', async ({ page }) => {
   await page.setViewportSize({ width: 1500, height: 900 });
   await mockAuthenticatedDashboard(page, '2');
   let isPaidPlan = false;
@@ -3569,6 +3579,7 @@ test('ordinary and paid members see device availability in the status pane witho
       settings: {},
       watches: [],
       devices: [],
+      statusDevices: [{ id: 'primary', name: 'Lab iPad', enabled: true, isPrimary: true, reachable: true }],
       deviceStatus: { configured: 1, enabled: 1, online: 1, ready: 1, attention: 0, checking: 0, unavailable: 0, freshUntil: Date.now() + 60_000 },
       schedulerRunHistory: [],
       disk: { totalBytes: 1, freeBytes: 1, usedBytes: 0, usedPercent: 0 },
@@ -3579,23 +3590,29 @@ test('ordinary and paid members see device availability in the status pane witho
   });
   await page.route('**/v1/dashboard/devices/*/health*', async (route) => {
     detailedHealthRequests += 1;
-    await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden' }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ reachable: true, checkedAt: Date.now(), testFlightBridgeReachable: true, testFlightRunning: true, batteryPercent: 83, batteryCharging: true, batteryTemperatureC: 31, networkConnected: true, internetAccess: true, networkInterface: 'en0', networkIpAddress: '192.0.2.44', storageUsedPercent: 0.2 }) });
+  });
+  await page.route('**/v1/dashboard/devices/*/health-history*', async (route) => {
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ buckets: [{ hourStart: Date.now() - 3600_000, reachablePercent: 1, transitions: 0 }], uptimePercent: 1 }) });
   });
 
   for (const paid of [false, true]) {
     isPaidPlan = paid;
     if (paid) await mockAuthenticatedSession(page, '0');
     await page.goto('/?tab=home');
-    await expect(page.getByText('1 device ready', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('All systems operational', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('No active decrypts', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Device online', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('83%', { exact: true })).toHaveCount(0);
     expect(detailedHealthRequests).toBe(0);
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Open status drawer' }).click();
-  await expect(page.getByLabel('Status drawer').getByText('1 device ready', { exact: true })).toBeVisible();
-  expect(detailedHealthRequests).toBe(0);
+  await expect(page.getByLabel('Status drawer').getByText('All systems operational', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Status drawer').getByText('No active decrypts', { exact: true })).toBeVisible();
 });
 
-test('member status warns when a connected device cannot decrypt and expires an old green reading', async ({ page }) => {
+test('member status does not reveal device health warnings', async ({ page }) => {
   await page.setViewportSize({ width: 1500, height: 900 });
   await page.clock.install();
   await mockAuthenticatedDashboard(page, '0');
@@ -3606,6 +3623,7 @@ test('member status warns when a connected device cannot decrypt and expires an 
       settings: {},
       watches: [],
       devices: [],
+      statusDevices: [{ id: 'primary', name: 'Lab iPad', enabled: true, isPrimary: true, reachable: true }],
       deviceStatus: { configured: 1, enabled: 1, online: 1, ready: blocked ? 0 : 1, attention: blocked ? 1 : 0, checking: 0, unavailable: 0, freshUntil: Date.now() + 1_000 },
       schedulerRunHistory: [],
       disk: { totalBytes: 1, freeBytes: 1, usedBytes: 0, usedPercent: 0 },
@@ -3616,12 +3634,13 @@ test('member status warns when a connected device cannot decrypt and expires an 
   });
 
   await page.goto('/?tab=home');
-  await expect(page.getByText('Device needs attention', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('All systems operational', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Device needs attention', { exact: true })).toHaveCount(0);
   blocked = false;
   await page.reload();
-  await expect(page.getByText('1 device ready', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('All systems operational', { exact: true }).first()).toBeVisible();
   await page.clock.fastForward(31_000);
-  await expect(page.getByText('Device status outdated', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Device status outdated', { exact: true })).toHaveCount(0);
 });
 
 test('bulk retry queues only failures, continues after an error, and exports per-job results', async ({ page }) => {

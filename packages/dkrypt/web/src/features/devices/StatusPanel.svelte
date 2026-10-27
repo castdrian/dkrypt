@@ -37,12 +37,13 @@
 	import { fmtBytesGB, fmtCalendarDate, fmtDateTime, fmtNumber, trendDelta } from "#lib/format.svelte";
 	import { liveState } from "#lib/live.svelte";
 	import { PermissionFlag } from "#lib/permissions";
-	import { sessionHasAnyPermission } from "#lib/session.svelte";
+import { sessionHasAnyPermission } from "#lib/session.svelte";
 
 	const overview = $derived(liveState.overview);
 	let now = $state(Date.now());
 	const canViewDevices = $derived(sessionHasAnyPermission([PermissionFlag.viewDevices, PermissionFlag.manageDevices]));
 	const canViewOperations = $derived(sessionHasAnyPermission([PermissionFlag.viewDevices, PermissionFlag.manageDevices, PermissionFlag.viewAutomation, PermissionFlag.manageAutomation, PermissionFlag.viewScheduler]));
+	const canViewStatusDetails = $derived(canViewOperations);
 	const canManageDevices = $derived(sessionHasAnyPermission([PermissionFlag.manageDevices]));
 	const statusDevices = $derived(overview?.statusDevices ?? overview?.devices.map((device) => ({
 		id: device.id,
@@ -485,7 +486,7 @@
 			</div>
 		{/if}
 	{/snippet}
-	{#if !canViewOperations}
+	{#if !canViewStatusDetails}
 		<div class="flex flex-wrap items-center justify-between gap-3 py-2" role="status">
 			<Badge variant={overview?.serviceStatus === "maintenance" ? "warning" : "success"}>
 				{overview?.serviceStatus === "maintenance" ? "Maintenance in progress" : "All systems operational"}

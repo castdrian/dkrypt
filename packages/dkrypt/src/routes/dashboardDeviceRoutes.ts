@@ -151,7 +151,9 @@ function canReadDeviceStatus(permissions: bigint, force = false): boolean {
 }
 
 function resolveReadableStatusDevice(permissions: bigint, id: string): { device: DeviceRecord } | { status: 403 | 404; message: string } {
-  if (!canReadDeviceStatus(permissions)) return { status: 403, message: 'device history is unavailable' };
+  if (!hasPermission(permissions, PermissionFlag.viewDevices) && !hasPermission(permissions, PermissionFlag.manageDevices)) {
+    return { status: 403, message: 'device history is unavailable' };
+  }
   const device = resolveDevice(id);
   return device ? { device } : { status: 404, message: 'device not found' };
 }

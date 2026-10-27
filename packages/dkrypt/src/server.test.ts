@@ -1540,6 +1540,7 @@ test('dashboard overview gives ordinary members only a simple service status', a
     expect(baselineResponse.json()).toMatchObject({ devices: [], serviceStatus: expect.stringMatching(/^(operational|maintenance)$/) });
     expect(baselineResponse.json()).not.toHaveProperty('statusDevices');
     expect(baselineResponse.json()).not.toHaveProperty('deviceStatus');
+    expect(baselineResponse.json()).not.toHaveProperty('disk');
     expect(baselineResponse.json()).not.toHaveProperty('settings');
     expect(baselineResponse.json()).not.toHaveProperty('maintenance');
     const noRoleResponse = await server.inject({ method: 'GET', url: '/v1/dashboard/overview', headers: { cookie: createSessionCookie('root', 0n) } });
@@ -1609,10 +1610,8 @@ test('members cannot read device health or history without device visibility per
     }
 
     for (const url of [
-      '/v1/dashboard/devices',
-      `/v1/dashboard/devices/${device.id}/health`,
       '/v1/dashboard/devices/primary/health?force=true',
-      `/v1/dashboard/devices/${device.id}/health-history`,
+      '/v1/dashboard/devices',
     ]) {
       const denied = await server.inject({ method: 'GET', url, headers: { cookie: memberCookie } });
       expect(denied.statusCode).toBe(403);
@@ -2357,7 +2356,7 @@ test('Fastify sends the initial dashboard overview over SSE', async () => {
   }
 });
 
-test('member status updates never include device health or system details', async () => {
+test('member status updates expose simple service availability only', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const device = createDevice({ name: `SSE status ${crypto.randomUUID()}`, transport: 'wifi', host: '127.0.0.1' }, 'test');
   const baseUrl = await server.listen({ port: 0, host: '127.0.0.1' });
@@ -2388,10 +2387,13 @@ test('member status updates never include device health or system details', asyn
     setCachedDeviceHealth(device.id, { reachable: true, jailbreakAvailable: true, checkedAt: Date.now() });
     const update = await readEvent(reader);
     expect(update).toContain('event: overview');
-    const payload = JSON.parse(update.match(/^data: (.+)$/m)?.[1] ?? '{}') as { devices?: unknown[]; deviceStatus?: unknown; statusDevices?: unknown; serviceStatus?: string };
+    const payload = JSON.parse(update.match(/^data: (.+)$/m)?.[1] ?? '{}') as { devices?: unknown[]; deviceStatus?: unknown; statusDevices?: unknown; disk?: unknown; maintenance?: unknown; settings?: unknown; serviceStatus?: string };
     expect(payload.devices).toEqual([]);
     expect(payload).not.toHaveProperty('deviceStatus');
     expect(payload).not.toHaveProperty('statusDevices');
+    expect(payload).not.toHaveProperty('disk');
+    expect(payload).not.toHaveProperty('maintenance');
+    expect(payload).not.toHaveProperty('settings');
     expect(payload.serviceStatus).toMatch(/^(operational|maintenance)$/);
   } finally {
     clearTimeout(timeout);

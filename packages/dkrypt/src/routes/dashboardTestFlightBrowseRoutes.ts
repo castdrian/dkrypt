@@ -24,7 +24,6 @@ import {
 } from '#store/state.js';
 import { getVerifiedTestFlightCatalog, TestFlightCatalogUnavailableError, type TestFlightCatalogApp } from '#testflightSubscriptions.js';
 import { recentlyVerifiedTestFlightDevices } from '#testflightPolicy.js';
-import { canViewOperationalDashboard } from '#dashboardAccess.js';
 import { externalRequestRateLimiter, fastifyRateLimitPerUser } from '#util/rateLimit.js';
 import { scopedLogger } from '#logger.js';
 
@@ -110,7 +109,7 @@ function resolveEnabledDevice(
 ): DeviceRecord | undefined | null {
   if (!deviceId) return undefined;
   const device = findDevice(deviceId);
-  if (!device || !device.enabled) {
+  if (!device || !device.enabled || device.draining) {
     sendError(request, reply, 400, 'deviceId must refer to an enabled device');
     return null;
   }
@@ -124,14 +123,18 @@ async function resolveVerifiedBrowseDevice(
   requestedDeviceId: string | undefined,
   services: TestFlightBrowseServices,
 ): Promise<DeviceRecord | undefined | null> {
-  const session = getFastifySession(request)!;
-  if (canViewOperationalDashboard(session.permissions)) {
-    return resolveEnabledDevice(request, reply, requestedDeviceId, services.getDevice);
-  }
   try {
     const app = (await services.getVerifiedCatalog({ requireAllDevices: false })).find((entry) => entry.appId === appId);
     const verifiedDevices = app ? recentlyVerifiedTestFlightDevices(app.devices) : [];
-    const device = verifiedDevices.map((candidate) => services.getDevice(candidate.id)).find((candidate) => candidate?.enabled && !candidate.draining);
+    const selectedId = requestedDeviceId?.trim();
+    const selected = selectedId ? verifiedDevices.find((candidate) => candidate.id === selectedId) : undefined;
+    if (selectedId && !selected) {
+      sendError(request, reply, 409, 'TestFlight access is not recently verified on the selected device');
+      return null;
+    }
+    const device = (selected ? [selected] : verifiedDevices)
+      .map((candidate) => services.getDevice(candidate.id))
+      .find((candidate) => candidate?.enabled && !candidate.draining);
     if (device) return device;
   } catch (error) {
     if (error instanceof TestFlightCatalogUnavailableError) {
@@ -219,9 +222,7 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
       }
 
       const session = getFastifySession(request)!;
-      const requestedDevice = canViewOperationalDashboard(session.permissions)
-        ? resolveEnabledDevice(request, reply, request.body.deviceId?.trim(), services.getDevice)
-        : undefined;
+      const requestedDevice = resolveEnabledDevice(request, reply, request.body.deviceId?.trim(), services.getDevice);
       if (requestedDevice === null) return;
       let verifiedTestFlightApp: TestFlightCatalogApp | undefined;
       try {

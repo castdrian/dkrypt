@@ -361,6 +361,7 @@ initDensity();
 		});
 	});
 	const canViewOperationalDashboard = $derived(sessionCanViewOperationalDashboard());
+	const canViewServiceStatus = $derived(sessionState.loggedIn);
 	const pinnedTabs = $derived(visibleTabs.filter((tab) => navigationPreferencesState.pinned.includes(tab.id)));
 	const unpinnedTabs = $derived(visibleTabs.filter((tab) => !navigationPreferencesState.pinned.includes(tab.id)));
 
@@ -1311,7 +1312,7 @@ initDensity();
 						</div>
 					{/if}
 				</div>
-				{#if canViewOperationalDashboard && tabState.active !== "docs" && !focusViewState.enabled}
+				{#if canViewServiceStatus && tabState.active !== "docs" && !focusViewState.enabled}
 					<div class="hidden min-w-0 flex-col gap-4 min-[1440px]:sticky min-[1440px]:top-6 min-[1440px]:flex">
 						<StatusPanel />
 					</div>
@@ -1321,7 +1322,7 @@ initDensity();
 		{#if focusViewState.enabled}
 			<Button variant="secondary" size="icon" class="fixed top-3 right-3 z-50 shadow-lg" onclick={() => setFocusView(false)} aria-label="Exit focus view" title="Exit focus view"><Minimize2 class="h-4 w-4" /></Button>
 		{/if}
-		{#if canViewOperationalDashboard && !focusViewState.enabled}
+		{#if canViewServiceStatus && !focusViewState.enabled}
 		<Button
 			variant="outline"
 			size="icon"
@@ -1332,7 +1333,7 @@ initDensity();
 			<PanelRightOpen class="h-4 w-4" />
 		</Button>
 		{/if}
-		{#if canViewOperationalDashboard && mobileStatusOpen && !focusViewState.enabled}
+		{#if canViewServiceStatus && mobileStatusOpen && !focusViewState.enabled}
 			<Button
 				variant="ghost"
 				type="button"
@@ -1341,7 +1342,7 @@ initDensity();
 				aria-label="Close status drawer"
 			></Button>
 		{/if}
-		{#if canViewOperationalDashboard}
+		{#if canViewServiceStatus}
 		<aside style:display={focusViewState.enabled ? 'none' : undefined}
 			class={cn(
 				"fixed top-0 right-0 z-50 h-[100dvh] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto border-l border-border bg-panel p-3 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-2xl transition-transform duration-200 min-[1440px]:hidden",

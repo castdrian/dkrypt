@@ -330,9 +330,7 @@ export function createDashboardTestFlightRoutes(overrides: Partial<TestFlightRou
       const forceRefresh = request.query.refresh === 'true';
       if (forceRefresh || cache.stale) services.refreshCatalogInBackground(forceRefresh);
       const current = services.getCatalogCacheState();
-      const showDeviceDetails = canViewTestFlightDeviceDetails(getFastifySession(request)!.permissions);
-      const apps = showDeviceDetails ? cache.apps : cache.apps.map((app) => ({ ...app, devices: [], available: true }));
-      return { apps, fetchedAt: cache.fetchedAt, refreshing: forceRefresh || current.refreshing };
+      return { apps: cache.apps, fetchedAt: cache.fetchedAt, refreshing: forceRefresh || current.refreshing };
     });
 
     server.post<DashboardTestFlightCatalogUnsubscribeRoute>('/v1/dashboard/testflight/catalog/:bundleId/unsubscribe', {
