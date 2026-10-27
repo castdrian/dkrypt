@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { config } from '#config.js';
-import { deleteAuthProfile } from '#identity.js';
+import { deleteAuthProfile, upsertAuthIdentity } from '#identity.js';
 import { buildTestServer } from '#testServer.js';
 
 async function runOAuthCallback(server: Awaited<ReturnType<typeof buildTestServer>>, provider: 'github' | 'discord', code = 'single-use-code') {
@@ -53,6 +53,7 @@ test('GitHub OAuth falls back to its previous secret only for incorrect client c
   const server = await buildTestServer({ includePublicRoutes: false });
 
   try {
+    upsertAuthIdentity(userId, { provider: 'github', providerId: '987654321', username: 'rotation-test', displayName: 'rotation-test', email: 'rotation@example.test', source: 'oauth', updatedAt: new Date().toISOString() });
     const { login, callback } = await runOAuthCallback(server, 'github');
 
     expect(login.statusCode).toBe(302);
@@ -114,6 +115,7 @@ test('Discord OAuth falls back to its previous secret only for invalid client au
   const server = await buildTestServer({ includePublicRoutes: false });
 
   try {
+    upsertAuthIdentity(userId, { provider: 'discord', providerId: '123456789012345678', username: 'rotation-test', displayName: 'rotation-test', email: 'rotation@example.test', source: 'oauth', updatedAt: new Date().toISOString() });
     const { login, callback } = await runOAuthCallback(server, 'discord');
 
     expect(login.statusCode).toBe(302);
