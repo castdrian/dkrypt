@@ -233,7 +233,7 @@
     if (!response.ok) throw new Error('billing unavailable');
     billing = (await response.json()) as BillingData;
     if (!initializedPlanEstimate) {
-      expectedMonthlyDecrypts = billing.usageForecast.jobsInSample >= 3 ? Math.ceil(billing.usageForecast.averagePerDay * 30) : 60;
+      expectedMonthlyDecrypts = (billing.usageForecast?.jobsInSample ?? 0) >= 3 ? Math.ceil((billing.usageForecast?.averagePerDay ?? 0) * 30) : 60;
       expectedPeakApiRate = billing.currentPlan?.apiRatePerMinute ?? 0;
       needsHighPriority = (billing.currentPlan?.priority ?? 0) > 0;
       initializedPlanEstimate = true;
