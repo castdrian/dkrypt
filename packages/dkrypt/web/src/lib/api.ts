@@ -127,6 +127,7 @@ export interface JobQueueSummary {
 export interface JobSummary {
   id: string;
   bundleId: string;
+  platform?: 'ios' | 'tvos' | 'visionos';
   externalVersionId?: string;
   testflight?: JobTestFlightSummary;
   versionLabel?: string;
@@ -649,6 +650,12 @@ export interface DecryptPreflightDevice {
 
 export interface DecryptPreflight {
   bundleId: string;
+  platform?: 'ios' | 'tvos' | 'visionos';
+  externalVersionId?: string;
+  minimumOsVersion?: string;
+  serverSide?: boolean;
+  serverSideReady?: boolean;
+  serverSideBlockers?: string[];
   versionLabel?: string;
   testflight: boolean;
   installSizeBytes?: number;
@@ -1799,14 +1806,15 @@ export function queueDecrypt(
   preferPrimary = false,
   minimumOsVersion?: string,
   suppressErrorToast = false,
+  platform: 'ios' | 'tvos' | 'visionos' = 'ios',
 ): Promise<{ ok: boolean; data: JobSummary }> {
   return apiAction('/v1/dashboard/decrypt', {
     method: 'POST',
-    body: JSON.stringify({ bundleId, externalVersionId, versionLabel, preferPrimary, minimumOsVersion }),
+    body: JSON.stringify({ bundleId, externalVersionId, versionLabel, preferPrimary, minimumOsVersion, platform }),
   }, undefined, suppressErrorToast);
 }
 
-export function fetchDecryptPreflight(input: { bundleId: string; versionLabel?: string; testflight?: boolean; installSizeBytes?: number; deviceId?: string }): Promise<DecryptPreflight> {
+export function fetchDecryptPreflight(input: { bundleId: string; platform?: 'ios' | 'tvos' | 'visionos'; versionLabel?: string; testflight?: boolean; installSizeBytes?: number; deviceId?: string }): Promise<DecryptPreflight> {
   return apiJson('/v1/dashboard/decrypt/preflight', {
     method: 'POST',
     body: JSON.stringify(input),
@@ -1952,7 +1960,7 @@ export interface DashboardBrowserCheck {
   expectedOrigin: string | null;
   observedOrigin: string;
   forwardedHeadersPresent: boolean;
-  oauthCallbacks: { github: string; discord: string };
+  oauthCallbacks: { github: string; discord: string; apple: string };
 }
 
 export function fetchDashboardBrowserCheck(): Promise<DashboardBrowserCheck> {

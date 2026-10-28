@@ -23,6 +23,7 @@ import { runAppStoreDownloaderRequest, type AppStoreDownloaderResponse } from '#
 import { emitJobsChanged } from '#events.js';
 import { saveAppleAccountFairPlayCredentialForSelector } from '#appleAccountVault.js';
 import { observeMetric } from '#metrics.js';
+import { appStorePlatformForDownloader } from '#platform.js';
 
 const log = scopedLogger('appstore-offline');
 let offlineAppStoreDispatchNotifier = () => {};
@@ -45,7 +46,7 @@ export interface OfflineAppStoreResult {
 }
 
 export interface OfflineAppStoreProcessor {
-  readiness(job?: Pick<Job, 'testflight'>): OfflineAppStoreReadiness;
+  readiness(job?: Pick<Job, 'testflight' | 'platform'>): OfflineAppStoreReadiness;
   run(job: Job, signal?: AbortSignal, setStage?: (stage: JobExecutionStage) => void, onActivity?: () => void): Promise<OfflineAppStoreResult>;
 }
 
@@ -81,7 +82,7 @@ export interface OfflineAppStoreDependencies {
   stagingDirectory: string;
   getSecrets(): AppleAccountSecrets | undefined;
   getVaultStatus(): AppleAccountVaultStatus;
-  runDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal, onActivity?: () => void): Promise<void | { freeLicenseClaimed?: boolean }>;
+  runDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal, onActivity?: () => void): Promise<void | { freeLicenseClaimed?: boolean; externalVersionId?: string }>;
   runDecrypt(job: Job, secrets: AppleAccountSecrets, inputPath: string, outputPath: string, signal?: AbortSignal, credential?: string, onActivity?: () => void): Promise<void>;
   getLicenseSelector(inputPath: string): string;
   inspectCompatibility?(inputPath: string): IpaFairPlayCompatibility;
@@ -166,6 +167,15 @@ function verifyOfflinePackageIdentity(job: Job, metadata: ExtractedIpaMetadata):
   if (actualBundleId !== job.bundleId) {
     throw new Error(`downloaded IPA bundle identifier ${String(actualBundleId ?? 'missing')} does not match requested ${job.bundleId}`);
   }
+  if (job.platform && job.platform !== 'ios') {
+    const values = [metadata.infoPlist.DTPlatformName, ...(Array.isArray(metadata.infoPlist.CFBundleSupportedPlatforms) ? metadata.infoPlist.CFBundleSupportedPlatforms : [])]
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const accepted = job.platform === 'tvos' ? ['appletvos', 'tvos'] : ['xros', 'visionos'];
+    if (!values.some((value) => accepted.includes(value))) {
+      throw new Error(`downloaded IPA platform metadata does not match ${job.platform === 'tvos' ? 'tvOS' : 'visionOS'}`);
+    }
+  }
   const expectedVersion = job.versionLabel?.match(/^v?(\d+(?:\.\d+)*)$/i)?.[1];
   if (!expectedVersion) return;
   const actualVersion = metadata.summary.shortVersion;
@@ -183,7 +193,7 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
       return false;
     }
   };
-  const readiness = (job?: Pick<Job, 'testflight'>): OfflineAppStoreReadiness => {
+  const readiness = (job?: Pick<Job, 'testflight' | 'platform'>): OfflineAppStoreReadiness => {
     const vault = dependencies.getVaultStatus();
     const downloaderAvailable = isExecutable(dependencies.downloaderPath);
     const decryptorAvailable = isExecutable(dependencies.decryptorPath);
@@ -219,6 +229,7 @@ export function createOfflineAppStoreProcessor(dependencies: OfflineAppStoreDepe
       await rm(outputPath, { force: true });
       try {
         const downloadResult = await measureOfflineAppStorePhase('download', () => dependencies.runDownload(job, secrets, encryptedPath, signal, onActivity));
+        if (downloadResult && 'externalVersionId' in downloadResult && downloadResult.externalVersionId) job.externalVersionId = downloadResult.externalVersionId;
         if (downloadResult && 'freeLicenseClaimed' in downloadResult && downloadResult.freeLicenseClaimed) {
           appendJobTimelineEvent(job, 'Free App Store license acquired', 'done');
           emitJobsChanged();
@@ -516,7 +527,7 @@ async function withSessionWorkspace<T>(operation: (homeDirectory: string) => Pro
   return result as T;
 }
 
-async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal, onActivity?: () => void): Promise<{ freeLicenseClaimed: boolean }> {
+async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, outputPath: string, signal?: AbortSignal, onActivity?: () => void): Promise<{ freeLicenseClaimed: boolean; externalVersionId?: string }> {
   const result = await withSessionWorkspace((homeDirectory) => runAppStoreDownloaderRequest({
     commandPath: config.appStoreOfflineDownloaderBin,
     homeDirectory,
@@ -528,6 +539,7 @@ async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, output
       apple_id: secrets.appleId,
       password: secrets.password,
       bundle_id: job.bundleId,
+      platform: appStorePlatformForDownloader(job.platform ?? 'ios'),
       external_version_id: job.externalVersionId,
       output_path: outputPath,
       max_bytes: config.artifactMaxBytes,
@@ -559,7 +571,7 @@ async function runDefaultDownload(job: Job, secrets: AppleAccountSecrets, output
   }
   markAppleAccountAuthenticated();
   if (result.response.storefront_country) saveAppleAccountStorefrontCountry(result.response.storefront_country);
-  return { freeLicenseClaimed: result.response.free_license_claimed === true };
+  return { freeLicenseClaimed: result.response.free_license_claimed === true, externalVersionId: result.response.external_version_id };
 }
 
 async function runDefaultDecrypt(job: Job, secrets: AppleAccountSecrets, inputPath: string, outputPath: string, signal?: AbortSignal, credentialValue?: string, onActivity?: () => void): Promise<void> {
@@ -679,7 +691,7 @@ export function setOfflineAppStoreDispatchNotifier(notifier: () => void): void {
   offlineAppStoreDispatchNotifier = notifier;
 }
 
-export function getOfflineAppStoreReadiness(job?: Pick<Job, 'testflight'>): OfflineAppStoreReadiness {
+export function getOfflineAppStoreReadiness(job?: Pick<Job, 'testflight' | 'platform'>): OfflineAppStoreReadiness {
   return defaultProcessor.readiness(job);
 }
 

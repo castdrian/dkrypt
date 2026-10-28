@@ -70,6 +70,7 @@ const exactBuildFilter = `
   AND bundle_id = ?
   AND external_version_id IS ?
   AND testflight_build_id IS ?
+  AND COALESCE(json_extract(payload, '$.platform'), 'ios') = ?
 `;
 
 export interface JobBuildLookup {
@@ -77,6 +78,7 @@ export interface JobBuildLookup {
   bundleId: string;
   externalVersionId?: string;
   testFlightBuildId?: number;
+  platform?: 'ios' | 'tvos' | 'visionos';
 }
 
 export interface JobWorkerLease {
@@ -356,7 +358,7 @@ function admitJob(database: Database, job: Job, ownerId?: string, limit?: number
           OR (? = 0 AND COALESCE(json_extract(payload, '$.freeTierResult'), 0) != 1)
         )
       ORDER BY updated_at DESC LIMIT 1;
-    `).get(job.projectId ?? 'default', job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, Number(freeTier), normalizedOwnerId ?? '', Number(freeTier)) as { id: string } | null;
+    `).get(job.projectId ?? 'default', job.bundleId, job.externalVersionId ?? null, job.testflight?.build.id ?? null, job.platform ?? 'ios', Number(freeTier), normalizedOwnerId ?? '', Number(freeTier)) as { id: string } | null;
     if (existing) {
       database.exec('COMMIT;');
       return existing.id;
@@ -567,7 +569,7 @@ export function createJobRepository(database: Database): JobRepository {
           AND status IN ('queued', 'running')
         ORDER BY updated_at DESC
         LIMIT 1;
-      `).get(lookup.projectId, lookup.bundleId, lookup.externalVersionId ?? null, lookup.testFlightBuildId ?? null) as { id?: string } | null;
+      `).get(lookup.projectId, lookup.bundleId, lookup.externalVersionId ?? null, lookup.testFlightBuildId ?? null, lookup.platform ?? 'ios') as { id?: string } | null;
       return row?.id;
     },
     findReusableCompletedIds(lookup) {
@@ -579,7 +581,7 @@ export function createJobRepository(database: Database): JobRepository {
           AND file_path IS NOT NULL
           AND file_path != ''
         ORDER BY updated_at DESC;
-      `).all(lookup.projectId, lookup.bundleId, lookup.externalVersionId ?? null, lookup.testFlightBuildId ?? null) as Array<{ id: string }>;
+      `).all(lookup.projectId, lookup.bundleId, lookup.externalVersionId ?? null, lookup.testFlightBuildId ?? null, lookup.platform ?? 'ios') as Array<{ id: string }>;
       return rows.map((row) => row.id);
     },
     claimWorker(jobId, workerId, resourceId, leaseMs, now = Date.now()) {

@@ -1072,6 +1072,7 @@ describe('Stripe billing webhooks', () => {
       expect(checkoutParameters.get('mode')).toBe('subscription');
       expect(checkoutParameters.get('line_items[0][price]')).toBe('price_regular_test');
       expect(checkoutParameters.get('managed_payments[enabled]')).toBe('true');
+      expect([...checkoutParameters.keys()].some((key) => key.startsWith('payment_method_types'))).toBe(false);
       expect(getBillingEntitlements('root').planId).toBe('viewer');
 
       const stripeEvent = checkoutEvent('root', 'cus_test_billing_api_http', 'sub_test_billing_api_http');

@@ -55,6 +55,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 	import TestFlightPickerDialog from "#features/testflight/TestFlightPickerDialog.svelte";
 	import TestFlightInviteDialog from "#features/testflight/TestFlightInviteDialog.svelte";
 	import VersionPickerDialog from "#features/jobs/VersionPickerDialog.svelte";
+	import { appStorePlatformLabel, type AppStorePlatform } from "#lib/platform";
 
 	let term = $state("");
 	let results = $state<AppStoreSearchResult[]>([]);
@@ -62,6 +63,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 	let searched = $state(false);
 	let highlighted = $state(-1);
 	let storefrontCountry = $state("");
+	let platform = $state<AppStorePlatform>("ios");
 	let accountStorefrontCountry = $state<string | undefined>();
 	let storefrontCountries = $state<Array<{ code: string; name: string }>>([]);
 	let inputEl: HTMLInputElement | undefined = $state();
@@ -78,7 +80,9 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		minimumOsVersion?: string;
 		testflight?: { appId: number; build: TFBuild };
 		deviceId?: string;
+		platform?: AppStorePlatform;
 	} | null>(null);
+	const PLATFORM_BUNDLE_ID_RE = /^[A-Za-z0-9.-]{3,200}$/;
 
 	const statusByBundle = $derived.by(() => {
 		const map = new Map<string, string>();
@@ -91,6 +95,13 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 
 	async function runSearch(q: string): Promise<void> {
 		const trimmed = q.trim();
+		if (platform !== "ios") {
+			searchToken++;
+			results = [];
+			searched = Boolean(trimmed);
+			loading = false;
+			return;
+		}
 		const sharedUrl = trimmed.match(/https?:\/\/[^\s<>]+/i)?.[0]?.replace(/[),.;!?]+$/, "");
 		if (sharedUrl) {
 			try {
@@ -183,6 +194,12 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		if (term.trim()) void runSearch(term);
 	}
 
+	function onPlatformChange(): void {
+		results = [];
+		searched = false;
+		if (term.trim()) void runSearch(term);
+	}
+
 	const debouncedSearch = debounce((q: string) => void runSearch(q), 400);
 
 	function onInput(): void {
@@ -234,7 +251,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		try {
 		const { ok, data } = request.testflight
 				? await queueTestFlightDecrypt(request.bundleId, request.testflight.appId, request.testflight.build, false, request.deviceId)
-				: await queueDecrypt(request.bundleId, request.externalVersionId, request.versionLabel, false, request.minimumOsVersion);
+				: await queueDecrypt(request.bundleId, request.externalVersionId, request.versionLabel, false, request.minimumOsVersion, false, request.platform ?? "ios");
 			if (!ok) return;
 			addDecrypt({
 				id: data.id,
@@ -274,16 +291,25 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		externalVersionId?: string,
 		versionLabel?: string,
 		minimumOsVersion?: string,
+		requestedPlatform: AppStorePlatform = "ios",
 	): Promise<void> {
 		if (!canDecrypt) return;
 		try {
-			pendingQueue = { bundleId, trackName, externalVersionId, versionLabel, minimumOsVersion };
-			preflight = await fetchDecryptPreflight({ bundleId, versionLabel });
+			pendingQueue = { bundleId, trackName, externalVersionId, versionLabel, minimumOsVersion, platform: requestedPlatform };
+			preflight = await fetchDecryptPreflight({ bundleId, platform: requestedPlatform, versionLabel });
+			if (requestedPlatform !== "ios" && pendingQueue) {
+				pendingQueue = {
+					...pendingQueue,
+					externalVersionId: preflight.externalVersionId,
+					versionLabel: preflight.versionLabel,
+					minimumOsVersion: preflight.minimumOsVersion,
+				};
+			}
 			preflightOpen = true;
 		} catch {
 			pendingQueue = null;
 			preflight = null;
-			showToast("Could not check device readiness", "error");
+			showToast(`Could not check ${requestedPlatform === "ios" ? "device" : appStorePlatformLabel(requestedPlatform)} readiness`, "error");
 		}
 	}
 
@@ -335,7 +361,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 				testflight: { appId, build },
 				deviceId,
 			};
-			preflight = await fetchDecryptPreflight({ bundleId, versionLabel: `TestFlight ${label}`, testflight: true, installSizeBytes: build.fileSize, deviceId });
+			preflight = await fetchDecryptPreflight({ bundleId, platform: "ios", versionLabel: `TestFlight ${label}`, testflight: true, installSizeBytes: build.fileSize, deviceId });
 			preflightOpen = true;
 		} catch {
 			pendingQueue = null;
@@ -448,7 +474,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 			void decryptTestFlightBuild(request.bundleId, request.testflight.appId, request.testflight.build, `v${request.testflight.build.cfBundleShortVersion} (${request.testflight.build.cfBundleVersion})`);
 			return;
 		}
-		void queue(request.bundleId, request.trackName, request.externalVersionId, request.versionLabel, request.minimumOsVersion);
+		void queue(request.bundleId, request.trackName, request.externalVersionId, request.versionLabel, request.minimumOsVersion, request.platform ?? "ios");
 	});
 
 	function continueAfterUpgrade(): void {
@@ -458,6 +484,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 			bundleId: request.bundleId,
 			trackName: request.trackName,
 			channel: request.testflight ? 'testflight' : 'appstore',
+			platform: request.platform ?? 'ios',
 			externalVersionId: request.externalVersionId,
 			versionLabel: request.versionLabel ?? '',
 			minimumOsVersion: request.minimumOsVersion,
@@ -533,7 +560,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 
 <Card title="Decrypt an app">
 	{#snippet headerExtra()}
-		{#if canDecrypt}
+		{#if canDecrypt && platform === "ios"}
 			<Button
 				size="sm"
 				variant="secondary"
@@ -542,29 +569,37 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 			>
 		{/if}
 	{/snippet}
-	<div class="relative">
-		<Input
-			bind:ref={inputEl}
-			bind:value={term}
-			oninput={onInput}
-			onkeydown={onKeydown}
-			placeholder="Search or paste an App Store or TestFlight link…"
-			class={term ? "pr-8" : ""}
-		/>
-		{#if term}
-			<Button
-				variant="ghost"
-				size="icon"
-				class="text-muted hover:text-foreground absolute top-1/2 right-1.5 h-7 w-7 -translate-y-1/2"
-				onclick={clearSearch}
-				aria-label="Clear search"
-				title="Clear search"
-			>
-				<X class="h-3.5 w-3.5" />
-			</Button>
-		{/if}
+	<div class="flex min-w-0 items-center gap-2">
+		<div class="relative min-w-0 flex-1">
+			<Input
+				bind:ref={inputEl}
+				bind:value={term}
+				oninput={onInput}
+				onkeydown={onKeydown}
+				placeholder={platform === "ios" ? "Search or paste an App Store or TestFlight link…" : "Enter a tvOS or visionOS bundle ID…"}
+				class={term ? "pr-8" : ""}
+			/>
+			{#if term}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="text-muted hover:text-foreground absolute top-1/2 right-1.5 h-7 w-7 -translate-y-1/2"
+					onclick={clearSearch}
+					aria-label="Clear search"
+					title="Clear search"
+				>
+					<X class="h-3.5 w-3.5" />
+				</Button>
+			{/if}
+		</div>
+		<label for="decrypt-platform" class="sr-only">Platform</label>
+		<select id="decrypt-platform" bind:value={platform} onchange={onPlatformChange} class="h-8 shrink-0 rounded-md border border-border bg-panel px-2 text-xs text-text">
+			<option value="ios">iOS</option>
+			<option value="tvos">tvOS</option>
+			<option value="visionos">visionOS</option>
+		</select>
 	</div>
-	{#if storefrontCountries.length > 0}
+	{#if platform === "ios" && storefrontCountries.length > 0}
 		<div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
 			<label for="decrypt-storefront" class="text-muted">Search storefront</label>
 			<select id="decrypt-storefront" bind:value={storefrontCountry} onchange={onStorefrontChange} class="h-8 max-w-full rounded-md border border-border bg-panel px-2 text-xs text-text">
@@ -579,7 +614,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		</div>
 	{/if}
 
-	{#if canDecrypt}
+	{#if canDecrypt && platform === "ios"}
 		<div class="mt-2.5 flex flex-wrap items-center gap-2 sm:hidden">
 			<Button
 				size="sm"
@@ -587,13 +622,13 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 				onclick={() => (batchOpen = true)}>Batch decrypt</Button
 			>
 		</div>
-	{:else}
+	{:else if platform === "ios"}
 		<div class="mt-2.5 text-xs text-muted sm:hidden">
 			View-only access. Ask an admin for decrypt permission.
 		</div>
 	{/if}
 
-	{#if !term.trim() && starredAppsState.items.length > 0}
+	{#if platform === "ios" && !term.trim() && starredAppsState.items.length > 0}
 		<div class="mt-2.5 flex flex-wrap gap-1.5">
 			{#each starredAppsState.items as app (app.bundleId)}
 				<span
@@ -629,7 +664,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		</div>
 	{/if}
 
-	{#if !term.trim() && recentBundleIdsState.items.length > 0}
+	{#if platform === "ios" && !term.trim() && recentBundleIdsState.items.length > 0}
 		<div class="mt-2.5 flex flex-wrap gap-1.5">
 			{#each recentBundleIdsState.items as bundleId (bundleId)}
 				<span
@@ -664,7 +699,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		</div>
 	{/if}
 
-	{#if !term.trim() && testFlightCatalogState.apps.length > 0}
+	{#if platform === "ios" && !term.trim() && testFlightCatalogState.apps.length > 0}
 		<div class="mt-3">
 			<div class="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted">
 				<div class="flex min-w-0 items-center gap-1.5">
@@ -701,11 +736,11 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		</div>
 	{/if}
 
-	{#if !term.trim() && testFlightCatalogState.apps.length === 0 && testFlightCatalogState.loading}
+	{#if platform === "ios" && !term.trim() && testFlightCatalogState.apps.length === 0 && testFlightCatalogState.loading}
 		<div class="mt-3 rounded-xl border border-border px-3 py-2.5 text-xs text-muted">
 			Checking TestFlight availability…
 		</div>
-	{:else if !term.trim() && testFlightCatalogState.apps.length === 0 && testFlightCatalogState.error}
+	{:else if platform === "ios" && !term.trim() && testFlightCatalogState.apps.length === 0 && testFlightCatalogState.error}
 		<div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted">
 			<span role="status" class="inline-flex items-center gap-1.5"><CircleAlert aria-hidden="true" class="h-3.5 w-3.5 text-warn" />Couldn’t check TestFlight availability.</span>
 			<div class="flex items-center gap-1.5">
@@ -713,13 +748,33 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 				{#if canRequestTestFlight}<Button size="sm" variant="secondary" onclick={() => (inviteDialogOpen = true)}><Link2 class="h-3.5 w-3.5" /> Request an app</Button>{/if}
 			</div>
 		</div>
-	{:else if !term.trim() && testFlightCatalogState.apps.length === 0 && canRequestTestFlight}
+	{:else if platform === "ios" && !term.trim() && testFlightCatalogState.apps.length === 0 && canRequestTestFlight}
 		<div class="mt-3 flex items-center justify-between gap-3 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted">
 			<span>No TestFlight apps yet.</span>
 			<Button size="sm" variant="secondary" onclick={() => (inviteDialogOpen = true)}><Link2 class="h-3.5 w-3.5" /> Request an app</Button>
 		</div>
 	{/if}
 
+	{#if platform !== "ios"}
+		<div class="mt-3.5 rounded-xl border border-border bg-panel-muted/25 p-3">
+			<div class="text-sm font-medium">Latest {appStorePlatformLabel(platform)} release</div>
+			<p class="mt-1 text-xs text-muted">Enter the exact bundle ID. dkrypt checks the current release and processes it on the server without using an iPad.</p>
+			{#if term.trim()}
+				<div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-panel px-3 py-2.5">
+					<div class="min-w-0">
+						<div class="truncate text-sm font-medium">{term.trim()}</div>
+						<div class="text-xs text-muted">Bundle ID</div>
+					</div>
+					{#if canDecrypt}
+						<Button size="sm" loading={queueing.has(term.trim())} disabled={!PLATFORM_BUNDLE_ID_RE.test(term.trim())} onclick={() => void queue(term.trim(), term.trim(), undefined, undefined, undefined, platform)}>Check and queue</Button>
+					{:else}
+						<span class="text-xs text-muted">Decrypt permission required</span>
+					{/if}
+				</div>
+				{#if !PLATFORM_BUNDLE_ID_RE.test(term.trim())}<p class="mt-2 text-xs text-warn">Enter a valid bundle ID, such as com.example.app.</p>{/if}
+			{/if}
+		</div>
+	{:else}
 	<div class="mt-3.5">
 		{#if loading}
 			<div
@@ -939,6 +994,7 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 			{/each}
 		{/if}
 	</div>
+	{/if}
 </Card>
 
 <VersionPickerDialog

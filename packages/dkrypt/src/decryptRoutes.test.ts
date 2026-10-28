@@ -297,7 +297,7 @@ test('public API keys use bundle scopes with one shared artifact library', async
       touchArtifact: async () => {},
     }));
     await server.register(createDecryptRoutes({
-      resolveDecryptTarget: async (requestedBundleId) => ({ bundleId: requestedBundleId, selector: undefined, channel: 'appstore', externalVersionId: 'build-1', versionLabel: '1.0', artifactKey: 'build-1' }),
+      resolveDecryptTarget: async (requestedBundleId) => ({ bundleId: requestedBundleId, platform: 'ios', selector: undefined, channel: 'appstore', externalVersionId: 'build-1', versionLabel: '1.0', artifactKey: 'build-1' }),
       enqueueDecryptJob: (...args) => {
         enqueuedScopes.push(args[2]?.projectId);
         return job;
@@ -381,6 +381,7 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
         if (selector?.includes('_')) {
           return {
             bundleId,
+            platform: 'ios',
             selector,
             channel: 'testflight',
             testflight: { appId: 123, build: { id: 45, cfBundleShortVersion: '2.0', cfBundleVersion: '4', bundleId } },
@@ -388,7 +389,7 @@ test('typed decrypt submission routes preserve API-key scopes and resolved job r
             artifactKey: 'testflight-artifact',
           };
         }
-        return { bundleId, selector: selector?.replace(/^v/i, ''), channel: 'appstore', externalVersionId: '12345', versionLabel: '2.0', minimumOsVersion: '17.0', artifactKey: 'appstore-artifact' };
+        return { bundleId, platform: 'ios', selector: selector?.replace(/^v/i, ''), channel: 'appstore', externalVersionId: '12345', versionLabel: '2.0', minimumOsVersion: '17.0', artifactKey: 'appstore-artifact' };
       },
       enqueueDecryptJob: (...args) => {
         if (quotaBlocked) throw new DailyDecryptLimitError(Date.now() + 60_000);
@@ -744,7 +745,7 @@ test('API keys can queue the latest TestFlight build through decrypt submission'
       resolveDecryptTarget: async () => { throw new Error('exact resolver should not run for latest TestFlight'); },
       resolveLatestTestFlightTarget: async () => {
         latestResolutionCount += 1;
-        return { bundleId, selector: '3.0_118977', channel: 'testflight', testflight: { appId: 123, build }, versionLabel: '3.0_118977', artifactKey: 'testflight-998' };
+        return { bundleId, platform: 'ios', selector: '3.0_118977', channel: 'testflight', testflight: { appId: 123, build }, versionLabel: '3.0_118977', artifactKey: 'testflight-998' };
       },
       enqueueDecryptJob: (_bundle, _source, options) => {
         enqueuedOptions = options as Record<string, unknown>;
@@ -809,6 +810,7 @@ test('API keys can resolve the latest TestFlight release without enqueueing or c
       resolveDecryptTarget: async () => { throw new Error('exact resolver should not run'); },
       resolveLatestTestFlightTarget: async () => ({
         bundleId,
+        platform: 'ios',
         selector: '4.2_42017',
         channel: 'testflight',
         testflight: { appId: 321, build },
@@ -842,6 +844,69 @@ test('API keys can resolve the latest TestFlight release without enqueueing or c
     });
     expect(enqueued).toBe(0);
     expect(usageRecorded).toBe(0);
+  } finally {
+    revokeApiKey(apiKey.id, 'root', true);
+    await server.close();
+  }
+});
+
+test('API decrypts resolve and queue tvOS or visionOS App Store targets as device-free jobs', async () => {
+  const apiKey = createApiKey('Platform decrypt route test', 'root');
+  const queuedJob: Job = {
+    id: 'platform-decrypt-job',
+    bundleId: 'com.example.spatial',
+    source: 'manual',
+    priority: 0,
+    status: 'queued',
+    progress: 'queued',
+    createdAt: 1_700_000_000_000,
+    platform: 'visionos',
+    versionLabel: '2.1',
+    externalVersionId: 'vision-version-21',
+    waiters: [],
+  };
+  const resolvedPlatforms: string[] = [];
+  const enqueued: unknown[][] = [];
+  const server = Fastify().withTypeProvider<TypeBoxTypeProvider>();
+
+  try {
+    await server.register(createDecryptRoutes({
+      resolveDecryptTarget: async (bundleId, selector, platform = 'ios') => {
+        resolvedPlatforms.push(platform);
+        return {
+          bundleId,
+          platform,
+          selector,
+          channel: 'appstore',
+          externalVersionId: platform === 'tvos' ? 'tv-version-42' : 'vision-version-21',
+          versionLabel: platform === 'tvos' ? '4.2' : '2.1',
+          minimumOsVersion: platform === 'tvos' ? '18.0' : '2.0',
+          artifactKey: `${platform}-artifact`,
+        };
+      },
+      enqueueDecryptJob: (...args) => {
+        enqueued.push(args);
+        return queuedJob;
+      },
+      getJob: () => queuedJob,
+      waitForJob: async (job) => job,
+      getArtifactById: () => undefined,
+      recordApiKeyBundleUsage: () => {},
+    }));
+    await server.ready();
+
+    const headers = { authorization: `Bearer ${apiKey.key}` };
+    const resolved = await server.inject({ method: 'POST', url: '/v1/decrypts', headers, payload: { bundleId: 'com.example.spatial', platform: 'visionos', resolveOnly: true } });
+    const queued = await server.inject({ method: 'POST', url: '/v1/decrypts', headers, payload: { bundleId: 'com.example.spatial', platform: 'visionos' } });
+    const unsupportedTestFlight = await server.inject({ method: 'POST', url: '/v1/decrypts', headers, payload: { bundleId: 'com.example.spatial', platform: 'visionos', channel: 'testflight' } });
+
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json()).toMatchObject({ resolveOnly: true, platform: 'visionos', channel: 'appstore', resolvedVersion: '2.1', externalVersionId: 'vision-version-21' });
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json()).toMatchObject({ id: 'platform-decrypt-job', platform: 'visionos', channel: 'appstore' });
+    expect(enqueued[0]?.[2]).toMatchObject({ platform: 'visionos', externalVersionId: 'vision-version-21', versionLabel: '2.1', minimumOsVersion: '2.0' });
+    expect(unsupportedTestFlight.statusCode).toBe(400);
+    expect(resolvedPlatforms).toEqual(['visionos', 'visionos']);
   } finally {
     revokeApiKey(apiKey.id, 'root', true);
     await server.close();

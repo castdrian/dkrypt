@@ -30,6 +30,7 @@ import { canSendDirectMailToUser, sendDirectMailToUser } from '#mail.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { scopedLogger } from '#logger.js';
 import { resolveDecryptTarget } from '#decryptTarget.js';
+import type { AppStorePlatform } from '#platform.js';
 import {
   DEFAULT_PROJECT_ID,
   getJobHistoryEntryById,
@@ -94,14 +95,16 @@ async function resolveMinimumOsVersion(
     versionLabel?: string;
     currentMinimumOsVersion?: string;
     testflight?: boolean;
+    platform?: AppStorePlatform;
     action: 'dispatch' | 'retry';
   },
 ): Promise<string | undefined> {
+  if (input.platform && input.platform !== 'ios') return input.currentMinimumOsVersion;
   if (input.currentMinimumOsVersion || input.testflight || (input.externalVersionId && !input.versionLabel)) {
     return input.currentMinimumOsVersion;
   }
   try {
-    return (await services.resolveDecryptTarget(input.bundleId, input.versionLabel)).minimumOsVersion;
+    return (await services.resolveDecryptTarget(input.bundleId, input.versionLabel, input.platform)).minimumOsVersion;
   } catch (error) {
     log.warn(`App Store minimum iOS lookup failed before ${input.action}`, {
       bundleId: input.bundleId,
@@ -126,24 +129,43 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
       const session = getFastifySession(request)!;
       const projectId = DEFAULT_PROJECT_ID;
       const bundleId = request.body.bundleId.trim();
-      const externalVersionId = request.body.externalVersionId && externalVersionIdPattern.test(request.body.externalVersionId)
+      const platform: AppStorePlatform = request.body.platform ?? 'ios';
+      let externalVersionId = request.body.externalVersionId && externalVersionIdPattern.test(request.body.externalVersionId)
         ? request.body.externalVersionId
         : undefined;
-      const versionLabel = request.body.versionLabel?.trim().slice(0, 64) || undefined;
-      const preferredDeviceId = request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;
-      const minimumOsVersion = await resolveMinimumOsVersion(services, {
-        bundleId,
-        externalVersionId,
-        versionLabel,
-        currentMinimumOsVersion: request.body.minimumOsVersion,
-        action: 'dispatch',
-      });
+      let versionLabel = request.body.versionLabel?.trim().slice(0, 64) || undefined;
+      let minimumOsVersion: string | undefined;
+      if (platform !== 'ios') {
+        try {
+          const target = await services.resolveDecryptTarget(bundleId, versionLabel, platform);
+          if (externalVersionId && externalVersionId !== target.externalVersionId) {
+            reply.code(409);
+            return createHttpErrorEnvelope(request.id, 409, 'the selected platform release changed; check the release again before queueing');
+          }
+          externalVersionId = target.externalVersionId;
+          versionLabel = target.versionLabel;
+          minimumOsVersion = target.minimumOsVersion;
+        } catch (error) {
+          reply.code(404);
+          return createHttpErrorEnvelope(request.id, 404, error instanceof Error ? error.message : 'no matching platform release was found');
+        }
+      } else {
+        minimumOsVersion = await resolveMinimumOsVersion(services, {
+          bundleId,
+          externalVersionId,
+          versionLabel,
+          currentMinimumOsVersion: request.body.minimumOsVersion,
+          action: 'dispatch',
+        });
+      }
+      const preferredDeviceId = platform === 'ios' && request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;
       const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
       const job = services.enqueueDecryptJob(
         bundleId,
         'manual',
         {
           externalVersionId,
+          platform,
           versionLabel,
           queuedBy: session.sub,
           priority: services.getUserPriority(session.sub),
@@ -278,13 +300,15 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         return sendJobError(request.id, 404, 'job history entry not found');
       }
       const projectId = DEFAULT_PROJECT_ID;
-      const preferredDeviceId = request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;
+      const platform = entry.platform ?? 'ios';
+      const preferredDeviceId = platform === 'ios' && request.body.preferPrimary ? services.getPrimaryDevice()?.id : undefined;
       const minimumOsVersion = await resolveMinimumOsVersion(services, {
         bundleId: entry.bundleId,
         externalVersionId: entry.externalVersionId,
         versionLabel: entry.versionLabel,
         currentMinimumOsVersion: entry.minimumOsVersion,
         testflight: entry.testflight !== undefined,
+        platform,
         action: 'retry',
       });
       const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
@@ -293,6 +317,7 @@ export function createDashboardJobActionRoutes(overrides: Partial<DashboardJobAc
         'manual',
         {
           externalVersionId: entry.externalVersionId,
+          platform,
           testflight: entry.testflight,
           versionLabel: entry.versionLabel,
           queuedBy: session.sub,

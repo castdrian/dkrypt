@@ -79,6 +79,10 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `GITHUB_OAUTH_CLIENT_ID` | GitHub sign-in application identifier |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Current GitHub sign-in secret |
 | `GITHUB_OAUTH_CLIENT_SECRET_PREVIOUS` | Previous GitHub OAuth secret retained during a provider-supported rotation window |
+| `APPLE_OAUTH_SERVICE_ID` | Sign in with Apple Services ID used as the web OAuth client identifier |
+| `APPLE_OAUTH_TEAM_ID` | Apple Developer team identifier for the Sign in with Apple key |
+| `APPLE_OAUTH_KEY_ID` | Key identifier for the Sign in with Apple private key |
+| `APPLE_OAUTH_PRIVATE_KEY_BASE64` | Base64-encoded `.p8` key used to create short-lived Apple OAuth client assertions |
 | `DISCORD_OAUTH_CLIENT_ID` | Discord sign-in application identifier |
 | `DISCORD_OAUTH_CLIENT_SECRET` | Current Discord sign-in secret |
 | `DISCORD_OAUTH_CLIENT_SECRET_PREVIOUS` | Previous Discord OAuth secret retained during a provider-supported rotation window |
@@ -95,12 +99,12 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `ARTIFACT_DIR` | IPA storage volume |
 | `STATE_DIR` | SQLite database, pairing material, backups, and mirrors |
 
-For a reverse proxy, preserve the browser-facing `Host` header. If the proxy rewrites it, set `PUBLIC_BASE_URL` to the exact external origin, including the scheme and port. Direct LAN access by IP address works without changing `PUBLIC_BASE_URL`, but OAuth callbacks and secure cookies still require the correct public origin.
+For Sign in with Apple, register `https://<public-host>/v1/auth/apple/callback` as the Return URL for the Services ID and use the exact public host in `PUBLIC_BASE_URL`. Apple posts the authorization response to this callback; Apple credentials are required before the sign-in option appears. For a reverse proxy, preserve the browser-facing `Host` header. If the proxy rewrites it, set `PUBLIC_BASE_URL` to the exact external origin, including the scheme and port. Direct LAN access by IP address works without changing `PUBLIC_BASE_URL`, but OAuth callbacks and secure cookies still require the correct public origin.
 
 <details>
 <summary>Account-abuse controls</summary>
 
-New OAuth accounts require a verified GitHub or Discord email. One account can be created per verified email in a 30-day window, configured disposable email domains are rejected, and signup velocity is limited using keyed hashes of the exact address, coarse network prefix, and short-lived first-party browser signal. Free decrypts also have account, exact-address, coarse-network, and short-lived browser-signal limits. Configure `ABUSE_SIGNAL_SECRET` independently so those hashes remain stable when rotating the dashboard session key.
+New OAuth accounts require a verified email from GitHub, Discord, or Apple. One account can be created per verified email in a 30-day window, configured disposable email domains are rejected, and signup velocity is limited using keyed hashes of the exact address, coarse network prefix, and short-lived first-party browser signal. Free decrypts also have account, exact-address, coarse-network, and short-lived browser-signal limits. Configure `ABUSE_SIGNAL_SECRET` independently so those hashes remain stable when rotating the dashboard session key.
 
 Cloudflare Turnstile is mandatory for every new OAuth account. Until both keys are configured, new account creation is blocked while existing users can still sign in. dkrypt also sets a random, signed, first-party browser signal for up to seven days. Turnstile's optional ephemeral identifier is stored as a separate short-lived signal, not a hardware ID. dkrypt does not read persistent hardware identifiers or build a browser fingerprint.
 

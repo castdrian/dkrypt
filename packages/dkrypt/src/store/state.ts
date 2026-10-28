@@ -397,6 +397,7 @@ export interface JobHistoryEntry {
   correlationId?: string;
   projectId?: string;
   bundleId: string;
+  platform?: 'ios' | 'tvos' | 'visionos';
   externalVersionId?: string;
   testflight?: TestFlightJobSource;
   versionLabel?: string;
@@ -4440,6 +4441,7 @@ function isJobHistoryEntryShape(value: unknown): value is JobHistoryEntry {
   return (
     typeof e.id === 'string' &&
     typeof e.bundleId === 'string' &&
+    (e.platform === undefined || e.platform === 'ios' || e.platform === 'tvos' || e.platform === 'visionos') &&
     (e.status === 'done' || e.status === 'failed') &&
     typeof e.finishedAt === 'number'
   );

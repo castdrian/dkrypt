@@ -21,7 +21,7 @@ export const authReauthenticateBodySchema = Type.Object(
 export const authPrivacyDeleteBodySchema = Type.Object({ confirmation: Type.Literal('DELETE MY ACCOUNT') }, { additionalProperties: true });
 export const authProfileBodySchema = Type.Object({ displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })), username: Type.Optional(Type.String({ minLength: 2, maxLength: 40 })) }, { additionalProperties: true, minProperties: 1 });
 export const authConnectionParamsSchema = Type.Object(
-  { provider: Type.Union([Type.Literal('github'), Type.Literal('discord')]) },
+  { provider: Type.Union([Type.Literal('github'), Type.Literal('discord'), Type.Literal('apple')]) },
   { additionalProperties: true },
 );
 export const authConnectionBodySchema = Type.Object({ confirmation: Type.Literal('DISCONNECT') }, { additionalProperties: false });
@@ -34,6 +34,12 @@ export const authOAuthCallbackQuerySchema = Type.Object(
   },
   { additionalProperties: true },
 );
+export const authAppleOAuthCallbackBodySchema = Type.Object({
+  code: Type.Optional(Type.String({ maxLength: 2000 })),
+  state: Type.Optional(Type.String({ maxLength: 200 })),
+  user: Type.Optional(Type.String({ maxLength: 2000 })),
+  error: Type.Optional(Type.String({ maxLength: 200 })),
+}, { additionalProperties: true });
 
 export type AuthLoginRoute = { Body: Static<typeof authLoginBodySchema> };
 export type AuthTokenRoute = { Body: Static<typeof authTokenBodySchema> };
@@ -45,3 +51,4 @@ export type AuthConnectionRoute = { Params: Static<typeof authConnectionParamsSc
 export type AuthIdentifierRoute = { Params: Static<typeof authIdentifierParamsSchema> };
 export type AuthPasskeyPayloadRoute = { Body: Static<typeof authPasskeyPayloadSchema> };
 export type AuthOAuthCallbackRoute = { Querystring: Static<typeof authOAuthCallbackQuerySchema> };
+export type AuthAppleOAuthCallbackRoute = { Body: Static<typeof authAppleOAuthCallbackBodySchema> };

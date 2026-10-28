@@ -2616,7 +2616,7 @@ test('device managers can run on-demand service health checks', async ({ page })
       expectedOrigin: 'http://127.0.0.1:4173',
       observedOrigin: 'http://127.0.0.1:4173',
       forwardedHeadersPresent: false,
-      oauthCallbacks: { github: 'http://127.0.0.1:4173/v1/auth/github/callback', discord: 'Not configured' },
+      oauthCallbacks: { github: 'http://127.0.0.1:4173/v1/auth/github/callback', discord: 'Not configured', apple: 'Not configured' },
     }) });
   });
 

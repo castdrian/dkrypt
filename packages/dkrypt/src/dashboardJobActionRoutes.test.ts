@@ -85,7 +85,7 @@ test('manual decrypt submission preserves project, device, and version selection
   const server = build({
     getPrimaryDevice: () => ({ id: 'device-primary' }) as ReturnType<DashboardJobActionServices['getPrimaryDevice']>,
     getUserPriority: () => 4,
-    resolveDecryptTarget: async (bundleId, selector) => ({ bundleId, selector, channel: 'appstore', versionLabel: selector ?? 'latest', minimumOsVersion: '17.0', artifactKey: 'appstore-artifact' }),
+    resolveDecryptTarget: async (bundleId, selector) => ({ bundleId, platform: 'ios', selector, channel: 'appstore', versionLabel: selector ?? 'latest', minimumOsVersion: '17.0', artifactKey: 'appstore-artifact' }),
     enqueueDecryptJob: (...args) => {
       enqueueArgs = args;
       return queuedJob;
@@ -120,6 +120,46 @@ test('manual decrypt submission preserves project, device, and version selection
         minimumOsVersion: '17.0',
       }),
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('tvOS decrypt submission queues the resolved release without assigning an iOS device', async () => {
+  const queuedJob = { ...createJob('tvos-decrypt-job'), platform: 'tvos' as const, versionLabel: '4.2', externalVersionId: 'platform-version-42' };
+  const enqueueArgs: unknown[][] = [];
+  let resolveArgs: unknown[] = [];
+  let primaryDeviceReads = 0;
+  const server = build({
+    getPrimaryDevice: () => {
+      primaryDeviceReads += 1;
+      return { id: 'ios-device' } as ReturnType<DashboardJobActionServices['getPrimaryDevice']>;
+    },
+    getUserPriority: () => 2,
+    resolveDecryptTarget: async (bundleId, versionLabel, platform) => {
+      resolveArgs = [bundleId, versionLabel, platform];
+      return { bundleId, platform: platform ?? 'ios', channel: 'appstore', externalVersionId: 'platform-version-42', versionLabel: '4.2', minimumOsVersion: '18.0', artifactKey: 'platform-artifact' };
+    },
+    enqueueDecryptJob: (...args) => {
+      enqueueArgs.push(args);
+      return queuedJob;
+    },
+  });
+
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/decrypt',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      payload: { bundleId: 'com.example.tv', platform: 'tvos', preferPrimary: true },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ id: 'tvos-decrypt-job', platform: 'tvos', versionLabel: '4.2' });
+    expect(resolveArgs).toEqual(['com.example.tv', undefined, 'tvos']);
+    expect(enqueueArgs[0]?.[2]).toMatchObject({ platform: 'tvos', externalVersionId: 'platform-version-42', minimumOsVersion: '18.0' });
+    expect((enqueueArgs[0]?.[2] as Record<string, unknown>).preferredDeviceId).toBeUndefined();
+    expect(primaryDeviceReads).toBe(0);
   } finally {
     await server.close();
   }
@@ -225,6 +265,46 @@ test('retry uses the requested primary device and retains source job metadata', 
         minimumOsVersion: '17.1',
       }),
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('retrying a tvOS decrypt keeps it device-free and does not apply iOS minimum-version lookup', async () => {
+  const historyEntry = { ...createHistoryEntry('tvos-history'), queuedBy: 'root', platform: 'tvos' as const, externalVersionId: 'tv-version-42' };
+  const enqueueArgs: unknown[][] = [];
+  let primaryDeviceReads = 0;
+  let platformLookups = 0;
+  const server = build({
+    getJobHistoryEntryById: () => historyEntry,
+    getPrimaryDevice: () => {
+      primaryDeviceReads += 1;
+      return { id: 'ios-device' } as ReturnType<DashboardJobActionServices['getPrimaryDevice']>;
+    },
+    resolveDecryptTarget: async () => {
+      platformLookups += 1;
+      throw new Error('tvOS retry must use its saved release metadata');
+    },
+    enqueueDecryptJob: (...args) => {
+      enqueueArgs.push(args);
+      return { ...createJob('tvos-retry-job'), platform: 'tvos' };
+    },
+  });
+
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/jobs/tvos-history/retry',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      payload: { preferPrimary: true },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ id: 'tvos-retry-job', platform: 'tvos' });
+    expect(enqueueArgs[0]?.[2]).toMatchObject({ platform: 'tvos', externalVersionId: 'tv-version-42' });
+    expect((enqueueArgs[0]?.[2] as Record<string, unknown>).preferredDeviceId).toBeUndefined();
+    expect(primaryDeviceReads).toBe(0);
+    expect(platformLookups).toBe(0);
   } finally {
     await server.close();
   }

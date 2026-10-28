@@ -17,6 +17,7 @@
   let { open, preflight, onOpenChange, onConfirm, onUpgrade }: Props = $props();
   const canViewOperations = $derived(sessionCanViewOperationalDashboard());
   const freeQuotaExhausted = $derived(preflight?.quota?.freeTier === true && preflight.quota.remaining === 0);
+  const serverSideUnavailable = $derived(preflight?.serverSide === true && preflight.serverSideReady !== true);
 </script>
 
 <Dialog {open} {onOpenChange} class="max-w-lg">
@@ -26,11 +27,24 @@
   </div>
   <div class="mb-4 text-xs text-muted">
     {preflight?.bundleId}{preflight?.versionLabel ? ` · ${preflight.versionLabel}` : ''}
+    {preflight?.platform && preflight.platform !== 'ios' ? ` · ${preflight.platform === 'tvos' ? 'tvOS' : 'visionOS'}` : ''}
     {preflight?.testflight ? ' · TestFlight' : ''}
   </div>
 
   {#if preflight}
-    {#if canViewOperations}
+    {#if preflight.serverSide}
+      <div class="mb-4 rounded-lg border border-border px-3 py-2.5 text-xs">
+        <div class="font-medium">Device-free {preflight.platform === 'tvos' ? 'tvOS' : 'visionOS'} processing</div>
+        <p class="mt-1 text-muted">This release is downloaded and decrypted on the server. An iPad is not used as a fallback.</p>
+        {#if preflight.serverSideBlockers?.length}
+          <ul class="mt-2 list-disc space-y-1 pl-4 text-err">{#each preflight.serverSideBlockers as blocker}<li>{blocker}</li>{/each}</ul>
+        {:else}
+          <p class="mt-1 text-ok">Downloader, account, and FairPlay credentials are ready.</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if canViewOperations && !preflight.serverSide}
     <div class="mb-4 grid grid-cols-2 gap-2">
       <div class="border-border rounded-lg border p-2.5">
         <div class="text-[11px] text-muted">Estimated run time</div>
@@ -54,7 +68,7 @@
       </div>
     {/if}
 
-    {#if canViewOperations}
+    {#if canViewOperations && !preflight.serverSide}
     <div class="mb-4 flex flex-col gap-2">
       {#each preflight.devices as device (device.id)}
         <div class="border-border rounded-lg border p-2.5">
@@ -79,10 +93,10 @@
       {/each}
     </div>
 
-    {#if !preflight.canQueue}
+    {#if !preflight.canQueue && !preflight.serverSide}
       <div class="border-warn/40 bg-warn/10 mb-4 rounded-lg border p-3 text-xs text-warn">{preflight.devices.some((device) => device.checking) ? 'Device verification is still running. You can queue now; the worker will recheck before starting.' : 'No device currently passes every check. You can still queue this job and resolve the device issue afterward.'}</div>
     {/if}
-    {:else}
+    {:else if !preflight.serverSide}
       {#if !preflight.canQueue}
         <div class="mb-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn" role="status">dkrypt could not confirm an available device yet. You can still queue; availability will be checked again when the job starts.</div>
       {/if}
@@ -90,7 +104,7 @@
     {/if}
     <div class="flex justify-end gap-2">
       <Button size="sm" variant="secondary" onclick={() => onOpenChange(false)}>Cancel</Button>
-      <Button size="sm" disabled={freeQuotaExhausted} onclick={onConfirm}>{freeQuotaExhausted ? 'Allowance used' : preflight.canQueue ? 'Queue job' : 'Queue anyway'}</Button>
+      <Button size="sm" disabled={freeQuotaExhausted || serverSideUnavailable} onclick={onConfirm}>{freeQuotaExhausted ? 'Allowance used' : serverSideUnavailable ? 'Unavailable' : preflight.canQueue ? 'Queue job' : 'Queue anyway'}</Button>
     </div>
   {:else}
     <div class="text-sm text-muted">Checking devices…</div>

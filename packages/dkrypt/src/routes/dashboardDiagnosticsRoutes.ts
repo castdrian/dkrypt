@@ -9,7 +9,7 @@ import { fastifyRequirePermission, fastifyRequireSession } from '#session.js';
 import { getRouteContract } from '#contracts.js';
 import { runSyntheticProbes } from '#synthetic.js';
 import { getCompatibilityMatrix } from '#compatibility.js';
-import { config, discordOauthEnabled, githubOauthEnabled } from '#config.js';
+import { config, appleOauthEnabled, discordOauthEnabled, githubOauthEnabled } from '#config.js';
 
 const canManageDevices = fastifyRequirePermission(PermissionFlag.manageDevices);
 
@@ -44,6 +44,7 @@ export const dashboardDiagnosticsRoutes: FastifyPluginAsyncTypebox = async (serv
       oauthCallbacks: {
         github: githubOauthEnabled ? `${callbackBase}/v1/auth/github/callback` : 'Not configured',
         discord: discordOauthEnabled ? `${callbackBase}/v1/auth/discord/callback` : 'Not configured',
+        apple: appleOauthEnabled ? `${callbackBase}/v1/auth/apple/callback` : 'Not configured',
       },
     };
   });

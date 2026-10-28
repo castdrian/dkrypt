@@ -449,11 +449,11 @@ initDensity();
 		editingProfileName = true;
 	}
 
-	function connectIdentity(provider: "github" | "discord"): void {
+	function connectIdentity(provider: "github" | "discord" | "apple"): void {
 		window.location.assign(`/v1/auth/${provider}/connect`);
 	}
 
-	async function disconnectIdentity(provider: "github" | "discord"): Promise<void> {
+	async function disconnectIdentity(provider: "github" | "discord" | "apple"): Promise<void> {
 		const previewResponse = await fetch(`/v1/auth/connections/${provider}/preview`);
 		if (!previewResponse.ok) {
 			showToast("Could not review this sign-in method.", "error");
@@ -464,7 +464,8 @@ initDensity();
 			showToast("Connect another usable sign-in method before removing this one.", "error");
 			return;
 		}
-		if (!(await confirmDialog(`Disconnect ${provider === "github" ? "GitHub" : "Discord"}? This changes ${preview.affectedCategories.join(' and ')}.`, { confirmLabel: "Disconnect", variant: "destructive" }))) return;
+		const providerName = provider === "github" ? "GitHub" : provider === "discord" ? "Discord" : "Apple";
+		if (!(await confirmDialog(`Disconnect ${providerName}? This changes ${preview.affectedCategories.join(' and ')}.`, { confirmLabel: "Disconnect", variant: "destructive" }))) return;
 		if (passkeys.length > 0 && !(await tryPasskeyReauthentication())) return;
 		const response = await fetch(`/v1/auth/connections/${provider}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmation: 'DISCONNECT' }) });
 		if (!response.ok) {
@@ -473,10 +474,11 @@ initDensity();
 			return;
 		}
 		await refreshSession();
-		showToast(`${provider === "github" ? "GitHub" : "Discord"} disconnected.`, "success");
+		showToast(`${provider === "github" ? "GitHub" : provider === "discord" ? "Discord" : "Apple"} disconnected.`, "success");
 	}
 
 	let processedLinkReview = false;
+	const enabledOAuthProviderCount = $derived([sessionState.githubOauthEnabled, sessionState.discordOauthEnabled, sessionState.appleOauthEnabled].filter(Boolean).length);
 	$effect(() => {
 		if (!sessionChecked || !sessionState.loggedIn || processedLinkReview) return;
 		const id = new URLSearchParams(location.search).get('link_review');
@@ -1018,7 +1020,7 @@ initDensity();
 											<span class="font-medium text-text"
 												>{identity.provider === "github"
 													? "GitHub"
-													: "Discord"}</span
+													: identity.provider === "discord" ? "Discord" : "Apple"}</span
 											>
 						<span class="min-w-0 flex-1 break-all" data-sensitive="true"
 											>{identity.displayName} · @{identity.username}</span
@@ -1047,7 +1049,10 @@ initDensity();
 										{#if sessionState.discordOauthEnabled && !sessionState.linkedProviders?.includes("discord")}
 											<Button size="sm" variant="secondary" onclick={() => connectIdentity("discord")}>{msg("account.connectDiscord")}</Button>
 										{/if}
-										{#if sessionState.linkedProviders?.length === 2}
+										{#if sessionState.appleOauthEnabled && !sessionState.linkedProviders?.includes("apple")}
+							<Button size="sm" variant="secondary" onclick={() => connectIdentity("apple")}>{msg("account.connectApple")}</Button>
+										{/if}
+						{#if enabledOAuthProviderCount > 0 && sessionState.linkedProviders?.length === enabledOAuthProviderCount}
 											<span class="text-xs text-muted">{msg("account.providersConnected")}</span>
 										{/if}
 									</div>

@@ -48,6 +48,7 @@ export function jobSummary(job: Job) {
     id: job.id,
     correlationId: job.correlationId ?? job.id,
     bundleId: job.bundleId,
+    platform: job.platform ?? 'ios',
     externalVersionId: job.externalVersionId,
     testflight: job.testflight
       ? { appId: job.testflight.appId, buildId: job.testflight.build.id, version: job.testflight.build.cfBundleShortVersion, buildNumber: job.testflight.build.cfBundleVersion }

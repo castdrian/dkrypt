@@ -3,6 +3,7 @@ import { createReadStream, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { type ArtifactChannel, type ArtifactRecord } from '#artifactTypes.js';
+import type { AppStorePlatform } from '#platform.js';
 import { createArtifactRepository } from '#artifacts/repository.js';
 import { config } from '#config.js';
 import { withCorrelationSpan } from '#correlation.js';
@@ -147,7 +148,7 @@ function withMutation<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function updateArtifactMetadata(artifact: ArtifactRecord, channel: ArtifactChannel, versionLabel?: string, buildNumber?: string): boolean {
+function updateArtifactMetadata(artifact: ArtifactRecord, channel: ArtifactChannel, versionLabel?: string, buildNumber?: string, platform?: AppStorePlatform): boolean {
   const normalizedVersion = normalizeArtifactVersionLabel(versionLabel, channel);
   const normalizedBuild = buildNumber?.trim() || undefined;
   let changed = false;
@@ -157,6 +158,10 @@ function updateArtifactMetadata(artifact: ArtifactRecord, channel: ArtifactChann
   }
   if (normalizedBuild && artifact.buildNumber !== normalizedBuild) {
     artifact.buildNumber = normalizedBuild;
+    changed = true;
+  }
+  if (platform !== undefined && artifact.platform !== platform) {
+    artifact.platform = platform;
     changed = true;
   }
   return changed;
@@ -174,12 +179,12 @@ function mergeArtifactWarnings(artifact: ArtifactRecord, warnings: string[] | un
   return true;
 }
 
-export function artifactKeyForAppStore(bundleId: string, externalVersionId: string): string {
-  return `${bundleId}|appstore|${externalVersionId}`;
+export function artifactKeyForAppStore(bundleId: string, externalVersionId: string, platform: AppStorePlatform = 'ios'): string {
+  return platform === 'ios' ? `${bundleId}|appstore|${externalVersionId}` : `${bundleId}|appstore|${platform}|${externalVersionId}`;
 }
 
-export function artifactKeyForAppStoreVersion(bundleId: string, versionLabel: string, externalVersionId?: string): string {
-  return externalVersionId ? artifactKeyForAppStore(bundleId, externalVersionId) : `${bundleId}|appstore|version:${versionLabel}`;
+export function artifactKeyForAppStoreVersion(bundleId: string, versionLabel: string, externalVersionId?: string, platform: AppStorePlatform = 'ios'): string {
+  return externalVersionId ? artifactKeyForAppStore(bundleId, externalVersionId, platform) : `${bundleId}|appstore|${platform === 'ios' ? '' : `${platform}|`}version:${versionLabel}`;
 }
 
 export function artifactKeyForTestFlight(bundleId: string, buildId: number): string {
@@ -192,11 +197,12 @@ export function artifactKeyForJob(job: {
   externalVersionId?: string;
   testflight?: { build: { id: number } };
   versionLabel?: string;
+  platform?: AppStorePlatform;
 }): string {
   if (job.testflight) return artifactKeyForTestFlight(job.bundleId, job.testflight.build.id);
-  if (job.externalVersionId) return artifactKeyForAppStore(job.bundleId, job.externalVersionId);
+  if (job.externalVersionId) return artifactKeyForAppStore(job.bundleId, job.externalVersionId, job.platform);
   if (job.versionLabel && job.versionLabel !== 'Current App Store release') {
-    return artifactKeyForAppStoreVersion(job.bundleId, job.versionLabel);
+    return artifactKeyForAppStoreVersion(job.bundleId, job.versionLabel, undefined, job.platform);
   }
   return `${job.bundleId}|legacy|${job.id}`;
 }
@@ -473,6 +479,7 @@ export async function promoteArtifact(input: {
   key: string;
   bundleId: string;
   channel: ArtifactChannel;
+  platform?: AppStorePlatform;
   externalVersionId?: string;
   testflightBuildId?: number;
   versionLabel?: string;
@@ -495,7 +502,7 @@ export async function promoteArtifact(input: {
     if (existing) {
       await rm(input.stagingPath, { force: true });
       throwIfAborted(input.signal);
-      const metadataChanged = updateArtifactMetadata(existing, input.channel, input.versionLabel, input.buildNumber);
+      const metadataChanged = updateArtifactMetadata(existing, input.channel, input.versionLabel, input.buildNumber, input.platform);
       const warningsChanged = mergeArtifactWarnings(existing, input.warnings);
       if (metadataChanged || warningsChanged) persistIndex();
       touchArtifactUnsafe(existing);
@@ -518,6 +525,7 @@ export async function promoteArtifact(input: {
       projectIds: ['default'],
       bundleId: input.bundleId,
       channel: input.channel,
+      platform: input.platform === 'ios' ? undefined : input.platform,
       externalVersionId: input.externalVersionId,
       testflightBuildId: input.testflightBuildId,
       versionLabel: normalizeArtifactVersionLabel(input.versionLabel, input.channel),

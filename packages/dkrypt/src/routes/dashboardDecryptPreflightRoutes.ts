@@ -20,6 +20,9 @@ import { recentlyVerifiedTestFlightDevices } from '#testflightPolicy.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { resolveWithin } from '#util/resolveWithin.js';
 import { canViewOperationalDashboard } from '#dashboardAccess.js';
+import { resolveDecryptTarget } from '#decryptTarget.js';
+import { getOfflineAppStoreReadiness } from '#offlineAppStore.js';
+import type { AppStorePlatform } from '#platform.js';
 
 export interface DashboardDecryptPreflightServices {
   getActiveJobs: typeof getActiveJobs;
@@ -30,6 +33,8 @@ export interface DashboardDecryptPreflightServices {
   getDeviceReadiness: typeof getDeviceReadiness;
   getEffectiveDevices: typeof getEffectiveDevices;
   getVerifiedTestFlightCatalog: typeof getVerifiedTestFlightCatalog;
+  resolveDecryptTarget: typeof resolveDecryptTarget;
+  getOfflineAppStoreReadiness: typeof getOfflineAppStoreReadiness;
 }
 
 const defaultServices: DashboardDecryptPreflightServices = {
@@ -41,6 +46,8 @@ const defaultServices: DashboardDecryptPreflightServices = {
   getDeviceReadiness,
   getEffectiveDevices,
   getVerifiedTestFlightCatalog,
+  resolveDecryptTarget,
+  getOfflineAppStoreReadiness,
 };
 
 const canRequestDecrypt = fastifyRequirePermission(PermissionFlag.requestDecrypt);
@@ -67,9 +74,39 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
       const projectId = DEFAULT_PROJECT_ID;
 
       const bundleId = request.body.bundleId.trim();
+      const platform: AppStorePlatform = request.body.platform ?? 'ios';
       const testflight = request.body.testflight === true;
       const versionLabel = request.body.versionLabel?.trim().slice(0, 64) || undefined;
       const installSizeBytes = request.body.installSizeBytes;
+      if (platform !== 'ios') {
+        if (testflight) return sendPreflightError(request.id, reply, 400, 'TestFlight builds are available only for iOS');
+        try {
+          const target = await services.resolveDecryptTarget(bundleId, versionLabel, platform);
+          const readiness = services.getOfflineAppStoreReadiness({ platform });
+          const quota = entitlement.freeTier
+            ? getFreeDecryptQuotaUsage(session.sub)
+            : getDecryptQuotaUsage(session.sub, entitlement.dailyDecryptLimit);
+          quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
+          return {
+            bundleId,
+            platform,
+            externalVersionId: target.externalVersionId,
+            minimumOsVersion: target.minimumOsVersion,
+            versionLabel: target.versionLabel,
+            testflight: false,
+            serverSide: true,
+            serverSideReady: readiness.ready,
+            serverSideBlockers: readiness.blockers,
+            estimatedDurationMs: operationalView ? services.getAverageJobDurationMs(bundleId, projectId) : undefined,
+            queueLength: operationalView ? services.getActiveJobs().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId).length : undefined,
+            canQueue: readiness.ready,
+            quota: { ...quota, freeTier: entitlement.freeTier ?? false, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
+            devices: [],
+          };
+        } catch (error) {
+          return sendPreflightError(request.id, reply, 404, error instanceof Error ? error.message : 'No matching platform release was found');
+        }
+      }
       const requestedDeviceId = operationalView || testflight ? request.body.deviceId?.trim() ?? '' : '';
       const requestedDevice = requestedDeviceId ? services.getDevice(requestedDeviceId) : undefined;
       if (requestedDeviceId && (!requestedDevice || !requestedDevice.enabled || requestedDevice.draining)) {

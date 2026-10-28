@@ -97,6 +97,8 @@ function platformName(value: number): string | undefined {
     7: 'iOS Simulator',
     8: 'tvOS Simulator',
     9: 'watchOS Simulator',
+    11: 'visionOS',
+    12: 'visionOS Simulator',
   } as Record<number, string>)[value];
 }
 

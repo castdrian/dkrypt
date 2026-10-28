@@ -16,12 +16,12 @@
   let mfaToken = $state('');
   let mfaRequired = $state(false);
   let attemptsRemaining = $state<number | undefined>(undefined);
-  let detailsOpen = $state(!sessionState.githubOauthEnabled && !sessionState.discordOauthEnabled);
+  let detailsOpen = $state(!sessionState.githubOauthEnabled && !sessionState.discordOauthEnabled && !sessionState.appleOauthEnabled);
   let oauthError = $state('');
   let submitting = $state(false);
   let showPassword = $state(false);
   let passwordEl: HTMLInputElement | undefined = $state();
-  let signupProvider = $state<'github' | 'discord' | undefined>();
+  let signupProvider = $state<'github' | 'discord' | 'apple' | undefined>();
   let signupReturnTo = $state<string | undefined>();
   let signupChallengeEl: HTMLDivElement | undefined = $state();
   let signupChallengeError = $state('');
@@ -38,7 +38,9 @@
     failed: 'GitHub sign-in failed - check the server logs.',
     discord_disabled: "Discord sign-in isn't configured.",
     discord_failed: 'Discord sign-in failed - check the server logs.',
-    signup_email_unverified: 'New accounts need a verified GitHub or Discord email. Temporary email services cannot create accounts.',
+    apple_disabled: "Apple sign-in isn't configured.",
+    apple_failed: 'Apple sign-in failed - check the server logs.',
+    signup_email_unverified: 'New accounts need a verified email from Apple, GitHub, or Discord. Temporary email services cannot create accounts.',
     signup_email_in_use: 'This verified email already has an account. Sign in to it, then connect the other sign-in method in Settings.',
     signup_limited: 'Too many new accounts were created from this network recently. Try again later or sign in to your existing account.',
     signup_verification_required: 'Complete this quick check to finish creating your account.',
@@ -51,7 +53,7 @@
     const code = params.get('auth_error');
     if (code === 'signup_verification_required') {
       const provider = params.get('signup_provider');
-      if (provider === 'github' || provider === 'discord') {
+      if (provider === 'github' || provider === 'discord' || provider === 'apple') {
         signupProvider = provider;
         signupReturnTo = params.get('return_to') ?? undefined;
       }
@@ -110,7 +112,7 @@
     };
   });
 
-  async function finishSignupChallenge(provider: 'github' | 'discord', token: string): Promise<void> {
+  async function finishSignupChallenge(provider: 'github' | 'discord' | 'apple', token: string): Promise<void> {
     signupChallengeSubmitting = true;
     signupChallengeError = '';
     try {
@@ -179,7 +181,7 @@
     if (e.key === 'Enter') void submit();
   }
 
-  function oauthLoginUrl(provider: 'github' | 'discord'): string {
+  function oauthLoginUrl(provider: 'github' | 'discord' | 'apple'): string {
     const params = new URLSearchParams(location.search);
     const returnTo = params.get('return_to') ?? (location.pathname === '/cli/authorize' ? `${location.pathname}${location.search}` : params.get('continue') === 'decrypt' ? '/?continue=decrypt' : undefined);
     return `/v1/auth/${provider}/login${returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''}`;
@@ -228,9 +230,17 @@
         Sign in with Discord
       </a>
     {/if}
+    {#if sessionState.appleOauthEnabled && !signupProvider}
+      <a href={oauthLoginUrl('apple')} class="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-black px-3 text-sm font-medium text-white transition-colors hover:bg-black/85">
+        <svg width="16" height="18" viewBox="0 0 17 20" fill="currentColor" aria-hidden="true">
+          <path d="M13.8 10.6c0-2.1 1.7-3.1 1.8-3.2a4 4 0 0 0-3.2-1.7c-1.3-.1-2.5.8-3.1.8-.7 0-1.7-.8-2.8-.8a4.2 4.2 0 0 0-3.5 2.1c-1.5 2.6-.4 6.5 1 8.6.7 1 1.5 2.1 2.6 2.1 1 0 1.4-.7 2.7-.7s1.7.7 2.8.7 1.8-1 2.5-2.1a9 9 0 0 0 1.1-2.3 3.6 3.6 0 0 1-2-3.5ZM11.8 4.4A3.8 3.8 0 0 0 12.7 1a4 4 0 0 0-2.9 1.5 3.6 3.6 0 0 0-.9 3.3 3.4 3.4 0 0 0 2.9-1.4Z" />
+        </svg>
+        Sign in with Apple
+      </a>
+    {/if}
     {#if signupProvider}
       <div class="mt-4 flex flex-col items-center gap-3">
-        <p class="text-xs text-muted">Verify once to complete your {signupProvider === 'github' ? 'GitHub' : 'Discord'} sign-up.</p>
+        <p class="text-xs text-muted">Verify once to complete your {signupProvider === 'github' ? 'GitHub' : signupProvider === 'discord' ? 'Discord' : 'Apple'} sign-up.</p>
         <div bind:this={signupChallengeEl} class="min-h-[65px]"></div>
         {#if signupChallengeSubmitting}<p class="text-xs text-muted">Finishing sign-in…</p>{/if}
         {#if signupChallengeError}<p class="text-xs text-err" role="alert">{signupChallengeError}</p>{/if}
@@ -245,7 +255,7 @@
       <div class="mt-3.5 text-[12.5px] text-err">{oauthError}</div>
     {/if}
 
-    {#if sessionState.githubOauthEnabled || sessionState.discordOauthEnabled}
+    {#if sessionState.githubOauthEnabled || sessionState.discordOauthEnabled || sessionState.appleOauthEnabled}
       <Separator class="my-4" />
     {/if}
 
@@ -253,7 +263,7 @@
       <summary
         class={cn(
           'flex cursor-pointer list-none items-center justify-center gap-1 pt-2.5 text-center text-[12.5px] text-muted select-none hover:text-text',
-          !sessionState.githubOauthEnabled && !sessionState.discordOauthEnabled && 'hidden',
+          !sessionState.githubOauthEnabled && !sessionState.discordOauthEnabled && !sessionState.appleOauthEnabled && 'hidden',
         )}
       >
         Sign in with root password

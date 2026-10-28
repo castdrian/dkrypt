@@ -1,6 +1,7 @@
 import { describeHttpError } from '#util/httpError.js';
 import { throwIfAborted } from '#util/abort.js';
 import { getAppleAccountVaultStatus } from '#appleAccountVault.js';
+import type { AppStorePlatform } from '#platform.js';
 
 const DEFAULT_ITUNES_COUNTRY = 'US';
 const DEFAULT_ITUNES_LANGUAGE = 'en_us';
@@ -38,6 +39,14 @@ export interface ItunesLookupResult {
   bundleId: string;
   trackId: number;
   fileSizeBytes?: number;
+  minimumOsVersion?: string;
+}
+
+export interface PlatformAppStoreVersion {
+  bundleId: string;
+  trackId: number;
+  version: string;
+  externalVersionId: string;
   minimumOsVersion?: string;
 }
 
@@ -105,6 +114,56 @@ export async function lookupCurrentVersion(bundleId: string, signal?: AbortSigna
     trackId: result.trackId,
     fileSizeBytes: parseFileSizeBytes(result.fileSizeBytes),
     minimumOsVersion: result.minimumOsVersion,
+  };
+}
+
+export async function lookupCurrentPlatformVersion(bundleId: string, platform: Exclude<AppStorePlatform, 'ios'>, signal?: AbortSignal): Promise<PlatformAppStoreVersion> {
+  const entity = platform === 'tvos' ? 'tvSoftware' : 'software';
+  const lookup = await lookupMetadata({ bundleId, entity }, signal);
+  const country = (await defaultStorefrontCountry()).toLowerCase();
+  const catalogUrl = new URL(`https://apps.apple.com/api/apps/v1/catalog/${country}/apps/${lookup.trackId}`);
+  catalogUrl.searchParams.set('platform', platform === 'tvos' ? 'appletv' : 'realityDevice');
+  catalogUrl.searchParams.set('extend', 'versionHistory');
+  throwIfAborted(signal);
+  const response = await fetch(catalogUrl, { signal: signal ?? AbortSignal.timeout(8000) });
+  throwIfAborted(signal);
+  if (!response.ok) throw new Error(`App Store ${platform} version lookup failed: HTTP ${response.status}`);
+  const body = await response.json() as {
+    data?: Array<{
+      id?: string;
+      type?: string;
+      attributes?: {
+        deviceFamilies?: string[];
+        platformAttributes?: Record<string, {
+          bundleId?: string;
+          externalVersionId?: string | number;
+          minimumOSVersion?: string;
+          minimumVisionOSVersion?: string;
+          versionHistory?: Array<{ externalVersionId?: string | number; versionDisplay?: string }>;
+        }>;
+      };
+    }>;
+  };
+  const app = body.data?.find((entry) => entry.id === String(lookup.trackId) && entry.type === 'apps');
+  if (!app?.attributes) throw new Error(`App Store ${platform} version lookup returned no matching app`);
+  const acceptedFamilies = platform === 'tvos' ? ['appletv', 'tvos'] : ['realitydevice', 'visionos', 'xros'];
+  if (!app.attributes.deviceFamilies?.some((family) => acceptedFamilies.includes(family.toLowerCase()))) {
+    throw new Error(`App Store listing is not available for ${platform}`);
+  }
+  const acceptedAttributes = platform === 'tvos' ? ['tvos', 'appletvos'] : ['visionos', 'xros'];
+  const platformEntry = Object.entries(app.attributes.platformAttributes ?? {}).find(([key]) => acceptedAttributes.includes(key.toLowerCase().replace(/[^a-z]/g, '')))?.[1];
+  const externalVersionId = platformEntry?.externalVersionId === undefined ? '' : String(platformEntry.externalVersionId);
+  if (platformEntry?.bundleId !== bundleId || !/^\d{1,64}$/.test(externalVersionId) || Number(externalVersionId) < 1) {
+    throw new Error(`App Store ${platform} release metadata does not match ${bundleId}`);
+  }
+  const currentVersion = platformEntry.versionHistory?.find((entry) => String(entry.externalVersionId) === externalVersionId)?.versionDisplay;
+  if (!currentVersion) throw new Error(`App Store ${platform} release version is missing for ${bundleId}`);
+  return {
+    bundleId,
+    trackId: lookup.trackId,
+    version: currentVersion,
+    externalVersionId,
+    minimumOsVersion: platformEntry.minimumOSVersion ?? platformEntry.minimumVisionOSVersion,
   };
 }
 

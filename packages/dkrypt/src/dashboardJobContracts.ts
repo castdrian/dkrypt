@@ -30,6 +30,7 @@ export const dashboardJobExportEntrySchema = Type.Object({
   id: identifierSchema,
   correlationId: Type.Optional(identifierSchema),
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
   externalVersionId: Type.Optional(identifierSchema),
   testflight: Type.Optional(Type.Object({ appId: Type.Number(), build: TestFlightBuild }, { additionalProperties: true })),
   versionLabel: Type.Optional(Type.String()),
@@ -262,6 +263,7 @@ export const dashboardJobResolutionNoticeResponseSchema = Type.Object({
 });
 export const dashboardManualDecryptBodySchema = Type.Object({
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
   externalVersionId: Type.Optional(identifierSchema),
   versionLabel: Type.Optional(Type.String({ maxLength: 64 })),
   minimumOsVersion: Type.Optional(Type.String({ maxLength: 32, pattern: '^\\d+(?:\\.\\d+){0,3}$' })),
@@ -269,6 +271,7 @@ export const dashboardManualDecryptBodySchema = Type.Object({
 }, { additionalProperties: true });
 export const dashboardManualDecryptPreflightBodySchema = Type.Object({
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
   testflight: Type.Optional(Type.Boolean()),
   versionLabel: Type.Optional(Type.String({ maxLength: 64 })),
   installSizeBytes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
@@ -294,6 +297,12 @@ const dashboardManualDecryptPreflightDeviceSchema = Type.Object({
 }, { additionalProperties: true });
 export const dashboardManualDecryptPreflightResponseSchema = Type.Object({
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
+  externalVersionId: Type.Optional(identifierSchema),
+  minimumOsVersion: Type.Optional(Type.String({ maxLength: 32 })),
+  serverSide: Type.Optional(Type.Boolean()),
+  serverSideReady: Type.Optional(Type.Boolean()),
+  serverSideBlockers: Type.Optional(Type.Array(Type.String())),
   versionLabel: Type.Optional(Type.String()),
   testflight: Type.Boolean(),
   installSizeBytes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),

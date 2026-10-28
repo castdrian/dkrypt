@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
 import { Type } from '@sinclair/typebox';
 import {
   type AuthConnectionRoute,
+  type AuthAppleOAuthCallbackRoute,
   type AuthIdentifierRoute,
   type AuthLoginRoute,
   type AuthOAuthCallbackRoute,
@@ -18,7 +19,7 @@ import { abuseAddressHash, admitNewOauthAccount, assessSignupAdmission, blockedE
 import { linkOauthAccount, resolveOauthAccount } from '#account.js';
 import { getRouteContract } from '#contracts.js';
 import { getBillingEntitlements } from '#billing.js';
-import { config, isDiscordBotEnabled, isDiscordOauthEnabled, isGithubOauthEnabled } from '#config.js';
+import { config, isAppleOauthEnabled, isDiscordBotEnabled, isDiscordOauthEnabled, isGithubOauthEnabled } from '#config.js';
 import { fetchMemberRoleIds } from '#discord.js';
 import {
   type AuthIdentity,
@@ -152,6 +153,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
       expiresAt: session?.exp,
       githubOauthEnabled: isGithubOauthEnabled(),
       discordOauthEnabled: isDiscordOauthEnabled(),
+      appleOauthEnabled: isAppleOauthEnabled(),
       deployment: { ref: getDeploymentMetadata().ref },
       publicBaseUrl: config.publicBaseUrl,
       signupVerificationEnabled: isSignupChallengeConfigured(),
@@ -382,7 +384,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
     return reply.send({ identities: getLinkedAuthIdentities(userId), linkedProviders: getLinkedAuthProviders(userId) });
   });
 
-  server.get('/v1/auth/connections/:provider/preview', { schema: { hide: true, params: Type.Object({ provider: Type.Union([Type.Literal('github'), Type.Literal('discord')]) }) }, preHandler: fastifyRequireSession }, (request, reply) => {
+  server.get('/v1/auth/connections/:provider/preview', { schema: { hide: true, params: Type.Object({ provider: Type.Union([Type.Literal('github'), Type.Literal('discord'), Type.Literal('apple')]) }) }, preHandler: fastifyRequireSession }, (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const connected = (getAuthProfile(userId)?.identities ?? []).some((identity) => identity.provider === request.params.provider && identity.source !== 'discord_connection');
     if (!connected) return reply.code(404).send({ error: 'sign-in method not found' });
@@ -483,7 +485,7 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
   registerOAuthRoutes(server);
 };
 
-type OAuthProvider = 'github' | 'discord';
+type OAuthProvider = 'github' | 'discord' | 'apple';
 
 interface OAuthProviderConfig {
   enabled: () => boolean;
@@ -493,6 +495,8 @@ interface OAuthProviderConfig {
   scope: string;
   stateCookieName: string;
   responseType?: string;
+  usePkce?: boolean;
+  responseMode?: string;
 }
 
 const oauthProviders: Record<OAuthProvider, OAuthProviderConfig> = {
@@ -513,9 +517,20 @@ const oauthProviders: Record<OAuthProvider, OAuthProviderConfig> = {
     stateCookieName: 'discord_oauth_state',
     responseType: 'code',
   },
+  apple: {
+    enabled: isAppleOauthEnabled,
+    clientId: () => config.appleOauthServiceId,
+    callbackPath: '/v1/auth/apple/callback',
+    authorizationUrl: 'https://appleid.apple.com/auth/authorize',
+    scope: 'name email',
+    stateCookieName: 'apple_oauth_state',
+    responseType: 'code',
+    responseMode: 'form_post',
+    usePkce: false,
+  },
 };
 
-const oauthConnections = new Map<string, { provider: OAuthProvider; userId?: string; codeVerifier: string; returnTo?: string; expiresAt: number }>();
+const oauthConnections = new Map<string, { provider: OAuthProvider; userId?: string; codeVerifier: string; nonce?: string; returnTo?: string; expiresAt: number }>();
 
 function signupRedirect(code: string, provider: OAuthProvider, returnTo?: string): string {
   const params = new URLSearchParams({ auth_error: code, signup_provider: provider });
@@ -562,9 +577,9 @@ async function exchangeOAuthTokenWithRotation(
   return previousToken;
 }
 
-function oauthCookie(name: string, value: string, maxAge: number): string {
+function oauthCookie(name: string, value: string, maxAge: number, sameSite: 'Lax' | 'None' = 'Lax'): string {
   const secure = config.publicBaseUrl.startsWith('https://') ? '; Secure' : '';
-  return `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`;
+  return `${name}=${value}; HttpOnly; SameSite=${sameSite}; Path=/; Max-Age=${maxAge}${secure}`;
 }
 
 function appendSetCookie(reply: FastifyReply, cookie: string): void {
@@ -594,18 +609,19 @@ function oauthReturnPath(value: unknown): string | undefined {
   }
 }
 
-function createOauthState(provider: OAuthProvider, userId?: string, returnTo?: string): { state: string; codeVerifier: string } {
+function createOauthState(provider: OAuthProvider, userId?: string, returnTo?: string): { state: string; codeVerifier: string; nonce?: string } {
   const state = randomBytes(16).toString('hex');
   const codeVerifier = randomBytes(32).toString('base64url');
-  oauthConnections.set(state, { provider, userId, codeVerifier, returnTo, expiresAt: Date.now() + 600_000 });
-  return { state, codeVerifier };
+  const nonce = provider === 'apple' ? randomBytes(32).toString('base64url') : undefined;
+  oauthConnections.set(state, { provider, userId, codeVerifier, nonce, returnTo, expiresAt: Date.now() + 600_000 });
+  return { state, codeVerifier, nonce };
 }
 
-function consumeOauthConnection(provider: OAuthProvider, state: string): { userId?: string; codeVerifier: string; returnTo?: string } | undefined {
+function consumeOauthConnection(provider: OAuthProvider, state: string): { userId?: string; codeVerifier: string; nonce?: string; returnTo?: string } | undefined {
   const connection = oauthConnections.get(state);
   oauthConnections.delete(state);
   if (!connection || connection.provider !== provider || connection.expiresAt < Date.now()) return undefined;
-  return { userId: connection.userId, codeVerifier: connection.codeVerifier, returnTo: connection.returnTo };
+  return { userId: connection.userId, codeVerifier: connection.codeVerifier, nonce: connection.nonce, returnTo: connection.returnTo };
 }
 
 setInterval(() => {
@@ -618,22 +634,30 @@ setInterval(() => {
 function startOAuthLogin(request: FastifyRequest, reply: FastifyReply, provider: OAuthProvider, userId?: string): void {
   const providerConfig = oauthProviders[provider];
   if (!providerConfig.enabled()) {
-    sendValidationError(request, reply, 404, `${provider === 'github' ? 'GitHub' : 'Discord'} OAuth is not configured`);
+    sendValidationError(request, reply, 404, `${providerLabel(provider)} OAuth is not configured`);
     return;
   }
   if (!userId) ensureAbuseBrowserSignal(reply, request.headers.cookie);
   const query = request.query as Record<string, unknown>;
-  const { state, codeVerifier } = createOauthState(provider, userId, oauthReturnPath(query.return_to));
-  appendSetCookie(reply, oauthCookie(providerConfig.stateCookieName, state, 600));
+  const { state, codeVerifier, nonce } = createOauthState(provider, userId, oauthReturnPath(query.return_to));
+  appendSetCookie(reply, oauthCookie(providerConfig.stateCookieName, state, 600, provider === 'apple' ? 'None' : 'Lax'));
   const url = new URL(providerConfig.authorizationUrl);
   url.searchParams.set('client_id', providerConfig.clientId());
   url.searchParams.set('redirect_uri', `${config.publicBaseUrl}${providerConfig.callbackPath}`);
   if (providerConfig.responseType) url.searchParams.set('response_type', providerConfig.responseType);
   url.searchParams.set('scope', providerConfig.scope);
   url.searchParams.set('state', state);
-  url.searchParams.set('code_challenge', createHash('sha256').update(codeVerifier).digest('base64url'));
-  url.searchParams.set('code_challenge_method', 'S256');
+  if (providerConfig.responseMode) url.searchParams.set('response_mode', providerConfig.responseMode);
+  if (nonce) url.searchParams.set('nonce', nonce);
+  if (providerConfig.usePkce !== false) {
+    url.searchParams.set('code_challenge', createHash('sha256').update(codeVerifier).digest('base64url'));
+    url.searchParams.set('code_challenge_method', 'S256');
+  }
   reply.redirect(url.toString());
+}
+
+function providerLabel(provider: OAuthProvider): string {
+  return provider === 'github' ? 'GitHub' : provider === 'discord' ? 'Discord' : 'Apple';
 }
 
 async function exchangeGithubCode(code: string, codeVerifier?: string): Promise<OAuthTokenResponse> {
@@ -678,7 +702,151 @@ async function exchangeDiscordCode(code: string, redirectUri: string, codeVerifi
   return exchangeOAuthTokenWithRotation('discord', currentSecret, previousSecret, 'invalid_client', exchange);
 }
 
+interface AppleSigningKey {
+  kid: string;
+  kty: 'RSA';
+  n: string;
+  e: string;
+  alg?: string;
+  use?: string;
+}
+
+interface AppleIdentityClaims {
+  iss: string;
+  aud: string | string[];
+  sub: string;
+  nonce: string;
+  exp: number;
+  iat: number;
+  email?: string;
+  email_verified?: boolean | string;
+}
+
+interface AppleTokenResponse extends OAuthTokenResponse {
+  id_token?: string;
+}
+
+let appleSigningKeys: { expiresAt: number; keys: AppleSigningKey[] } | undefined;
+let appleSigningKeysFetch: Promise<AppleSigningKey[]> | undefined;
+
+function appleClientSecret(): string {
+  const encodedKey = config.appleOauthPrivateKey;
+  const keyBytes = Buffer.from(encodedKey, 'base64');
+  if (!keyBytes.length || keyBytes.toString('base64').replace(/=+$/, '') !== encodedKey.replace(/=+$/, '')) {
+    keyBytes.fill(0);
+    throw new Error('Apple OAuth signing key is malformed');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const privateKey = createPrivateKey(keyBytes);
+    const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: config.appleOauthKeyId, typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      iss: config.appleOauthTeamId,
+      iat: now,
+      exp: now + 300,
+      aud: 'https://appleid.apple.com',
+      sub: config.appleOauthServiceId,
+    })).toString('base64url');
+    const signingInput = `${header}.${payload}`;
+    const signature = sign('sha256', Buffer.from(signingInput), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+    return `${signingInput}.${signature}`;
+  } finally {
+    keyBytes.fill(0);
+  }
+}
+
+async function fetchAppleSigningKeys(forceRefresh = false): Promise<AppleSigningKey[]> {
+  if (!forceRefresh && appleSigningKeys && appleSigningKeys.expiresAt > Date.now()) return appleSigningKeys.keys;
+  if (appleSigningKeysFetch) return appleSigningKeysFetch;
+  appleSigningKeysFetch = (async () => {
+    const response = await fetch('https://appleid.apple.com/auth/keys', { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Apple signing keys lookup failed: HTTP ${response.status}`);
+    const body = await response.json() as { keys?: AppleSigningKey[] };
+    const keys = body.keys?.filter((key) => key.kty === 'RSA' && key.alg === 'RS256' && key.use === 'sig' && typeof key.kid === 'string' && typeof key.n === 'string' && typeof key.e === 'string');
+    if (!keys?.length) throw new Error('Apple signing keys response is invalid');
+    appleSigningKeys = { expiresAt: Date.now() + 10 * 60_000, keys };
+    return keys;
+  })().finally(() => {
+    appleSigningKeysFetch = undefined;
+  });
+  return appleSigningKeysFetch;
+}
+
+function decodeAppleJwtPart(value: string): Record<string, unknown> {
+  const decoded: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('Apple identity token is malformed');
+  return decoded as Record<string, unknown>;
+}
+
+async function verifyAppleIdentityToken(token: string, expectedNonce: string): Promise<AppleIdentityClaims> {
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts.some((part) => !part)) throw new Error('Apple identity token is malformed');
+  const header = decodeAppleJwtPart(parts[0]!);
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string') throw new Error('Apple identity token algorithm is unsupported');
+  let key = (await fetchAppleSigningKeys()).find((candidate) => candidate.kid === header.kid);
+  if (!key) key = (await fetchAppleSigningKeys(true)).find((candidate) => candidate.kid === header.kid);
+  if (!key) throw new Error('Apple identity token signing key was not recognized');
+  const signingInput = `${parts[0]}.${parts[1]}`;
+  const signature = Buffer.from(parts[2]!, 'base64url');
+  const validSignature = verify('RSA-SHA256', Buffer.from(signingInput), createPublicKey({ key, format: 'jwk' }), signature);
+  signature.fill(0);
+  if (!validSignature) throw new Error('Apple identity token signature is invalid');
+  const claims = decodeAppleJwtPart(parts[1]!) as unknown as AppleIdentityClaims;
+  const now = Math.floor(Date.now() / 1000);
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (claims.iss !== 'https://appleid.apple.com'
+    || !audiences.includes(config.appleOauthServiceId)
+    || !Number.isSafeInteger(claims.exp)
+    || claims.exp <= now
+    || !Number.isSafeInteger(claims.iat)
+    || claims.iat > now + 60
+    || typeof claims.sub !== 'string'
+    || claims.sub.length < 1
+    || claims.sub.length > 256
+    || claims.nonce !== expectedNonce) {
+    throw new Error('Apple identity token claims are invalid');
+  }
+  if (claims.email !== undefined && (typeof claims.email !== 'string' || claims.email.length > 320)) {
+    throw new Error('Apple identity token email is invalid');
+  }
+  return claims;
+}
+
+async function exchangeAppleCode(code: string, redirectUri: string): Promise<AppleTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.appleOauthServiceId,
+    client_secret: appleClientSecret(),
+    code,
+    grant_type: 'authorization_code',
+    redirect_uri: redirectUri,
+  });
+  const response = await fetch('https://appleid.apple.com/auth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+    signal: AbortSignal.timeout(8000),
+  });
+  return await response.json() as AppleTokenResponse;
+}
+
+function appleDisplayName(value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  try {
+    const user = JSON.parse(value) as { name?: { firstName?: unknown; lastName?: unknown } };
+    const firstName = typeof user.name?.firstName === 'string' ? user.name.firstName : '';
+    const lastName = typeof user.name?.lastName === 'string' ? user.name.lastName : '';
+    const name = `${firstName} ${lastName}`.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return name || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): void {
+  server.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_request, body, done) => {
+    done(null, Object.fromEntries(new URLSearchParams(body as string)));
+  });
+
   server.get('/v1/auth/github/login', { schema: getRouteContract('GET', '/v1/auth/github/login') }, async (request, reply) => {
     startOAuthLogin(request, reply, 'github');
   });
@@ -834,6 +1002,80 @@ function registerOAuthRoutes(server: Parameters<FastifyPluginAsyncTypebox>[0]): 
     } catch (error) {
       log.error('discord oauth callback failed', { error: String(error) });
       return reply.redirect('/?auth_error=discord_failed');
+    }
+  });
+
+  server.get('/v1/auth/apple/login', { schema: getRouteContract('GET', '/v1/auth/apple/login') }, async (request, reply) => {
+    startOAuthLogin(request, reply, 'apple');
+  });
+
+  server.get('/v1/auth/apple/connect', {
+    schema: getRouteContract('GET', '/v1/auth/apple/connect'),
+    preHandler: fastifyRequireSession,
+  }, async (request, reply) => {
+    const session = getFastifySession(request)!;
+    if (session.sub === 'root') return sendValidationError(request, reply, 400, 'the root account cannot connect OAuth identities');
+    startOAuthLogin(request, reply, 'apple', session.sub);
+  });
+
+  server.post<AuthAppleOAuthCallbackRoute>('/v1/auth/apple/callback', {
+    schema: getRouteContract('POST', '/v1/auth/apple/callback'),
+  }, async (request, reply) => {
+    if (!isAppleOauthEnabled()) return reply.redirect('/?auth_error=apple_disabled');
+    if (request.headers.origin && request.headers.origin !== 'https://appleid.apple.com') {
+      return reply.redirect('/?auth_error=state_mismatch');
+    }
+    const body = request.body;
+    const code = body.code ?? '';
+    const state = body.state ?? '';
+    const cookieState = parseCookieHeader(request.headers.cookie)[oauthProviders.apple.stateCookieName];
+    reply.header('Set-Cookie', oauthCookie(oauthProviders.apple.stateCookieName, '', 0, 'None'));
+    if (!state || !cookieState || state !== cookieState) {
+      log.warn('apple oauth state mismatch', { hasCode: !!code, hasState: !!state, hasCookieState: !!cookieState });
+      return reply.redirect('/?auth_error=state_mismatch');
+    }
+    if (body.error) {
+      consumeOauthConnection('apple', state);
+      return reply.redirect('/?auth_error=apple_failed');
+    }
+    if (!code) return reply.redirect('/?auth_error=apple_failed');
+    const oauthConnection = consumeOauthConnection('apple', state);
+    if (!oauthConnection?.nonce) return reply.redirect('/?auth_error=state_mismatch');
+    const linkUserId = oauthConnection.userId;
+    try {
+      const token = await exchangeAppleCode(code, `${config.publicBaseUrl}${oauthProviders.apple.callbackPath}`);
+      if (!token.id_token) throw new Error(token.error ?? 'Apple did not return an identity token');
+      const claims = await verifyAppleIdentityToken(token.id_token, oauthConnection.nonce);
+      const verifiedEmail = claims.email_verified === true || claims.email_verified === 'true'
+        ? claims.email?.trim().toLowerCase()
+        : undefined;
+      const username = (verifiedEmail?.split('@')[0] ?? `apple-${claims.sub.slice(-8)}`).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 40);
+      const identity: AuthIdentity = {
+        provider: 'apple',
+        providerId: claims.sub,
+        username: username || `apple-${claims.sub.slice(-8)}`,
+        displayName: appleDisplayName(body.user, username || 'Apple user'),
+        email: verifiedEmail,
+        source: 'oauth',
+        updatedAt: new Date().toISOString(),
+      };
+      if (linkUserId) {
+        const pending = createPendingOauthLink(linkUserId, identity);
+        return reply.redirect(`/?link_review=${encodeURIComponent(pending.id)}`);
+      }
+      const existingProfile = findAuthProfileByIdentity('apple', claims.sub);
+      if (!existingProfile) {
+        const admission = await approveOauthSignup(request, reply, 'apple', verifiedEmail, oauthConnection.returnTo);
+        if (!admission.allowed) return reply.redirect(admission.redirect);
+      }
+      const profile = resolveOauthAccount({ fallbackUserId: oauthUserId('apple', claims.sub, identity.username), identity });
+      const permissions = getUserEffectivePermissions(profile.userId) ?? 0n;
+      setFastifySessionCookie(reply, { sub: profile.userId, permissions, mfaVerified: !mfaStatus(profile.userId).enabled, reauthenticatedAt: Date.now() }, fastifySessionOptsFromRequest(request));
+      log.info('apple oauth login succeeded', { subject: claims.sub, permissions: serializeBits(permissions) });
+      return reply.redirect(oauthConnection.returnTo ?? '/');
+    } catch (error) {
+      log.error('apple oauth callback failed', { error: String(error) });
+      return reply.redirect('/?auth_error=apple_failed');
     }
   });
 }

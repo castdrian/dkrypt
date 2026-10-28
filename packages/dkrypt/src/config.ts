@@ -78,6 +78,10 @@ export const config = {
   discordOauthClientId: optional('DISCORD_OAUTH_CLIENT_ID', ''),
   discordOauthClientSecret: optional('DISCORD_OAUTH_CLIENT_SECRET', ''),
   discordOauthClientSecretPrevious: optional('DISCORD_OAUTH_CLIENT_SECRET_PREVIOUS', ''),
+  appleOauthServiceId: optional('APPLE_OAUTH_SERVICE_ID', ''),
+  appleOauthTeamId: optional('APPLE_OAUTH_TEAM_ID', ''),
+  appleOauthKeyId: optional('APPLE_OAUTH_KEY_ID', ''),
+  appleOauthPrivateKey: optional('APPLE_OAUTH_PRIVATE_KEY_BASE64', ''),
   discordBotToken: optional('DISCORD_BOT_TOKEN', ''),
 
   stripeSecretKey: optional('STRIPE_SECRET_KEY', ''),
@@ -195,6 +199,16 @@ export function isDiscordOauthEnabled(): boolean {
 }
 
 export const discordOauthEnabled = isDiscordOauthEnabled();
+
+export function isAppleOauthEnabled(): boolean {
+  return config.appleOauthServiceId !== ''
+    && config.appleOauthTeamId !== ''
+    && config.appleOauthKeyId !== ''
+    && config.appleOauthPrivateKey !== ''
+    && config.publicBaseUrl.startsWith('https://');
+}
+
+export const appleOauthEnabled = isAppleOauthEnabled();
 
 export function isDiscordBotEnabled(): boolean {
   return config.discordBotToken !== '';

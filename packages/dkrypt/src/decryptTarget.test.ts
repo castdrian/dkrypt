@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeVersionSelector, resolveLatestTestFlightTarget, VERSION_SELECTOR_RE } from './decryptTarget.js';
+import { normalizeVersionSelector, resolveDecryptTarget, resolveLatestTestFlightTarget, VERSION_SELECTOR_RE } from './decryptTarget.js';
 
 describe('decrypt version selectors', () => {
   test('accepts stable and TestFlight tag shapes', () => {
@@ -67,5 +67,49 @@ describe('latest TestFlight target resolution', () => {
       listTrains: async () => [{ trainVersion: '3.0', buildCount: 1 }],
       listBuilds: async () => [{ id: 3001, cfBundleShortVersion: '3.0', cfBundleVersion: '1', bundleId: 'com.example.other' }],
     })).rejects.toThrow('no available TestFlight build');
+  });
+});
+
+describe('platform App Store target resolution', () => {
+  test.each([
+    ['tvos', 'tvOS', 'com.example.tv', '2.4', 'tv-version-24', '17.0'],
+    ['visionos', 'visionOS', 'com.example.spatial', '1.3', 'vision-version-13', '2.0'],
+  ] as const)('resolves the current %s release without using iOS version records', async (platform, label, bundleId, version, externalVersionId, minimumOsVersion) => {
+    const calls: unknown[][] = [];
+    const target = await resolveDecryptTarget(bundleId, undefined, platform, {
+      lookupAppMetadata: async () => { throw new Error('iOS metadata lookup must not run'); },
+      listTrains: async () => { throw new Error('TestFlight lookup must not run'); },
+      listBuilds: async () => { throw new Error('TestFlight lookup must not run'); },
+      listAppVersions: async () => { throw new Error('iOS version lookup must not run'); },
+      lookupCurrentPlatformVersion: async (requestedBundleId, requestedPlatform) => {
+        calls.push([requestedBundleId, requestedPlatform]);
+        return { bundleId: requestedBundleId, trackId: 42, version, externalVersionId, minimumOsVersion };
+      },
+    });
+
+    expect(target).toMatchObject({
+      bundleId,
+      platform,
+      channel: 'appstore',
+      externalVersionId,
+      versionLabel: version,
+      minimumOsVersion,
+    });
+    expect(target.artifactKey).toContain(platform);
+    expect(calls).toEqual([[bundleId, platform]]);
+    expect(label).toBe(platform === 'tvos' ? 'tvOS' : 'visionOS');
+  });
+
+  test('rejects stale platform releases and TestFlight selectors for non-iOS platforms', async () => {
+    const services = {
+      lookupAppMetadata: async () => { throw new Error('iOS metadata lookup must not run'); },
+      listTrains: async () => { throw new Error('TestFlight lookup must not run'); },
+      listBuilds: async () => { throw new Error('TestFlight lookup must not run'); },
+      listAppVersions: async () => [],
+      lookupCurrentPlatformVersion: async (bundleId: string) => ({ bundleId, trackId: 42, version: '4.0', externalVersionId: 'platform-version-40' }),
+    };
+
+    await expect(resolveDecryptTarget('com.example.tv', '3.9', 'tvos', services)).rejects.toThrow('Only the latest tvOS release is supported');
+    await expect(resolveDecryptTarget('com.example.spatial', '4.0_12', 'visionos', services)).rejects.toThrow('TestFlight builds are available only for iOS');
   });
 });

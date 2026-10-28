@@ -82,3 +82,20 @@ test('IPA inspection runs in a separate process and returns verified package met
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.each([[11, 'visionOS'], [12, 'visionOS Simulator']] as const)('IPA analysis recognizes Mach-O platform %i as %s', async (platform, expectedPlatform) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dkrypt-ipa-platform-'));
+  try {
+    const ipaPath = path.join(root, 'platform.ipa');
+    const archive = new AdmZip();
+    archive.addFile('Payload/Example.app/Info.plist', Buffer.from('<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.app</string><key>CFBundleExecutable</key><string>Example</string></dict></plist>'));
+    archive.addFile('Payload/Example.app/Example', arm64MachO(platform));
+    archive.writeZip(ipaPath);
+
+    const analysis = await analyzeIpaInIsolatedProcess(ipaPath);
+
+    expect(analysis.executables[0]?.slices).toEqual([expect.objectContaining({ architecture: 'arm64', platform: expectedPlatform })]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

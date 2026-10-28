@@ -167,6 +167,64 @@ test('regular members receive a simple preflight summary while the server checks
   }
 });
 
+test('tvOS and visionOS preflight uses device-free readiness without checking device health', async () => {
+  const lookups: unknown[][] = [];
+  const readinessChecks: unknown[][] = [];
+  const server = build({
+    getEffectiveDevices: () => { throw new Error('device inventory must not be read'); },
+    getDeviceHealth: async () => { throw new Error('device health must not be checked'); },
+    resolveDecryptTarget: async (bundleId, versionLabel, platform) => {
+      lookups.push([bundleId, versionLabel, platform]);
+      return {
+        bundleId,
+        platform: platform ?? 'ios',
+        channel: 'appstore',
+        externalVersionId: 'platform-version-42',
+        versionLabel: '4.2',
+        minimumOsVersion: '18.0',
+        artifactKey: 'platform-artifact-42',
+      };
+    },
+    getOfflineAppStoreReadiness: (input) => {
+      readinessChecks.push([input]);
+      return {
+        enabled: true,
+        ready: true,
+        downloaderAvailable: true,
+        decryptorAvailable: true,
+        fairPlayAuthorized: true,
+        vault: { encryptionReady: true, accountConfigured: true, credentialConfigured: true, authenticatedAt: 1 },
+        blockers: [],
+      };
+    },
+  });
+
+  try {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/dashboard/decrypt/preflight',
+      headers: { cookie: sessionCookie(PermissionFlag.requestDecrypt) },
+      payload: { bundleId: 'com.example.tv', platform: 'tvos' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      bundleId: 'com.example.tv',
+      platform: 'tvos',
+      externalVersionId: 'platform-version-42',
+      versionLabel: '4.2',
+      serverSide: true,
+      serverSideReady: true,
+      canQueue: true,
+      devices: [],
+    });
+    expect(lookups).toEqual([['com.example.tv', undefined, 'tvos']]);
+    expect(readinessChecks).toEqual([[{ platform: 'tvos' }]]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('App Store preflight reports the shared SpringBoard bridge outage', async () => {
   const device = createDevice('appstore-device');
   const server = build({

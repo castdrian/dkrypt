@@ -165,12 +165,14 @@ function appendCookie(reply: FastifyReply, value: string): void {
   reply.header('Set-Cookie', cookies);
 }
 
-function cookieFlags(maxAgeSeconds: number): string {
-  return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${config.publicBaseUrl.startsWith('https://') ? '; Secure' : ''}`;
+function cookieFlags(maxAgeSeconds: number, sameSite: 'Lax' | 'None' = 'Lax'): string {
+  const secure = config.publicBaseUrl.startsWith('https://');
+  const effectiveSameSite = sameSite === 'None' && !secure ? 'Lax' : sameSite;
+  return `Path=/; HttpOnly; SameSite=${effectiveSameSite}; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`;
 }
 
-function clearCookie(reply: FastifyReply, name: string): void {
-  appendCookie(reply, `${name}=; ${cookieFlags(0)}`);
+function clearCookie(reply: FastifyReply, name: string, sameSite: 'Lax' | 'None' = 'Lax'): void {
+  appendCookie(reply, `${name}=; ${cookieFlags(0, sameSite)}`);
 }
 
 export function isSignupChallengeConfigured(): boolean {
@@ -293,13 +295,13 @@ export async function verifySignupChallenge(token: string, ip: string | undefine
   const expiresAt = now + CHALLENGE_TTL_MS;
   database.query('INSERT INTO abuse_signup_challenges (id, network_hash, browser_hash, turnstile_hash, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, NULL)').run(id, networkHash, browserHash, turnstileHash ?? null, now, expiresAt);
   const payloadValue = `${id}.${expiresAt}`;
-  appendCookie(reply, `${SIGNUP_CHALLENGE_COOKIE}=${payloadValue}.${signCookie('signup-challenge', payloadValue)}; ${cookieFlags(Math.ceil(CHALLENGE_TTL_MS / 1000))}`);
+  appendCookie(reply, `${SIGNUP_CHALLENGE_COOKIE}=${payloadValue}.${signCookie('signup-challenge', payloadValue)}; ${cookieFlags(Math.ceil(CHALLENGE_TTL_MS / 1000), 'None')}`);
   if (turnstileHash) appendSignedSignalCookie(reply, ABUSE_TURNSTILE_COOKIE, 'abuse-turnstile', turnstileHash, now);
 }
 
 export function consumeSignupChallenge(cookieHeader: string | undefined, ip: string | undefined, reply: FastifyReply, now = Date.now()): { valid: boolean; browserHash?: string; turnstileHash?: string } {
   const cookie = (cookieHeader ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SIGNUP_CHALLENGE_COOKIE}=`))?.slice(SIGNUP_CHALLENGE_COOKIE.length + 1);
-  clearCookie(reply, SIGNUP_CHALLENGE_COOKIE);
+  clearCookie(reply, SIGNUP_CHALLENGE_COOKIE, 'None');
   if (!cookie) return { valid: false };
   const [id, rawExpiry, signature] = cookie.split('.');
   const expiresAt = Number(rawExpiry);

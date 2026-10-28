@@ -1,13 +1,15 @@
-import { lookupAppMetadata } from '#appStoreMetadata.js';
+import { lookupAppMetadata, lookupCurrentPlatformVersion } from '#appStoreMetadata.js';
 import { listAppVersions, type AppVersionEntry } from '#versions.js';
 import { compareVersions } from '#util/version.js';
 import { listBuilds, listTrains, type TFBuild } from '#testflight.js';
 import { artifactKeyForAppStoreVersion, artifactKeyForTestFlight } from '#artifacts.js';
+import type { AppStorePlatform } from '#platform.js';
 
 export const VERSION_SELECTOR_RE = /^v?\d+(?:\.\d+)*(?:_\d+)?$/i;
 
 export interface ResolvedDecryptTarget {
   bundleId: string;
+  platform: AppStorePlatform;
   selector?: string;
   channel: 'appstore' | 'testflight';
   externalVersionId?: string;
@@ -22,6 +24,13 @@ export interface LatestTestFlightTargetServices {
   listTrains: typeof listTrains;
   listBuilds: typeof listBuilds;
 }
+
+export interface DecryptTargetServices extends LatestTestFlightTargetServices {
+  listAppVersions: typeof listAppVersions;
+  lookupCurrentPlatformVersion: typeof lookupCurrentPlatformVersion;
+}
+
+const decryptTargetServices: DecryptTargetServices = { lookupAppMetadata, listTrains, listBuilds, listAppVersions, lookupCurrentPlatformVersion };
 
 const latestTestFlightTargetServices: LatestTestFlightTargetServices = { lookupAppMetadata, listTrains, listBuilds };
 
@@ -42,11 +51,12 @@ function selectVersion(entries: AppVersionEntry[], requested: string | undefined
     .sort((a, b) => Number(b.externalVersionId) - Number(a.externalVersionId))[0];
 }
 
-export async function resolveDecryptTarget(bundleId: string, selector?: string): Promise<ResolvedDecryptTarget> {
+export async function resolveDecryptTarget(bundleId: string, selector?: string, platform: AppStorePlatform = 'ios', services: DecryptTargetServices = decryptTargetServices): Promise<ResolvedDecryptTarget> {
   const normalized = normalizeVersionSelector(selector);
   const testFlightMatch = normalized?.match(/^(\d+(?:\.\d+)*)_(\d+)$/);
 
   if (testFlightMatch) {
+    if (platform !== 'ios') throw new Error('TestFlight builds are available only for iOS');
     const shortVersion = testFlightMatch[1];
     const buildNumber = testFlightMatch[2];
     const { trackId } = await lookupAppMetadata(bundleId);
@@ -58,6 +68,7 @@ export async function resolveDecryptTarget(bundleId: string, selector?: string):
     if (!build) throw new Error(`TestFlight build ${shortVersion}_${buildNumber} was not found for ${bundleId}`);
     return {
       bundleId,
+      platform,
       selector: normalized,
       channel: 'testflight',
       testflight: { appId: trackId, build },
@@ -66,7 +77,24 @@ export async function resolveDecryptTarget(bundleId: string, selector?: string):
     };
   }
 
-  const entries = await listAppVersions(bundleId);
+  if (platform !== 'ios') {
+    const current = await services.lookupCurrentPlatformVersion(bundleId, platform);
+    if (normalized && compareVersions(current.version, normalized) !== 0) {
+      throw new Error(`Only the latest ${platform === 'tvos' ? 'tvOS' : 'visionOS'} release is supported`);
+    }
+    return {
+      bundleId,
+      platform,
+      selector: normalized,
+      channel: 'appstore',
+      externalVersionId: current.externalVersionId,
+      versionLabel: current.version,
+      artifactKey: artifactKeyForAppStoreVersion(bundleId, current.version, current.externalVersionId, platform),
+      minimumOsVersion: current.minimumOsVersion,
+    };
+  }
+
+  const entries = await services.listAppVersions(bundleId);
   const selected = selectVersion(entries, normalized);
   if (!selected) {
     throw new Error(normalized ? `App Store version ${normalized} was not found for ${bundleId}` : `no latest App Store version was found for ${bundleId}`);
@@ -75,11 +103,12 @@ export async function resolveDecryptTarget(bundleId: string, selector?: string):
 
   return {
     bundleId,
+    platform,
     selector: normalized,
     channel: 'appstore',
     externalVersionId: selected.externalVersionId,
     versionLabel,
-    artifactKey: artifactKeyForAppStoreVersion(bundleId, versionLabel, selected.externalVersionId),
+    artifactKey: artifactKeyForAppStoreVersion(bundleId, versionLabel, selected.externalVersionId, platform),
     minimumOsVersion: selected.minimumOsVersion,
   };
 }
@@ -109,6 +138,7 @@ export async function resolveLatestTestFlightTarget(
     const selector = `${build.cfBundleShortVersion}_${build.cfBundleVersion}`;
     return {
       bundleId,
+      platform: 'ios',
       selector,
       channel: 'testflight',
       testflight: { appId: trackId, build },

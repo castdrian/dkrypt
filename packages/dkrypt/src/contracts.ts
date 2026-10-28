@@ -5,6 +5,7 @@ import { jobFailureClassSchema as JobFailureClass } from '#util/failureCategory.
 import {
   authConnectionParamsSchema,
   authConnectionBodySchema,
+  authAppleOAuthCallbackBodySchema,
   authIdentifierParamsSchema,
   authLoginBodySchema,
   authOAuthCallbackQuerySchema,
@@ -294,6 +295,7 @@ export const JobSummaryResponse = object({
   id: Identifier,
   correlationId: Identifier,
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
   externalVersionId: Type.Optional(Identifier),
   testflight: Type.Optional(object({ appId: Type.Number(), buildId: Type.Number(), version: Type.Optional(Type.String()), buildNumber: Type.Optional(Type.String()) })),
   versionLabel: Type.Optional(Type.String()),
@@ -539,6 +541,7 @@ const AuthSessionResponse = object({
   expiresAt: Type.Optional(Type.Integer()),
   githubOauthEnabled: Type.Boolean(),
   discordOauthEnabled: Type.Boolean(),
+  appleOauthEnabled: Type.Boolean(),
   deployment: object({ ref: Type.String() }),
   publicBaseUrl: Type.String(),
   signupVerificationEnabled: Type.Boolean(),
@@ -633,6 +636,7 @@ const DailyVolumeResponse = object({ days: Type.Array(object({ date: Type.String
 const ArtifactSummaryResponse = object({
   id: Identifier,
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
   channel: Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]),
   externalVersionId: Type.Optional(Identifier),
   testflightBuildId: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -661,6 +665,8 @@ const DecryptJobResponse = object({
 const DecryptTargetResponse = object({
   resolveOnly: Type.Literal(true),
   bundleId: BundleId,
+  platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
+  externalVersionId: Type.Optional(Identifier),
   selector: Type.Optional(Type.String()),
   channel: Type.Union([Type.Literal('appstore'), Type.Literal('testflight')]),
   resolvedVersion: Type.String(),
@@ -1028,7 +1034,7 @@ register('GET', '/v1/status', {
 });
 
 register('GET', '/v1/decrypt', {
-  querystring: object({ bundleId: BundleId, externalVersionId: Type.Optional(Identifier), version: Type.Optional(VersionSelector) }),
+  querystring: object({ bundleId: BundleId, externalVersionId: Type.Optional(Identifier), version: Type.Optional(VersionSelector), platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])) }),
 });
 
 register('POST', '/v1/testflight/decrypt', {
@@ -1164,6 +1170,8 @@ const remainingContracts: Array<[ContractMethod, string]> = [
   ['GET', '/v1/auth/discord/login'],
   ['GET', '/v1/auth/discord/connect'],
   ['GET', '/v1/auth/discord/callback'],
+  ['GET', '/v1/auth/apple/login'],
+  ['GET', '/v1/auth/apple/connect'],
   ['POST', '/v1/billing/subscription'],
   ['POST', '/v1/nowpayments/webhook'],
   ['POST', '/v1/stripe/webhook'],
@@ -1270,6 +1278,7 @@ register('PATCH', '/v1/auth/profile', { body: authProfileBodySchema });
 register('DELETE', '/v1/auth/connections/:provider', { params: authConnectionParamsSchema, body: authConnectionBodySchema });
 register('GET', '/v1/auth/github/callback', { querystring: authOAuthCallbackQuerySchema });
 register('GET', '/v1/auth/discord/callback', { querystring: authOAuthCallbackQuerySchema });
+register('POST', '/v1/auth/apple/callback', { body: authAppleOAuthCallbackBodySchema, response: { 302: Type.String() } });
 register('POST', '/v1/dashboard/notifications/read', { body: notificationReadBodySchema });
 register('POST', '/v1/dashboard/jobs/bulk-preview', { body: dashboardJobBulkPreviewBodySchema });
 register('POST', '/v1/dashboard/jobs/reorder', { body: object({ ids: Type.Array(Identifier, { maxItems: 100 }) }) });
@@ -1429,6 +1438,7 @@ register('POST', '/v1/decrypts', {
     bundleId: BundleId,
     version: Type.Optional(VersionSelector),
     channel: Type.Optional(Type.Union([Type.Literal('appstore'), Type.Literal('testflight')])),
+    platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])),
     resolveOnly: Type.Optional(Type.Boolean()),
   }),
   response: { 200: Type.Union([DecryptJobResponse, DecryptTargetResponse]), 202: DecryptJobResponse, 400: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 410: ErrorEnvelope, 429: ErrorEnvelope, 502: ErrorEnvelope },
@@ -1849,7 +1859,7 @@ register('GET', '/v1/metrics', {
 });
 register('GET', '/v1/decrypt', {
   headers: IdempotencyKeyHeaders,
-  querystring: object({ bundleId: BundleId, externalVersionId: Type.Optional(Identifier), version: Type.Optional(VersionSelector) }),
+  querystring: object({ bundleId: BundleId, externalVersionId: Type.Optional(Identifier), version: Type.Optional(VersionSelector), platform: Type.Optional(Type.Union([Type.Literal('ios'), Type.Literal('tvos'), Type.Literal('visionos')])) }),
   response: {
     200: BinaryFileResponse,
     202: JobSummaryResponse,
@@ -1897,6 +1907,8 @@ for (const provider of ['github', 'discord'] as const) {
   register('GET', `/v1/auth/${provider}/connect`, { response: { 302: Type.String() } });
   register('GET', `/v1/auth/${provider}/callback`, { response: { 302: Type.String() } });
 }
+register('GET', '/v1/auth/apple/login', { response: { 302: Type.String() } });
+register('GET', '/v1/auth/apple/connect', { response: { 302: Type.String() } });
 
 export function getRouteContract(method: string, path: string): FastifySchema | undefined {
   const key = `${method} ${path}`;

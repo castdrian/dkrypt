@@ -234,8 +234,9 @@ export async function buildServer(options: {
         return;
       }
       const isWebhook = request.url.startsWith('/v1/stripe/webhook') || request.url.startsWith('/v1/nowpayments/webhook');
+      const isAppleOAuthCallback = method === 'POST' && request.url.split('?')[0] === '/v1/auth/apple/callback';
       const hasCookie = typeof request.headers.cookie === 'string' && request.headers.cookie.length > 0;
-      if (isMutation && !isWebhook && hasCookie) {
+      if (isMutation && !isWebhook && !isAppleOAuthCallback && hasCookie) {
         const fetchSite = request.headers['sec-fetch-site'];
         const origin = request.headers.origin;
         if (typeof fetchSite !== 'string' && typeof origin !== 'string') {

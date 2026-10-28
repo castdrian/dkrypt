@@ -13,6 +13,7 @@ export interface CheckoutDecryptContinuation {
   bundleId: string;
   trackName: string;
   channel: 'appstore' | 'testflight';
+  platform?: 'ios' | 'tvos' | 'visionos';
   externalVersionId?: string;
   versionLabel: string;
   minimumOsVersion?: string;
@@ -67,6 +68,7 @@ export function takeCheckoutDecryptContinuation(): CheckoutDecryptContinuation |
     if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()) return undefined;
     if (typeof value.bundleId !== 'string' || typeof value.trackName !== 'string' || typeof value.versionLabel !== 'string') return undefined;
     if (value.channel !== 'appstore' && value.channel !== 'testflight') return undefined;
+    if (value.platform !== undefined && value.platform !== 'ios' && value.platform !== 'tvos' && value.platform !== 'visionos') return undefined;
     if (value.externalVersionId !== undefined && typeof value.externalVersionId !== 'string') return undefined;
     if (value.minimumOsVersion !== undefined && typeof value.minimumOsVersion !== 'string') return undefined;
     if (value.channel === 'testflight') {

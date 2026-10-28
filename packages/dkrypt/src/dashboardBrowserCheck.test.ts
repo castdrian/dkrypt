@@ -21,7 +21,7 @@ test('self-hosting browser check requires device management and exposes no crede
     const allowed = await server.inject({ method: 'GET', url: '/v1/dashboard/browser-check', headers: { cookie: cookie(PermissionFlag.manageDevices), host: 'ipa.example.test' } });
     expect(denied.statusCode).toBe(403);
     expect(allowed.statusCode).toBe(200);
-    expect(allowed.json()).toMatchObject({ cookieSessionValid: true, observedOrigin: 'http://ipa.example.test', oauthCallbacks: { github: expect.any(String), discord: expect.any(String) } });
+    expect(allowed.json()).toMatchObject({ cookieSessionValid: true, observedOrigin: 'http://ipa.example.test', oauthCallbacks: { github: expect.any(String), discord: expect.any(String), apple: 'Not configured' } });
     expect(allowed.body).not.toMatch(/sessionSigningSecret|clientSecret|set-cookie|authorization/i);
   } finally {
     await server.close();

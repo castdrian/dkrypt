@@ -316,6 +316,7 @@ async function finalizeDecryptedIpa(
     key: artifactKeyForJob(job),
     bundleId: job.bundleId,
     channel: job.testflight ? 'testflight' : 'appstore',
+    platform: job.platform,
     externalVersionId: job.externalVersionId,
     testflightBuildId: job.testflight?.build.id,
     versionLabel: job.ipaMetadata?.shortVersion ?? job.testflight?.build.cfBundleShortVersion ?? job.versionLabel,

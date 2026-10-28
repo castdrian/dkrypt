@@ -10,6 +10,7 @@ export interface AppStoreDownloaderResponse {
   ok: boolean;
   authenticated?: boolean;
   free_license_claimed?: boolean;
+  external_version_id?: string;
   storefront_country?: string;
   stage?: string;
   code?: string;

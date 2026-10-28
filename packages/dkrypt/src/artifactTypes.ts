@@ -1,3 +1,5 @@
+import type { AppStorePlatform } from '#platform.js';
+
 export type ArtifactChannel = 'appstore' | 'testflight';
 
 export interface ArtifactRecord {
@@ -6,6 +8,7 @@ export interface ArtifactRecord {
   projectIds: string[];
   bundleId: string;
   channel: ArtifactChannel;
+  platform?: AppStorePlatform;
   externalVersionId?: string;
   testflightBuildId?: number;
   versionLabel?: string;
@@ -32,6 +35,7 @@ export function isArtifactRecord(value: unknown): value is ArtifactRecord {
     typeof record.key === 'string' &&
     typeof record.bundleId === 'string' &&
     (record.channel === 'appstore' || record.channel === 'testflight') &&
+    (record.platform === undefined || record.platform === 'ios' || record.platform === 'tvos' || record.platform === 'visionos') &&
     typeof record.filePath === 'string' &&
     typeof record.fileSizeBytes === 'number' &&
     typeof record.sha256 === 'string' &&

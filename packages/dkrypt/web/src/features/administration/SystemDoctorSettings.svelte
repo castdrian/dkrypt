@@ -114,7 +114,8 @@
         controller.abort();
       }
       for (const [provider, callback] of Object.entries(result.oauthCallbacks)) {
-        checks.push({ label: `${provider === 'github' ? 'GitHub' : 'Discord'} OAuth callback`, status: callback === 'Not configured' ? 'warn' : 'manual', detail: callback === 'Not configured' ? 'OAuth is not configured for this provider.' : `Confirm the provider dashboard has this exact callback URL: ${callback}` });
+        const providerName = provider === 'github' ? 'GitHub' : provider === 'discord' ? 'Discord' : 'Apple';
+        checks.push({ label: `${providerName} OAuth callback`, status: callback === 'Not configured' ? 'warn' : 'manual', detail: callback === 'Not configured' ? 'OAuth is not configured for this provider.' : `Confirm the provider dashboard has this exact callback URL: ${callback}` });
       }
       browserChecks = checks;
     } catch (cause) {

@@ -103,7 +103,7 @@ const BillingSnapshot = Type.Object({
   stripeCheckoutIdempotency: Type.Optional(Type.Array(JsonObject)),
 }, { additionalProperties: true });
 const AuthIdentity = Type.Object({
-  provider: Type.Union([Type.Literal('github'), Type.Literal('discord')]),
+  provider: Type.Union([Type.Literal('github'), Type.Literal('discord'), Type.Literal('apple')]),
   providerId: Type.String(),
   username: Type.String(),
   displayName: Type.String(),
@@ -114,7 +114,7 @@ const AuthIdentity = Type.Object({
 }, { additionalProperties: true });
 const AuthProfile = Type.Object({
   userId: Type.String(),
-  provider: Type.Union([Type.Literal('github'), Type.Literal('discord')]),
+  provider: Type.Union([Type.Literal('github'), Type.Literal('discord'), Type.Literal('apple')]),
   providerId: Type.String(),
   username: Type.String(),
   displayName: Type.String(),

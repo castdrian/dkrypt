@@ -24,7 +24,7 @@ const legacyImportMarker = 'auth_profiles_json_imported';
 export function isAuthIdentityRecord(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const identity = value as Record<string, unknown>;
-  return (identity.provider === 'github' || identity.provider === 'discord')
+  return (identity.provider === 'github' || identity.provider === 'discord' || identity.provider === 'apple')
     && typeof identity.providerId === 'string'
     && typeof identity.username === 'string'
     && typeof identity.displayName === 'string'
@@ -36,7 +36,7 @@ export function isAuthProfileRecord(value: unknown): value is AuthProfile {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const profile = value as Record<string, unknown>;
   return typeof profile.userId === 'string'
-    && (profile.provider === 'github' || profile.provider === 'discord')
+    && (profile.provider === 'github' || profile.provider === 'discord' || profile.provider === 'apple')
     && typeof profile.providerId === 'string'
     && typeof profile.username === 'string'
     && typeof profile.displayName === 'string'

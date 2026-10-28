@@ -191,6 +191,7 @@ function requeueAfterGracefulShutdown(job: Job, now = Date.now()): Job {
     executionStage: undefined,
     workerAttemptId: undefined,
     childProcess: undefined,
+    offlineAttemptedAt: job.platform !== undefined && job.platform !== 'ios' ? undefined : job.offlineAttemptedAt,
   };
   appendJobTimelineEvent(requeued, 'Requeued after graceful shutdown', 'queued', now);
   return requeued;
@@ -431,13 +432,14 @@ function recoverExpiredWorkerJobs(): void {
     const now = Date.now();
     const local = jobs.get(saved.id);
     if (runningJobs.has(saved.id)) loseWorkerLease(saved.id);
-    const offlineFailureReason = saved.executionPath === 'appstore_offline'
+    const deviceFreeOnly = saved.platform !== undefined && saved.platform !== 'ios';
+    const offlineFailureReason = deviceFreeOnly ? undefined : saved.executionPath === 'appstore_offline'
       ? saved.offlineFailureReason ?? 'The server-side worker stopped before the attempt completed; retrying on a device'
       : saved.offlineFailureReason;
     const recovered: Job = {
       ...saved,
       status: 'queued',
-      progress: saved.executionPath === 'appstore_offline' ? 'Server-side worker stopped; waiting for device fallback' : 'Worker stopped; retrying the job',
+      progress: deviceFreeOnly ? 'Server-side worker stopped; retrying server-side' : saved.executionPath === 'appstore_offline' ? 'Server-side worker stopped; waiting for device fallback' : 'Worker stopped; retrying the job',
       error: undefined,
       failureClass: undefined,
       startedAt: undefined,
@@ -447,6 +449,7 @@ function recoverExpiredWorkerJobs(): void {
       executionStage: undefined,
       workerAttemptId: undefined,
       offlineFailureReason,
+      offlineAttemptedAt: deviceFreeOnly ? undefined : saved.offlineAttemptedAt,
       childProcess: undefined,
       waiters: local?.waiters ?? [],
       retryCount: (saved.retryCount ?? 0) + 1,
@@ -499,6 +502,7 @@ function findActiveJobForBundle(lookup: JobBuildLookup, ownerId?: string): Job |
 
 function isMatchingBuild(job: Job, lookup: JobBuildLookup): boolean {
   return job.bundleId === lookup.bundleId &&
+    (job.platform ?? 'ios') === (lookup.platform ?? 'ios') &&
     job.externalVersionId === lookup.externalVersionId &&
     job.testflight?.build.id === lookup.testFlightBuildId &&
     (job.projectId ?? DEFAULT_PROJECT_ID) === lookup.projectId;
@@ -530,6 +534,7 @@ function createCachedJob(
   billingOwnerId?: string,
   freeTierResult = false,
   minimumOsVersion?: string,
+  platform: 'ios' | 'tvos' | 'visionos' = 'ios',
 ): Job {
   const now = Date.now();
   const resolvedLabel = versionLabel ?? artifact.versionLabel;
@@ -539,6 +544,7 @@ function createCachedJob(
     ...captureJobCorrelation(),
     projectId,
     bundleId,
+    platform,
     externalVersionId,
     testflight,
     versionLabel: resolvedLabel,
@@ -667,6 +673,7 @@ function expireOverdueQueuedJobs(now = Date.now()): void {
 
 export interface EnqueueDecryptJobOptions {
   externalVersionId?: string;
+  platform?: 'ios' | 'tvos' | 'visionos';
   testflight?: TestFlightJobSource;
   versionLabel?: string;
   queuedBy?: string;
@@ -719,6 +726,7 @@ function deferScheduledJobIfUnavailable(source: JobSource, job: Job, enabled: bo
 export function enqueueDecryptJob(bundleId: string, source: JobSource, options: EnqueueDecryptJobOptions = {}): Job {
   const {
     externalVersionId,
+    platform = 'ios',
     testflight,
     versionLabel,
     queuedBy,
@@ -732,7 +740,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   const projectId = DEFAULT_PROJECT_ID;
   if (!acceptingJobs) throw new JobsShuttingDownError();
   if (options.billingOwnerId && options.billingOwnerId !== 'root' && !hasPermission(getUserEffectivePermissions(options.billingOwnerId), PermissionFlag.requestDecrypt)) throw new AutomationOwnerUnavailableError();
-  const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId };
+  const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId, platform };
   const entitlement = billingOwnerId ? getBillingEntitlements(billingOwnerId) : undefined;
   const hasUnmeteredRoleApiAccess = Boolean(apiKeyId && billingOwnerId && hasManuallyAssignedPermission(billingOwnerId, PermissionFlag.createApiKeys | PermissionFlag.accessApi));
   const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root' && !hasUnmeteredRoleApiAccess;
@@ -746,11 +754,11 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     if (existing.status === 'queued') pumpWorkers();
     return existing;
   }
-  const artifactKey = artifactKeyForJob({ id: 'lookup', bundleId, externalVersionId, testflight, versionLabel });
+  const artifactKey = artifactKeyForJob({ id: 'lookup', bundleId, externalVersionId, testflight, versionLabel, platform });
   const artifact = getArtifactByKey(artifactKey);
   if (artifact) {
     linkArtifactToProject(artifact.id, projectId);
-    return createCachedJob(bundleId, source, externalVersionId, testflight, versionLabel, queuedBy, effectivePriority, apiKeyId, projectId, artifact, billingOwnerId, freeTierResult, minimumOsVersion);
+    return createCachedJob(bundleId, source, externalVersionId, testflight, versionLabel, queuedBy, effectivePriority, apiKeyId, projectId, artifact, billingOwnerId, freeTierResult, minimumOsVersion, platform);
   }
   const reusable = freeTierResult ? undefined : findReusableCompletedJob(lookup);
   if (reusable) return reusable;
@@ -766,6 +774,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
     ...captureJobCorrelation(),
     projectId,
     bundleId,
+    platform,
     externalVersionId,
     testflight,
     versionLabel: resolvedLabel,
@@ -1038,6 +1047,11 @@ function getCurrentQueueReason(job: Job): string | undefined {
     }
     return offlineWorkerSlots(job) === 0 ? 'Waiting for a server-side App Store worker' : undefined;
   }
+  if (job.platform && job.platform !== 'ios') {
+    const platformLabel = job.platform === 'tvos' ? 'tvOS' : 'visionOS';
+    const blocker = offlineAppStoreBlocker(job);
+    return `Waiting for server-side ${platformLabel} processing${blocker ? ` · ${blocker}` : ''}`;
+  }
   const enabledDevices = getEffectiveDevices().filter((device) => device.enabled && !device.draining);
   if (enabledDevices.length === 0) {
     if (canStartOfflineAttempt(job)) return offlineWorkerSlots(job) === 0 ? 'Waiting for a server-side App Store worker' : undefined;
@@ -1120,6 +1134,7 @@ function toHistoryEntry(job: Job) {
     correlationId: job.correlationId,
     projectId: job.projectId ?? DEFAULT_PROJECT_ID,
     bundleId: job.bundleId,
+    platform: job.platform,
     externalVersionId: job.externalVersionId,
     testflight: job.testflight,
     versionLabel: job.versionLabel,
@@ -1352,10 +1367,11 @@ function jobDeviceBlocker(job: Job, device: DeviceRecord): string | undefined {
 }
 
 export function isJobDispatchable(job: Job, device: DeviceRecord): boolean {
-  return !requiresServerSideAppStoreAttempt(job) && !jobDeviceBlocker(job, device);
+  return (!job.platform || job.platform === 'ios') && !requiresServerSideAppStoreAttempt(job) && !jobDeviceBlocker(job, device);
 }
 
 export function getJobEligibleDeviceCount(job: Job): number {
+  if (job.platform && job.platform !== 'ios') return offlineWorkerSlots(job);
   if (requiresServerSideAppStoreAttempt(job)) return canStartOfflineAttempt(job) ? config.appStoreOfflineMaxWorkers : 0;
   const deviceCount = getEffectiveDevices().filter((device) => device.enabled && !device.draining && isJobDispatchable(job, device)).length;
   return deviceCount + (canStartOfflineAttempt(job) ? config.appStoreOfflineMaxWorkers : 0);
@@ -1363,13 +1379,15 @@ export function getJobEligibleDeviceCount(job: Job): number {
 
 function getJobDispatchableDeviceCount(job: Job): number {
   if (getJobConcurrencyBlocker(job)) return 0;
+  if (job.platform && job.platform !== 'ios') return offlineWorkerSlots(job);
   if (requiresServerSideAppStoreAttempt(job)) return offlineWorkerSlots(job);
   const deviceCount = getEffectiveDevices().filter((device) => device.enabled && !device.draining && !busyDeviceIds.has(device.id) && !isPersistedWorkerResourceActive(`device:${device.id}`) && isJobDispatchable(job, device)).length;
   return deviceCount + offlineWorkerSlots(job);
 }
 
 function offlineAppStoreBlocker(job: Job): string | undefined {
-  if (job.testflight || !config.appStoreOfflineDecryptEnabled) return undefined;
+  if (job.testflight) return undefined;
+  if (!config.appStoreOfflineDecryptEnabled) return job.platform && job.platform !== 'ios' ? 'server-side App Store processing is disabled' : undefined;
   const circuit = offlineAppStoreCircuit.getStatus();
   if (circuit.state === 'open' && circuit.nextProbeAt !== undefined) return `temporarily paused after repeated failures until ${new Date(circuit.nextProbeAt).toISOString()}`;
   const readiness = offlineAppStoreProcessor.readiness(job);
@@ -1690,7 +1708,7 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
         scheduleOfflineCircuitProbe();
       }
     }
-    const preventsDeviceFallback = Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
+    const preventsDeviceFallback = (job.platform !== undefined && job.platform !== 'ios') || Boolean(err && typeof err === 'object' && 'fallbackToDevice' in err && err.fallbackToDevice === false);
     if (device && job.offlineFailureReason) message = `${message}; earlier server-side attempt failed: ${job.offlineFailureReason}`;
     if (job.shutdownRecoveryPending) {
       persistShutdownRecovery(job);

@@ -32,6 +32,8 @@ enum Request {
         apple_id: String,
         password: String,
         bundle_id: String,
+        #[serde(default)]
+        platform: Platform,
         external_version_id: Option<String>,
         output_path: PathBuf,
         max_bytes: Option<u64>,
@@ -47,6 +49,8 @@ struct Response {
     free_license_claimed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     storefront_country: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_version_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stage: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,6 +116,7 @@ impl Response {
             authenticated: Some(value),
             free_license_claimed: None,
             storefront_country,
+            external_version_id: None,
             stage: None,
             code: None,
             diagnostic: None,
@@ -125,12 +130,17 @@ impl Response {
         }
     }
 
-    fn success(free_license_claimed: bool, storefront_country: &'static str) -> Self {
+    fn success(
+        free_license_claimed: bool,
+        storefront_country: &'static str,
+        external_version_id: Option<String>,
+    ) -> Self {
         Self {
             ok: true,
             authenticated: None,
             free_license_claimed: Some(free_license_claimed),
             storefront_country: Some(storefront_country),
+            external_version_id,
             stage: None,
             code: None,
             diagnostic: None,
@@ -150,6 +160,7 @@ impl Response {
             authenticated: None,
             free_license_claimed: None,
             storefront_country: None,
+            external_version_id: None,
             stage: Some(failure.stage),
             code: Some(failure.code),
             diagnostic: failure.diagnostic,
@@ -177,6 +188,7 @@ impl Response {
             authenticated: None,
             free_license_claimed: None,
             storefront_country: None,
+            external_version_id: None,
             stage: Some("network_check"),
             code: diagnostic.as_deref().map(|_| "apple_network_unavailable"),
             diagnostic,
@@ -251,6 +263,7 @@ fn validate_request(request: &Request) -> Result<(), &'static str> {
             apple_id,
             password,
             bundle_id,
+            platform,
             external_version_id,
             output_path,
             max_bytes,
@@ -259,6 +272,7 @@ fn validate_request(request: &Request) -> Result<(), &'static str> {
                 || password.is_empty()
                 || password.len() > 1024
                 || !valid_bundle_id(bundle_id)
+                || !matches!(platform, Platform::IPhone | Platform::AppleTV | Platform::VisionOS)
                 || external_version_id.as_ref().is_some_and(|value| {
                     value.is_empty()
                         || value.len() > 64
@@ -375,6 +389,7 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
             apple_id,
             password,
             bundle_id,
+            platform,
             external_version_id,
             output_path,
             max_bytes,
@@ -384,6 +399,7 @@ async fn execute(request: Request) -> Result<Response, DownloaderFailure> {
                 &apple_id,
                 &password,
                 &bundle_id,
+                platform,
                 external_version_id.as_deref(),
                 &output_path,
                 max_bytes.unwrap_or(MAX_APPSTORE_DOWNLOAD_BYTES),
@@ -709,6 +725,7 @@ async fn download(
     apple_id: &str,
     password: &str,
     bundle_id: &str,
+    platform: Platform,
     external_version_id: Option<&str>,
     output_path: &Path,
     max_bytes: u64,
@@ -729,7 +746,7 @@ async fn download(
         .map_err(|_| DownloaderFailure::new("client_setup", "apple_client_setup_failed"))?;
     client.set_account(account.clone());
     let country = country_code_from_storefront(&account.store_front)?;
-    let app = api::lookup::lookup(&client, bundle_id, country, Platform::IPhone)
+    let app = api::lookup::lookup(&client, bundle_id, country, platform)
         .await
         .map_err(|error| DownloaderFailure::new("app_lookup", map_lookup_error(&error)))?
         .ok_or_else(|| DownloaderFailure::new("app_lookup", "app_not_found"))?;
@@ -739,6 +756,7 @@ async fn download(
         &app,
         &mut account,
         external_version_id,
+        platform,
     )
     .await
     {
@@ -753,6 +771,7 @@ async fn download(
                 &app,
                 &mut account,
                 external_version_id,
+                platform,
             )
             .await
             {
@@ -778,10 +797,8 @@ async fn download(
             ));
         }
     };
-    verify_requested_version(
-        item.latest_external_version_id().as_deref(),
-        external_version_id,
-    )
+    let resolved_external_version_id = item.latest_external_version_id();
+    verify_requested_version(resolved_external_version_id.as_deref(), external_version_id)
     .map_err(|code| DownloaderFailure::new("version_validation", code))?;
     let temporary_path = resumable_download_path(output_path)
         .map_err(|_| DownloaderFailure::new("download_staging", "download_file_failed"))?;
@@ -820,7 +837,7 @@ async fn download(
     client.save_cookies(&cookie_path).map_err(|_| {
         DownloaderFailure::new("session_persistence", "provider_session_storage_failed")
     })?;
-    Ok(Response::success(free_license_claimed, country))
+    Ok(Response::success(free_license_claimed, country, resolved_external_version_id))
 }
 
 fn verify_requested_version(
@@ -851,6 +868,7 @@ async fn get_download_info_with_reauthentication(
     app: &App,
     account: &mut Account,
     external_version_id: Option<&str>,
+    platform: Platform,
 ) -> Result<dkrypt_appstore_core::api::download::DownloadItem, ClientError> {
     match api::download::get_download_info(
         client,
@@ -858,6 +876,7 @@ async fn get_download_info_with_reauthentication(
         &app.bundle_id,
         account,
         external_version_id,
+        platform,
     )
     .await
     {
@@ -870,6 +889,7 @@ async fn get_download_info_with_reauthentication(
                 &app.bundle_id,
                 account,
                 external_version_id,
+                platform,
             )
             .await
         }
@@ -1784,11 +1804,11 @@ mod tests {
     #[test]
     fn successful_download_reports_a_free_license_claim_without_exposing_account_data() {
         assert_eq!(
-            serde_json::to_value(Response::success(true, "DE")).unwrap(),
-            serde_json::json!({"ok": true, "free_license_claimed": true, "storefront_country": "DE"})
+            serde_json::to_value(Response::success(true, "DE", Some("4567".into()))).unwrap(),
+            serde_json::json!({"ok": true, "free_license_claimed": true, "storefront_country": "DE", "external_version_id": "4567"})
         );
         assert_eq!(
-            serde_json::to_value(Response::success(false, "DE")).unwrap(),
+            serde_json::to_value(Response::success(false, "DE", None)).unwrap(),
             serde_json::json!({"ok": true, "free_license_claimed": false, "storefront_country": "DE"})
         );
     }

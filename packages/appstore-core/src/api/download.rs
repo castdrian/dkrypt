@@ -1,6 +1,7 @@
 use crate::client::AppleClient;
 use crate::error::{ClientError, StoreError};
 use crate::model::Account;
+use crate::model::Platform;
 use base64::Engine as _;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -58,9 +59,10 @@ pub async fn get_download_info(
     bundle_id: &str,
     account: &Account,
     external_version_id: Option<&str>,
+    platform: Platform,
 ) -> Result<DownloadItem, ClientError> {
     for attempt in 0..MAX_DOWNLOAD_ATTEMPTS {
-        match try_get_download_info(client, app_id, bundle_id, account, external_version_id).await {
+        match try_get_download_info(client, app_id, bundle_id, account, external_version_id, platform).await {
             Err(ClientError::Store(StoreError::TemporarilyUnavailable))
                 if attempt + 1 < MAX_DOWNLOAD_ATTEMPTS =>
             {
@@ -83,6 +85,7 @@ async fn try_get_download_info(
     bundle_id: &str,
     account: &Account,
     external_version_id: Option<&str>,
+    platform: Platform,
 ) -> Result<DownloadItem, ClientError> {
     if let Ok(endpoints) = crate::api::bag::fetch_download_endpoints(client).await
         && let Some(endpoint) = endpoints.ent_download
@@ -94,6 +97,7 @@ async fn try_get_download_info(
             bundle_id,
             account,
             external_version_id,
+            platform,
         )
         .await
         {
@@ -122,7 +126,7 @@ async fn try_get_download_info(
         ));
     }
     if needs_download_dispatch_retry(status, &dict) {
-        dict = retry_download_dispatch(client, account, app_id, bundle_id, external_version_id)
+        dict = retry_download_dispatch(client, account, app_id, bundle_id, external_version_id, platform)
             .await?;
     }
     download_item_from_response_dict(&dict)
@@ -144,10 +148,11 @@ async fn get_ent_download_info(
     bundle_id: &str,
     account: &Account,
     requested_external_version_id: Option<&str>,
+    platform: Platform,
 ) -> Result<DownloadItem, ClientError> {
     let external_version_id = match requested_external_version_id {
         Some(version_id) => version_id.to_string(),
-        None => lookup_latest_external_version_id(client, account, app_id, bundle_id).await?,
+        None => lookup_latest_external_version_id(client, account, app_id, bundle_id, platform).await?,
     };
     let dsid = account
         .directory_services_id
@@ -423,6 +428,7 @@ async fn retry_download_dispatch(
     app_id: i64,
     bundle_id: &str,
     requested_external_version_id: Option<&str>,
+    platform: Platform,
 ) -> Result<HashMap<String, plist::Value>, ClientError> {
     let config = crate::api::bag::fetch_download_endpoints(client)
         .await
@@ -441,7 +447,7 @@ async fn retry_download_dispatch(
     })?;
     let external_version_id = match requested_external_version_id {
         Some(version_id) => version_id.to_string(),
-        None => lookup_latest_external_version_id(client, account, app_id, bundle_id).await?,
+        None => lookup_latest_external_version_id(client, account, app_id, bundle_id, platform).await?,
     };
     let body = download_info_request_body(
         app_id,
@@ -684,6 +690,7 @@ impl IosCatalogVersionLookup {
         self,
         expected_app_id: &str,
         expected_bundle_id: &str,
+        platform: Platform,
     ) -> Result<String, ClientError> {
         if self.data.len() != 1 {
             return Err(ClientError::UnexpectedResponse(
@@ -702,7 +709,7 @@ impl IosCatalogVersionLookup {
             .attributes
             .device_families
             .iter()
-            .any(|family| family.eq_ignore_ascii_case("iphone"))
+            .any(|family| family.eq_ignore_ascii_case(platform.device_family()))
         {
             return Err(ClientError::UnexpectedResponse(
                 "redownload_version_lookup_platform_mismatch".into(),
@@ -711,7 +718,7 @@ impl IosCatalogVersionLookup {
         let platform = app
             .attributes
             .platform_attributes
-            .get("ios")
+            .get(platform.catalog_attribute_name())
             .ok_or_else(|| {
                 ClientError::UnexpectedResponse("redownload_version_lookup_platform_missing".into())
             })?;
@@ -739,6 +746,7 @@ async fn lookup_latest_external_version_id(
     account: &Account,
     app_id: i64,
     bundle_id: &str,
+    platform: Platform,
 ) -> Result<String, ClientError> {
     let country = crate::model::storefront::country_code_from_store_front(&account.store_front)
         .unwrap_or("US")
@@ -749,7 +757,7 @@ async fn lookup_latest_external_version_id(
         let response = match client
             .http()
             .get(&url)
-            .query(&[("platform", "iphone")])
+            .query(&[("platform", platform.catalog_platform_name())])
             .timeout(CATALOG_VERSION_LOOKUP_TIMEOUT)
             .send()
             .await
@@ -813,7 +821,7 @@ async fn lookup_latest_external_version_id(
                 ));
             }
         };
-        return lookup.latest_external_version_id(&app_id_string, bundle_id);
+        return lookup.latest_external_version_id(&app_id_string, bundle_id, platform);
     }
     Err(ClientError::UnexpectedResponse(
         "redownload_version_lookup_request_failed".into(),
@@ -1230,7 +1238,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lookup
-                .latest_external_version_id("1234", "com.example.app")
+                .latest_external_version_id("1234", "com.example.app", Platform::IPhone)
                 .unwrap(),
             "5678"
         );
@@ -1240,7 +1248,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lookup
-                .latest_external_version_id("1234", "com.example.app")
+                .latest_external_version_id("1234", "com.example.app", Platform::IPhone)
                 .unwrap(),
             "5678"
         );
@@ -1250,9 +1258,24 @@ mod tests {
         .unwrap();
         assert!(
             lookup
-                .latest_external_version_id("1234", "com.example.app")
+                .latest_external_version_id("1234", "com.example.app", Platform::IPhone)
                 .is_err()
         );
+    }
+    #[test]
+    fn catalog_version_lookup_validates_tv_and_vision_platforms() {
+        let tv: IosCatalogVersionLookup = serde_json::from_str(
+            r#"{"data":[{"id":"1234","type":"apps","attributes":{"deviceFamilies":["tvos"],"platformAttributes":{"appletvos":{"bundleId":"com.example.app","externalVersionId":"5678"}}}}]}"#,
+        ).unwrap();
+        assert_eq!(tv.latest_external_version_id("1234", "com.example.app", Platform::AppleTV).unwrap(), "5678");
+        let vision: IosCatalogVersionLookup = serde_json::from_str(
+            r#"{"data":[{"id":"1234","type":"apps","attributes":{"deviceFamilies":["realityDevice"],"platformAttributes":{"xros":{"bundleId":"com.example.app","externalVersionId":"8765"}}}}]}"#,
+        ).unwrap();
+        assert_eq!(vision.latest_external_version_id("1234", "com.example.app", Platform::VisionOS).unwrap(), "8765");
+        let mismatch: IosCatalogVersionLookup = serde_json::from_str(
+            r#"{"data":[{"id":"1234","type":"apps","attributes":{"deviceFamilies":["iphone"],"platformAttributes":{"ios":{"bundleId":"com.example.app","externalVersionId":"5678"}}}}]}"#,
+        ).unwrap();
+        assert!(mismatch.latest_external_version_id("1234", "com.example.app", Platform::AppleTV).is_err());
     }
     #[test]
     fn retries_catalog_lookup_rate_limits_and_server_errors_only() {

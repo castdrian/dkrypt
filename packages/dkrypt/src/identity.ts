@@ -4,7 +4,7 @@ import { config } from '#config.js';
 import { createIdentityRepository, identityProfileStateRow, isAuthProfileRecord, type IdentityProfileChanges } from '#store/identityRepository.js';
 import { openStateCollectionDatabase, writeStateMirror, type StateCollectionReplacement } from '#store/sqlite.js';
 
-export type AuthProvider = 'github' | 'discord';
+export type AuthProvider = 'github' | 'discord' | 'apple';
 
 export interface AuthIdentity {
   provider: AuthProvider;

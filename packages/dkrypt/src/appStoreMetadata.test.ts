@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-const { lookupAppMetadata, lookupAppMetadataByTrackId, lookupCurrentVersion, searchApps } = await import(`${new URL('./appStoreMetadata.ts', import.meta.url).href}?storefront-test`);
+const { lookupAppMetadata, lookupAppMetadataByTrackId, lookupCurrentPlatformVersion, lookupCurrentVersion, searchApps } = await import(`${new URL('./appStoreMetadata.ts', import.meta.url).href}?storefront-test`);
 
 const originalFetch = globalThis.fetch;
 
@@ -219,5 +219,89 @@ describe('iTunes storefront selection', () => {
 
   test('cancels the current version lookup when the job deadline expires', async () => {
     await expect(runAbortableVersionLookupInIsolatedProcess()).resolves.toBe('job deadline exceeded');
+  });
+
+  test.each([
+    { platform: 'tvos' as const, family: 'tvos', attribute: 'appletvos', requestedPlatform: 'appletv', version: '24.2', minimumOsVersion: '17.0' },
+    { platform: 'visionos' as const, family: 'realityDevice', attribute: 'xros', requestedPlatform: 'realityDevice', version: '5.20.1', minimumOsVersion: '2.0' },
+  ])('resolves the current $platform release from its platform-specific catalog history', async (fixture) => {
+    const requests: URL[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      requests.push(url);
+      if (url.pathname === '/lookup') {
+        return new Response(JSON.stringify({
+          resultCount: 1,
+          results: [{
+            version: '340.0',
+            bundleId: 'com.hammerandchisel.discord',
+            trackId: 985746746,
+            trackName: 'Discord',
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        data: [{
+          id: '985746746',
+          type: 'apps',
+          attributes: {
+            deviceFamilies: [fixture.family],
+            platformAttributes: {
+              [fixture.attribute]: {
+                bundleId: 'com.hammerandchisel.discord',
+                externalVersionId: '42',
+                minimumOSVersion: fixture.minimumOsVersion,
+                versionHistory: [
+                  { externalVersionId: '41', versionDisplay: 'previous-platform-version' },
+                  { externalVersionId: '42', versionDisplay: fixture.version },
+                ],
+              },
+            },
+          },
+        }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
+    try {
+      const result = await lookupCurrentPlatformVersion('com.hammerandchisel.discord', fixture.platform);
+      expect(result).toMatchObject({
+        bundleId: 'com.hammerandchisel.discord',
+        trackId: 985746746,
+        externalVersionId: '42',
+        version: fixture.version,
+        minimumOsVersion: fixture.minimumOsVersion,
+      });
+      expect(requests[1]?.searchParams.get('platform')).toBe(fixture.requestedPlatform);
+      expect(requests[1]?.searchParams.get('extend')).toBe('versionHistory');
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test('rejects a platform catalog entry with a different bundle ID', async () => {
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/lookup') {
+        return new Response(JSON.stringify({ resultCount: 1, results: [{ version: '1.0', bundleId: 'org.example.app', trackId: 123, trackName: 'Example' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        data: [{
+          id: '123',
+          type: 'apps',
+          attributes: {
+            deviceFamilies: ['realityDevice'],
+            platformAttributes: {
+              xros: { bundleId: 'org.example.other', externalVersionId: '42', versionHistory: [{ externalVersionId: '42', versionDisplay: '1.0' }] },
+            },
+          },
+        }],
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      await expect(lookupCurrentPlatformVersion('org.example.app', 'visionos')).rejects.toThrow('release metadata does not match');
+    } finally {
+      restoreFetch();
+    }
   });
 });

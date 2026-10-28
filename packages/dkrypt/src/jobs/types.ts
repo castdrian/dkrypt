@@ -5,6 +5,7 @@ import type { IpaMetadata } from '#store/state.js';
 import type { TraceContext } from '#telemetry.js';
 import type { JobFailureClass } from '#util/failureCategory.js';
 import type { IpaFairPlayCompatibility } from '#util/ipaFairPlay.js';
+import type { AppStorePlatform } from '#platform.js';
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
@@ -34,6 +35,7 @@ export interface Job {
   traceContext?: TraceContext;
   projectId?: string;
   bundleId: string;
+  platform?: AppStorePlatform;
   externalVersionId?: string;
   testflight?: TestFlightJobSource;
   versionLabel?: string;

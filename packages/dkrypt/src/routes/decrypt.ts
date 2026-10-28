@@ -15,6 +15,7 @@ import { artifactDownloadName, artifactFileAvailable, getArtifactById, getArtifa
 import { normalizeVersionSelector, resolveDecryptTarget, resolveLatestTestFlightTarget, VERSION_SELECTOR_RE, type ResolvedDecryptTarget } from '#decryptTarget.js';
 import { getRouteContract } from '#contracts.js';
 import { scopedLogger } from '#logger.js';
+import type { AppStorePlatform } from '#platform.js';
 
 interface TestFlightCatalogServices {
   listTrains: typeof listTrains;
@@ -59,6 +60,7 @@ function artifactSummary(artifact: ReturnType<typeof getArtifactById>) {
   return {
     id: artifact.id,
     bundleId: artifact.bundleId,
+    platform: artifact.platform ?? 'ios',
     channel: artifact.channel,
     externalVersionId: artifact.externalVersionId,
     testflightBuildId: artifact.testflightBuildId,
@@ -218,6 +220,7 @@ export function createDecryptRoutes(
         const externalVersionId = query?.externalVersionId;
         const versionId = typeof externalVersionId === 'string' && EXTERNAL_VERSION_ID_RE.test(externalVersionId) ? externalVersionId : undefined;
         const selector = typeof query?.version === 'string' ? query.version.trim() : undefined;
+        const platform: AppStorePlatform = query?.platform === 'tvos' || query?.platform === 'visionos' ? query.platform : 'ios';
         const apiKey = getFastifyApiKeyContext(request);
 
         if (!BUNDLE_ID_RE.test(bundleId)) {
@@ -238,7 +241,7 @@ export function createDecryptRoutes(
           return apiErrorEnvelope('version must match a release tag such as 240, 234.2, or 240_109440', 'request_error', request.id);
         }
 
-        const fingerprint = requestFingerprint('/v1/decrypt', { bundleId, externalVersionId: versionId ?? null, version: normalizeVersionSelector(selector) ?? null, projectId });
+        const fingerprint = requestFingerprint('/v1/decrypt', { bundleId, externalVersionId: versionId ?? null, version: normalizeVersionSelector(selector) ?? null, platform, projectId });
         try {
           const job = await resolveIdempotentJob({
             key: idempotencyKeyFromHeader(request.headers['idempotency-key']),
@@ -247,6 +250,25 @@ export function createDecryptRoutes(
             getJob: services.getJob,
             createJob: async () => {
               if (apiKey.keyId) services.recordApiKeyBundleUsage(apiKey.keyId, bundleId);
+              if (platform !== 'ios') {
+                let target: ResolvedDecryptTarget;
+                try {
+                  target = await services.resolveDecryptTarget(bundleId, selector, platform);
+                } catch (error) {
+                  throw new DecryptTargetRequestError(error instanceof Error ? error.message : String(error));
+                }
+                if (versionId && versionId !== target.externalVersionId) throw new DecryptTargetRequestError(`requested ${platform} release is no longer the latest release`);
+                return services.enqueueDecryptJob(bundleId, 'manual', {
+                  externalVersionId: target.externalVersionId,
+                  platform,
+                  versionLabel: target.versionLabel,
+                  queuedBy: apiKey.ownerId,
+                  priority: apiKey.priority ?? 0,
+                  apiKeyId: apiKey.keyId,
+                  projectId,
+                  minimumOsVersion: target.minimumOsVersion,
+                });
+              }
               if (!selector) {
                 let minimumOsVersion: string | undefined;
                 if (!versionId) {
@@ -435,6 +457,7 @@ export function createDecryptRoutes(
         const bundleId = typeof body?.bundleId === 'string' ? body.bundleId.trim() : '';
         const selector = typeof body?.version === 'string' ? body.version.trim() : undefined;
         const requestedChannel = body?.channel;
+        const platform: AppStorePlatform = body?.platform === 'tvos' || body?.platform === 'visionos' ? body.platform : 'ios';
         const resolveOnly = body?.resolveOnly === true;
         const apiKey = getFastifyApiKeyContext(request);
 
@@ -453,6 +476,10 @@ export function createDecryptRoutes(
         if (requestedChannel !== undefined && requestedChannel !== 'appstore' && requestedChannel !== 'testflight') {
           reply.code(400);
           return apiErrorEnvelope('channel must be appstore or testflight', 'request_error', request.id);
+        }
+        if (requestedChannel === 'testflight' && platform !== 'ios') {
+          reply.code(400);
+          return apiErrorEnvelope('TestFlight builds are available only for iOS', 'request_error', request.id);
         }
         if (requestedChannel === 'testflight' && apiKey.allowTestFlight === false) {
           reply.code(403);
@@ -478,7 +505,7 @@ export function createDecryptRoutes(
             try {
               target = requestedChannel === 'testflight' && !selector
                 ? await services.resolveLatestTestFlightTarget(bundleId)
-                : await services.resolveDecryptTarget(bundleId, selector);
+                : await services.resolveDecryptTarget(bundleId, selector, platform);
             } catch (error) {
               throw new DecryptTargetRequestError(error instanceof Error ? error.message : String(error));
             }
@@ -492,6 +519,8 @@ export function createDecryptRoutes(
             return reply.code(200).send({
               resolveOnly: true,
               bundleId,
+              platform: target.platform,
+              externalVersionId: target.externalVersionId,
               selector: target.selector,
               channel: target.channel,
               resolvedVersion: target.versionLabel,
@@ -505,6 +534,7 @@ export function createDecryptRoutes(
           const fingerprint = requestFingerprint('/v1/decrypts', {
             bundleId,
             version: normalizeVersionSelector(selector) ?? null,
+            platform,
             ...(requestedChannel === 'testflight' ? { channel: requestedChannel } : {}),
             projectId,
           });
@@ -519,7 +549,7 @@ export function createDecryptRoutes(
               try {
                 target = requestedChannel === 'testflight' && !selector
                   ? await services.resolveLatestTestFlightTarget(bundleId)
-                  : await services.resolveDecryptTarget(bundleId, selector);
+                  : await services.resolveDecryptTarget(bundleId, selector, platform);
               } catch (error) {
                 throw new DecryptTargetRequestError(error instanceof Error ? error.message : String(error));
               }
@@ -535,6 +565,7 @@ export function createDecryptRoutes(
                 'manual',
                 {
                   externalVersionId: target.externalVersionId,
+                  platform: target.platform,
                   testflight: target.testflight,
                   versionLabel: target.versionLabel,
                   queuedBy: apiKey.ownerId,

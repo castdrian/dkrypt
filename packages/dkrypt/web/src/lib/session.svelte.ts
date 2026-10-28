@@ -65,13 +65,14 @@ export interface SessionInfo {
   username?: string;
   displayName?: string;
   avatarUrl?: string;
-  identities?: { provider: 'github' | 'discord'; username: string; displayName: string; avatarUrl?: string }[];
-  linkedProviders?: ('github' | 'discord')[];
+  identities?: { provider: 'github' | 'discord' | 'apple'; username: string; displayName: string; avatarUrl?: string }[];
+  linkedProviders?: ('github' | 'discord' | 'apple')[];
 
   permissions?: string;
   expiresAt?: number;
   githubOauthEnabled: boolean;
   discordOauthEnabled: boolean;
+  appleOauthEnabled: boolean;
   deployment?: { ref: string };
   publicBaseUrl?: string;
   signupVerificationEnabled?: boolean;
@@ -82,7 +83,7 @@ export interface SessionInfo {
 let confirmedSidebar = { width: 256, collapsed: false };
 let sidebarPreferenceWrite: Promise<void> = Promise.resolve();
 
-export const sessionState = $state<SessionInfo>({ loggedIn: false, githubOauthEnabled: false, discordOauthEnabled: false });
+export const sessionState = $state<SessionInfo>({ loggedIn: false, githubOauthEnabled: false, discordOauthEnabled: false, appleOauthEnabled: false });
 
 export function sessionBits(): bigint {
   return parseBits(sessionState.permissions);

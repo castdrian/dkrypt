@@ -203,6 +203,49 @@ test('offline App Store processor rejects a package for another app or release',
   await expect(createOfflineAppStoreProcessor(wrongVersion).run(job({ versionLabel: '2.0', externalVersionId: 'version-2' }))).rejects.toThrow('does not match requested 2.0');
 });
 
+test.each([
+  ['tvos', 'appletvos', 'AppleTVOS'],
+  ['visionos', 'xros', 'XROS'],
+] as const)('offline processor validates downloaded %s package platform metadata', async (platform, platformName, supportedPlatform) => {
+  const dependencies = await createDependencies({
+    inspect: async () => ({
+      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false },
+      metadata: {
+        summary: { shortVersion: '1.0' },
+        infoPlist: {
+          CFBundleIdentifier: 'com.example.app',
+          CFBundleShortVersionString: '1.0',
+          DTPlatformName: platformName,
+          CFBundleSupportedPlatforms: [supportedPlatform],
+        },
+      },
+    }),
+  });
+
+  const result = await createOfflineAppStoreProcessor(dependencies).run(job({ platform }));
+
+  expect(result.outputPath).toContain('offline-decrypted.ipa');
+});
+
+test('offline processor rejects a decrypted package for the wrong platform', async () => {
+  const dependencies = await createDependencies({
+    inspect: async () => ({
+      verification: { encryptedPaths: [], primaryExecutable: 'Payload/App.app/App', primaryEncrypted: false },
+      metadata: {
+        summary: { shortVersion: '1.0' },
+        infoPlist: {
+          CFBundleIdentifier: 'com.example.app',
+          CFBundleShortVersionString: '1.0',
+          DTPlatformName: 'iphoneos',
+          CFBundleSupportedPlatforms: ['iPhoneOS'],
+        },
+      },
+    }),
+  });
+
+  await expect(createOfflineAppStoreProcessor(dependencies).run(job({ platform: 'tvos' }))).rejects.toThrow('downloaded IPA platform metadata does not match tvOS');
+});
+
 test('offline decryption receives the account credential only from the encrypted vault', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'dkrypt-offline-vault-'));
   directories.push(root);
