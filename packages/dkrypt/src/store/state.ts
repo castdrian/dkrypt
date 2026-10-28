@@ -1931,6 +1931,16 @@ export function getUserEffectivePermissions(username: string): bigint {
   return effectiveBitsForRoleIds(user?.roleIds ?? [], state.roles) | billingBits;
 }
 
+export function hasManuallyAssignedPermission(username: string, permission: bigint): boolean {
+  const user = state.allowedUsers.find((candidate) => candidate.username === username.toLowerCase());
+  if (!user) return false;
+  const assignedRoleBits = combineBits(user.roleIds
+    .map((roleId) => state.roles.find((role) => role.id === roleId && !role.isDefault))
+    .filter((role): role is Role => !!role)
+    .map((role) => parseBits(role.permissions)));
+  return hasPermission(assignedRoleBits, permission);
+}
+
 export function listDeviceAlertRecipients(): string[] {
   const recipients = state.allowedUsers
     .filter((user) => hasPermission(getUserEffectivePermissions(user.username), PermissionFlag.viewDevices | PermissionFlag.manageDevices))
@@ -2727,7 +2737,7 @@ export function verifyApiKey(candidate: string, ip?: string): ApiKeyAuthResult |
   if (!record) return undefined;
   if (record.ownerId !== 'root') {
     const permissions = getUserEffectivePermissions(record.ownerId);
-    if (!hasPermission(permissions, PermissionFlag.createApiKeys)) return undefined;
+    if (!hasPermission(permissions, PermissionFlag.createApiKeys | PermissionFlag.accessApi)) return undefined;
   }
   if (record.dailyLimit && todayUsageCount(record.id) >= record.dailyLimit) return 'rate-limited';
 

@@ -12,7 +12,7 @@ import { scopedLogger } from '#logger.js';
 const log = scopedLogger('jobs');
 import { sendMailToUser } from '#mail.js';
 import { sendPushToUser } from '#push.js';
-import { DEFAULT_PROJECT_ID, deleteJobHistoryEntry, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, deleteJobHistoryEntry, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, hasManuallyAssignedPermission, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { uninstallFromDevice } from '#appStoreInstall.js';
 import { getCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -732,7 +732,8 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   if (options.billingOwnerId && options.billingOwnerId !== 'root' && !hasPermission(getUserEffectivePermissions(options.billingOwnerId), PermissionFlag.requestDecrypt)) throw new AutomationOwnerUnavailableError();
   const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId };
   const entitlement = billingOwnerId ? getBillingEntitlements(billingOwnerId) : undefined;
-  const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root';
+  const hasUnmeteredRoleApiAccess = Boolean(apiKeyId && billingOwnerId && hasManuallyAssignedPermission(billingOwnerId, PermissionFlag.createApiKeys | PermissionFlag.accessApi));
+  const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root' && !hasUnmeteredRoleApiAccess;
   const effectivePriority = freeTierResult ? -5 : priority;
   const existing = findActiveJobForBundle(lookup, freeTierResult ? billingOwnerId : undefined);
   if (existing) {
@@ -790,7 +791,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   let quotaLimit: number | undefined;
   let previousUsage: number | undefined;
   if (billingOwnerId && entitlement) {
-    if (entitlement.freeTier) {
+    if (entitlement.freeTier && !hasUnmeteredRoleApiAccess) {
       quotaOwnerId = billingOwnerId;
       quotaLimit = entitlement.rollingDecryptLimit;
       previousUsage = getFreeDecryptQuotaUsage(billingOwnerId).used;

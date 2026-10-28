@@ -291,11 +291,12 @@
       await Promise.all([loadBilling(), refreshSession()]);
       if (!billing) return;
       const decryptReady = billing.entitlement.decrypt && sessionHasPermission(PermissionFlag.requestDecrypt);
-      const apiReady = billing.entitlement.api && sessionHasPermission(PermissionFlag.accessApi);
+      const manuallyGrantedApiAccess = !billing.entitlement.api && (sessionHasPermission(PermissionFlag.createApiKeys) || sessionHasPermission(PermissionFlag.accessApi));
+      const apiReady = manuallyGrantedApiAccess || (billing.entitlement.api && sessionHasPermission(PermissionFlag.accessApi));
       accessCheckLines = [
         { label: 'Decrypt jobs', ok: decryptReady, detail: decryptReady ? 'Your plan and account permission both allow decrypt requests.' : billing.entitlement.decrypt ? 'Your plan is active, but your account role does not allow decrypt requests.' : 'Your current plan does not include paid decrypt access.' },
         { label: 'IPA Library', ok: billing.entitlement.decrypt, detail: billing.entitlement.decrypt ? 'Your plan includes artifact library access.' : 'An active decrypt plan is required for paid library access.' },
-        { label: 'API keys', ok: apiReady, detail: apiReady ? 'Your plan and account permission allow API access.' : billing.entitlement.api ? 'Your plan includes API access, but your account role does not allow it.' : 'Your plan does not include API access.' },
+        { label: 'API keys', ok: apiReady, detail: manuallyGrantedApiAccess ? 'Your assigned role grants uncapped API access; explicit limits on an individual key still apply.' : apiReady ? 'Your plan and account permission allow API access.' : billing.entitlement.api ? 'Your plan includes API access, but your account role does not allow it.' : 'Your plan does not include API access.' },
       ];
     } catch (error) {
       accessRefreshMessage = error instanceof Error ? error.message : 'Could not refresh account access.';

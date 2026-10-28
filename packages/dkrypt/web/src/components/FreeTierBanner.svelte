@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { sessionState } from '#lib/session.svelte';
+  import { PermissionFlag } from '#lib/permissions';
+  import { sessionHasPermission, sessionState } from '#lib/session.svelte';
   import { buttonVariants } from '#lib/components/ui/variants';
 
   let quota = $state<{ limit: number | null; used: number; remaining: number | null; nextAvailableAt?: number; windowMs?: number }>();
   let billingEnabled = $state(false);
   let dismissed = $state(false);
+  const hasRoleApiAccess = $derived(sessionHasPermission(PermissionFlag.createApiKeys) || sessionHasPermission(PermissionFlag.accessApi));
 
   onMount(() => {
     const accountId = sessionState.sub;
@@ -34,7 +36,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
         <div class="font-semibold">Free plan</div>
-        <p class="mt-1 text-sm text-muted">Three new decrypts every 30 days, with 30 minutes to download each result. The IPA Library is read-only. Paid plans add shared IPA downloads and API access.</p>
+        <p class="mt-1 text-sm text-muted">Three new dashboard decrypts every 30 days, with 30 minutes to download each result. The IPA Library is read-only. {#if hasRoleApiAccess}Your assigned role grants uncapped API access; explicit limits on an individual key still apply.{:else}Paid plans add shared IPA downloads and API access.{/if}</p>
         {#if quota}
           <div class="mt-3 max-w-xl">
             <div class="flex justify-between gap-3 text-xs"><span>{quota.remaining ?? 0} of {quota.limit ?? 3} decrypts remaining</span>{#if quota.nextAvailableAt && quota.remaining === 0}<span class="text-muted">Next slot {new Date(quota.nextAvailableAt).toLocaleDateString()}</span>{/if}</div>

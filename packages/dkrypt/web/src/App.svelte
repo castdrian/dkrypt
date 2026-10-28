@@ -349,7 +349,6 @@ initDensity();
 	const visibleTabs = $derived.by(() => {
 		const accessibleTabs = TABS.filter((t) => {
 			if (t.id === "settings") return sessionCanSeeSettings();
-			if (t.id === "keys" && sessionState.freeTier) return false;
 			if (t.id === "insights" && !sessionCanViewOperationalDashboard()) return false;
 			return !t.requires || sessionHasAnyPermission(t.requires);
 		});

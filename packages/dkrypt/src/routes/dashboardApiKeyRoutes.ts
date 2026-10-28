@@ -42,6 +42,7 @@ import {
   getApiKeyRequestHistory,
   getApiKeyUsage,
   getUserEffectivePermissions,
+  hasManuallyAssignedPermission,
   listAllApiKeysPage,
   listApiKeysForOwner,
   listPendingApiKeys,
@@ -69,6 +70,7 @@ const canViewApiKeys = fastifyRequirePermission(PermissionFlag.viewApiKeys, Perm
 const canApproveApiKeys = fastifyRequirePermission(PermissionFlag.manageApiKeys);
 const canManageApiKeySettings = fastifyRequirePermission(PermissionFlag.manageApiKeys);
 const canInspectApiKeyUsage = fastifyRequirePermission(PermissionFlag.createApiKeys, PermissionFlag.viewApiKeys, PermissionFlag.manageApiKeys);
+const MANUAL_API_KEY_PERMISSIONS = PermissionFlag.requestApiKeys | PermissionFlag.createApiKeys | PermissionFlag.viewApiKeys | PermissionFlag.manageApiKeys | PermissionFlag.accessApi;
 
 const EXPIRY_OPTIONS = new Set([1, 7, 30, 90]);
 const MAX_SCOPED_BUNDLE_IDS = 25;
@@ -143,7 +145,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   server.addHook('preHandler', recordFastifyDashboardActivity);
   server.addHook('preHandler', (request, reply, done) => {
     const userId = getFastifySession(request)?.sub;
-    if (!userId || !getBillingEntitlements(userId).freeTier) return done();
+    if (!userId || !getBillingEntitlements(userId).freeTier || hasManuallyAssignedPermission(userId, MANUAL_API_KEY_PERMISSIONS)) return done();
     reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'API keys are available on paid plans'));
   });
   server.addHook('preValidation', async (request) => {
@@ -197,7 +199,7 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
     const input = parseApiKeyInput(request);
     if (!input) return respondWithError(request, reply, 400, 'name is required');
     const ownerId = getFastifySession(request)!.sub;
-    if (getBillingEntitlements(ownerId).freeTier) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
+    if (getBillingEntitlements(ownerId).freeTier && !hasManuallyAssignedPermission(ownerId, MANUAL_API_KEY_PERMISSIONS)) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
     const record = requestApiKey(input.name, ownerId, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
     void notify('keyRequest', {
       title: 'New API key request',
@@ -215,9 +217,10 @@ export const dashboardApiKeyRoutes: FastifyPluginAsyncTypebox = async (server) =
   }, (request, reply) => {
     const input = parseApiKeyInput(request);
     if (!input) return respondWithError(request, reply, 400, 'name is required');
-    if (getBillingEntitlements(getFastifySession(request)!.sub).freeTier) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
+    const ownerId = getFastifySession(request)!.sub;
+    if (getBillingEntitlements(ownerId).freeTier && !hasManuallyAssignedPermission(ownerId, MANUAL_API_KEY_PERMISSIONS)) return respondWithError(request, reply, 403, 'API keys are available on paid plans');
     reply.code(201);
-    return createApiKey(input.name, getFastifySession(request)!.sub, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
+    return createApiKey(input.name, ownerId, input.expiresInDays, input.allowedBundleIds, input.dailyLimit, input.allowTestFlight);
   });
 
   server.post<DashboardApiKeyRevealRoute>('/v1/dashboard/keys/:id/reveal', {

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from '#http.js';
 import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
-import { getUserEffectivePermissions, isGeneratedApiKey, recordApiKeyOutcome, verifyApiKey, type ApiKeyAuthResult } from '#store/state.js';
+import { getUserEffectivePermissions, hasManuallyAssignedPermission, isGeneratedApiKey, recordApiKeyOutcome, verifyApiKey, type ApiKeyAuthResult } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { isPublicApiKeyRoute } from '#publicApi.js';
 import { authenticateGithubOidc } from '#githubOidc.js';
@@ -10,8 +10,10 @@ import { setRateLimitHeaders, SlidingWindowRateLimiter } from '#util/rateLimit.j
 const fastifyApiKeyContext = new WeakMap<FastifyRequest, ApiKeyAuthResult>();
 const fastifyApiKeyRequestStartedAt = new WeakMap<FastifyRequest, number>();
 const accountApiRateLimiter = new SlidingWindowRateLimiter(60_000);
+const MANUAL_API_ACCESS_PERMISSIONS = PermissionFlag.createApiKeys | PermissionFlag.accessApi;
 
 function permitAccountApiRequest(ownerId: string, request: FastifyRequest, reply: FastifyReply): boolean {
+  if (hasManuallyAssignedPermission(ownerId, MANUAL_API_ACCESS_PERMISSIONS)) return true;
   const limit = getBillingEntitlements(ownerId).apiRatePerMinute;
   if (limit === undefined) return true;
   const decision = accountApiRateLimiter.consume(ownerId.toLowerCase(), limit);
@@ -27,6 +29,7 @@ export function getFastifyApiKeyContext(request: FastifyRequest): ApiKeyAuthResu
 }
 
 export function getAccountApiRateUsage(ownerId: string): { limit: number; used: number; remaining: number; resetAt: number } | undefined {
+  if (hasManuallyAssignedPermission(ownerId, MANUAL_API_ACCESS_PERMISSIONS)) return undefined;
   const limit = getBillingEntitlements(ownerId).apiRatePerMinute;
   if (limit === undefined) return undefined;
   const usage = accountApiRateLimiter.inspect(ownerId.toLowerCase(), limit);
@@ -70,7 +73,7 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
-  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier) {
+  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier && !hasManuallyAssignedPermission(result.ownerId, MANUAL_API_ACCESS_PERMISSIONS)) {
     res.error('free_api_unavailable', 'API access is available on paid plans', 403, false);
     return;
   }
@@ -127,7 +130,7 @@ export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyRepl
     return;
   }
   const keyId = result.keyId;
-  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier) {
+  if (result.ownerId && result.ownerId !== 'root' && getBillingEntitlements(result.ownerId).freeTier && !hasManuallyAssignedPermission(result.ownerId, MANUAL_API_ACCESS_PERMISSIONS)) {
     reply.code(403).send({ error: 'API access is available on paid plans', code: 'free_api_unavailable', message: 'API access is available on paid plans', requestId: request.id, retryable: false });
     return;
   }
