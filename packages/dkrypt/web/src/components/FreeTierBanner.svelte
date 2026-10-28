@@ -31,7 +31,7 @@
   }
 </script>
 
-{#if sessionState.freeTier && !dismissed}
+{#if sessionState.freeTier && !sessionHasPermission(PermissionFlag.administrator) && !dismissed}
   <section class="mb-4 rounded-2xl border border-accent/30 bg-accent/5 p-4" aria-label="Free plan">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 flex-1">

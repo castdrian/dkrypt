@@ -2,7 +2,6 @@
   import { ChevronRight } from 'lucide-svelte';
   import DonationNudge from '#components/DonationNudge.svelte';
   import ArtifactInspector from '#components/ArtifactInspector.svelte';
-  import DecryptCompletion from '#components/DecryptCompletion.svelte';
   import OnboardingBanner from '#components/OnboardingBanner.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import { DEFAULT_HOME_LAYOUT, setHomeModuleCollapsed, type HomeLayout, type HomeModuleId } from '#lib/homeLayouts';
@@ -66,8 +65,6 @@
   <OnboardingBanner />
   <DecryptPanel bind:this={decryptPanel} />
   <DonationNudge />
-  <DecryptCompletion />
-
   {#each activeLayout.order as module (module)}
     {#if !activeLayout.hidden.includes(module) && activeLayout.collapsed.includes(module)}
       <Button variant="secondary" class="w-full justify-start" onclick={() => updateActiveLayout((layout) => setHomeModuleCollapsed(layout, module, false))}><ChevronRight class="h-4 w-4" />{msg(layoutTitles[module])}<span class="text-muted">{msg('home.expandSection')}</span></Button>

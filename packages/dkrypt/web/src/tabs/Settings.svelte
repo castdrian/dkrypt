@@ -18,11 +18,13 @@
   import UsersSettings from '#features/administration/UsersSettings.svelte';
   import PersonalizationSettings from '#features/settings/PersonalizationSettings.svelte';
   import McpAgentsSettings from '#features/settings/McpAgentsSettings.svelte';
+  import AutomaticDownloadSettings from '#features/settings/AutomaticDownloadSettings.svelte';
   import DiagnosticReportInbox from '#features/administration/DiagnosticReportInbox.svelte';
   import { searchSettings, type SettingsSearchItem } from '#lib/settingsSearch';
 
   const ALL_SUBTABS: { id: string; label: string; requires: bigint[]; requiresAll?: bigint[] }[] = [
     { id: 'personalization', label: 'Personalization', requires: [] },
+    { id: 'downloads', label: 'Automatic downloads', requires: [] },
     { id: 'agents', label: 'Connected agents', requires: [] },
     { id: 'notifications', label: 'Notifications', requires: [PermissionFlag.viewAutomation, PermissionFlag.manageAutomation] },
     { id: 'storage', label: 'Storage', requires: [PermissionFlag.manageAutomation], requiresAll: [PermissionFlag.requestDecrypt] },
@@ -36,7 +38,7 @@
     { id: 'reports', label: 'Support reports', requires: [PermissionFlag.viewDiagnosticReports] },
   ];
   const SETTINGS_GROUPS = [
-    { id: 'personal', label: 'Personal', subtabs: ['personalization', 'agents'] },
+    { id: 'personal', label: 'Personal', subtabs: ['personalization', 'downloads', 'agents'] },
     { id: 'operations', label: 'Operations', subtabs: ['notifications', 'storage', 'devices', 'testflight'] },
     { id: 'team', label: 'Team', subtabs: ['users', 'roles'] },
     { id: 'system', label: 'System', subtabs: ['doctor', 'backup', 'reports'] },
@@ -52,6 +54,7 @@
   const activeGroup = $derived(visibleGroups.find((group) => group.visibleSubtabs.some((subtab) => subtab.id === tabState.settingsSubtab)) ?? visibleGroups[0]);
   const searchTerms: Record<string, string> = {
     personalization: 'timezone time zone touch targets navigation favorites artifact columns appearance density',
+    downloads: 'automatic download destination folder icloud drive files',
     agents: 'mcp model context protocol connected agents oauth access tokens permissions revoke disconnect',
     notifications: 'webhook alerts events quiet hours digest',
     storage: 'artifact retention quota cleanup prune',
@@ -123,6 +126,9 @@
 
 {#if hasAccess([]) && mountedSubtabs.personalization}
   <div class:hidden={tabState.settingsSubtab !== 'personalization'}><PersonalizationSettings /></div>
+{/if}
+{#if hasAccess([]) && mountedSubtabs.downloads}
+  <div class:hidden={tabState.settingsSubtab !== 'downloads'}><AutomaticDownloadSettings /></div>
 {/if}
 {#if hasAccess([]) && mountedSubtabs.agents}
   <div class:hidden={tabState.settingsSubtab !== 'agents'}><McpAgentsSettings /></div>

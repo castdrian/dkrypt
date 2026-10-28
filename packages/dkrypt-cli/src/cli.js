@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -18,7 +19,7 @@ const [command, ...args] = cliArgs;
 const configPath = process.env.DKRYPT_CONFIG_PATH ?? path.join(homedir(), '.config', 'dkrypt', 'config.json');
 
 if (command === '--help' || command === '-h' || command === undefined) {
-  process.stdout.write('dkrypt login [--profile <name>]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt mcp <login|logout|stdio> [--url <origin>] [--scope <scopes>]\ndkrypt doctor [--bundle-id <id>] [--channel appstore|testflight] [--json]\ndkrypt tui\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
+  process.stdout.write('dkrypt login [--profile <name>] [--manual]\ndkrypt logout [--profile <name>]\ndkrypt profile <list|use|delete> [name]\ndkrypt --profile <name> <command>\ndkrypt completion <bash|zsh|fish>\ndkrypt proxy-config <caddy|nginx|traefik> <domain> [--upstream <url>]\ndkrypt mcp <login|logout|stdio> [--url <origin>] [--scope <scopes>]\ndkrypt doctor [--bundle-id <id>] [--channel appstore|testflight] [--json]\ndkrypt tui\ndkrypt decrypt <bundle-id> [--version <version>] [--output <file.ipa>] [--idempotency-key <key>]\ndkrypt status <job-id>\ndkrypt wait <job-id>\ndkrypt follow <job-id>\ndkrypt artifacts [search] [--limit <1-100>] [--cursor <cursor>]\ndkrypt download <artifact-id> <output.ipa>\n');
   process.exit(0);
 }
 
@@ -133,12 +134,73 @@ async function login() {
   } finally {
     prompt.close();
   }
-  const apiKey = await readHiddenInput('API key (input hidden): ');
-  if (apiKey.length < 8) throw new Error('Enter a valid API key');
+  let apiKey;
+  if (args.includes('--manual')) {
+    apiKey = await readHiddenInput('API key (input hidden): ');
+    if (apiKey.length < 8) throw new Error('Enter a valid API key');
+  } else {
+    apiKey = await authorizeCliProfile(apiUrl);
+  }
   saved.profiles[profileName] = { ...existingProfile, apiUrl, apiKey };
   saved.activeProfile = profileName;
   await writeSavedConfig(saved);
   process.stdout.write(`Signed in to profile "${profileName}". The local configuration is readable only by your account.\n`);
+}
+
+function openVerificationPage(url) {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const commandArgs = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  try {
+    const child = spawn(command, commandArgs, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', () => {});
+    child.unref();
+  } catch {}
+}
+
+async function authorizeCliProfile(apiUrl) {
+  const startUrl = new URL('/v1/cli/device/start', apiUrl);
+  const startResponse = await fetch(startUrl, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: '{}' });
+  const startPayload = await startResponse.json().catch(() => ({}));
+  if (!startResponse.ok) throw new Error(startPayload.message ?? startPayload.error ?? `Could not start dkrypt sign-in (HTTP ${startResponse.status})`);
+  const verificationUri = new URL(startPayload.verificationUri);
+  if (verificationUri.origin !== apiUrl || verificationUri.pathname !== '/cli/authorize' || typeof startPayload.deviceCode !== 'string' || typeof startPayload.userCode !== 'string') throw new Error('dkrypt returned an invalid sign-in request');
+  const expiresAt = Date.now() + Math.max(60, Number(startPayload.expiresIn) || 600) * 1000;
+  let interval = Math.max(2, Number(startPayload.interval) || 5);
+  process.stdout.write(`\nOpen ${verificationUri.toString()} and confirm code ${startPayload.userCode}.\n`);
+  openVerificationPage(verificationUri.toString());
+  process.stdout.write('Waiting for approval');
+  let lastProgressAt = Date.now();
+  while (Date.now() < expiresAt) {
+    await wait(interval * 1000);
+    const response = await fetch(new URL('/v1/cli/device/token', apiUrl), {
+      method: 'POST',
+      redirect: 'error',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCode: startPayload.deviceCode }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok && typeof payload.accessToken === 'string') {
+      process.stdout.write('\n');
+      return payload.accessToken;
+    }
+    if (payload.error === 'authorization_pending') {
+      if (Date.now() - lastProgressAt >= 15_000) {
+        process.stdout.write('.');
+        lastProgressAt = Date.now();
+      }
+      continue;
+    }
+    if (payload.error === 'slow_down') {
+      interval = Math.max(interval + 5, Number(payload.interval) || interval + 5);
+      continue;
+    }
+    process.stdout.write('\n');
+    if (payload.error === 'access_denied') throw new Error('CLI sign-in was denied in the browser');
+    if (payload.error === 'expired_token') throw new Error('CLI sign-in expired. Run dkrypt login again.');
+    throw new Error(payload.message ?? payload.error ?? `Could not finish dkrypt sign-in (HTTP ${response.status})`);
+  }
+  process.stdout.write('\n');
+  throw new Error('CLI sign-in expired. Run dkrypt login again.');
 }
 
 if (command === 'login') {

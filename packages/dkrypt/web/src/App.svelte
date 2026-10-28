@@ -45,8 +45,11 @@
 	import PublicPricing from "#components/PublicPricing.svelte";
 	import PublicRequestCheck from "#components/PublicRequestCheck.svelte";
 	import PublicStatus from "#components/PublicStatus.svelte";
+	import PublicDemo from "#components/PublicDemo.svelte";
+	import CliAuthorization from "#components/CliAuthorization.svelte";
 	import SessionExpiryBanner from "#components/SessionExpiryBanner.svelte";
 	import FreeTierBanner from "#components/FreeTierBanner.svelte";
+	import DecryptCompletion from "#components/DecryptCompletion.svelte";
 	import SessionsDialog from "#components/SessionsDialog.svelte";
 	import OnboardingTour from "#components/OnboardingTour.svelte";
 	import ShortcutsHelp from "#components/ShortcutsHelp.svelte";
@@ -184,6 +187,7 @@ initDensity();
 		"/refund-policy": "refund",
 		"/contact": "contact",
 		"/status": "status",
+		"/demo": "demo",
 	}[location.pathname] as
 		| "request"
 		| "pricing"
@@ -192,6 +196,7 @@ initDensity();
 		| "refund"
 		| "contact"
 		| "status"
+		| "demo"
 		| undefined;
 
 	let homeRef: Home | undefined = $state();
@@ -575,6 +580,7 @@ initDensity();
 				refund: "Refund Policy",
 				contact: "Contact",
 				status: "Service Status",
+				demo: "Interactive Demo",
 			}[publicPage];
 			document.title = `${title} · ${BASE_TITLE}`;
 			return;
@@ -721,12 +727,16 @@ initDensity();
 	<ContactPage />
 {:else if publicPage === "status"}
 	<PublicStatus />
+{:else if publicPage === "demo"}
+	<PublicDemo />
 {:else if !sessionChecked}
 	<div class="min-h-screen"></div>
 {:else if !sessionState.loggedIn}
 	<Login />
 {:else if sessionState.mfa?.required}
 	<MfaVerification />
+{:else if location.pathname === "/cli/authorize"}
+	<CliAuthorization />
 {:else}
 	<div class="app-shell min-h-screen bg-background">
 		{#if canViewOperationalDashboard}
@@ -1267,7 +1277,7 @@ initDensity();
 		<main
 			class={cn("mx-auto px-3 pt-4 sm:px-5 sm:pt-5 lg:px-6 lg:pb-6", focusViewState.enabled ? "max-w-none px-4 pb-6 sm:px-8" : sidebarState.collapsed ? "max-w-[2200px] pb-[calc(5rem+env(safe-area-inset-bottom))]" : "max-w-[1760px] pb-[calc(5rem+env(safe-area-inset-bottom))]")}
 		>
-			{#if sessionState.freeTier}
+			{#if sessionState.freeTier && !sessionHasPermission(PermissionFlag.administrator)}
 				<FreeTierBanner />
 			{/if}
 			<SessionExpiryBanner />
@@ -1320,6 +1330,7 @@ initDensity();
 				{/if}
 			</div>
 		</main>
+		<DecryptCompletion />
 		{#if focusViewState.enabled}
 			<Button variant="secondary" size="icon" class="fixed top-3 right-3 z-50 shadow-lg" onclick={() => setFocusView(false)} aria-label="Exit focus view" title="Exit focus view"><Minimize2 class="h-4 w-4" /></Button>
 		{/if}

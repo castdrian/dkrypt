@@ -85,6 +85,9 @@ import { closeOauthLinkReviewRepository } from '#store/oauthLinkReview.js';
 import { closeServiceCreditDatabase, startServiceOutageMonitor, stopServiceOutageMonitor } from '#serviceCredits.js';
 import { closeAbuseProtectionDatabase, isSignupChallengeConfigured } from '#abuseProtection.js';
 import { closeMcpDatabase, mcpRoutes } from '#routes/mcpRoutes.js';
+import { closeCliAuthDatabase, cliAuthRoutes } from '#routes/cliAuthRoutes.js';
+import { dashboardArtifactDeliveryRoutes } from '#routes/dashboardArtifactDeliveryRoutes.js';
+import { closeArtifactDeliveryDatabase, startArtifactDeliveryWorker } from '#artifactDelivery.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const sharedApiRateLimiter = new FixedWindowRateLimiter(config.apiRateLimitPerMinute, 60_000);
@@ -370,6 +373,8 @@ export async function buildServer(options: {
   await server.register(testFlightCatalogRoutes);
   await server.register(authRoutes);
   await server.register(mcpRoutes);
+  await server.register(cliAuthRoutes);
+  await server.register(dashboardArtifactDeliveryRoutes);
   await server.register(dashboardApiKeyRoutes);
   await server.register(dashboardAccountRoutes);
   await server.register(dashboardBackupRoutes);
@@ -422,6 +427,7 @@ async function startBackgroundServices(): Promise<void> {
   });
   await initializeArtifactStore(getArtifactBackedJobs());
   startJobSweeper();
+  startArtifactDeliveryWorker();
   startStateFlusher();
   startLogFlusher();
   startApiKeySweeper();
@@ -507,6 +513,8 @@ export function registerShutdownHandlers(
         closeIntegrationRepository();
         closeOauthLinkReviewRepository();
         closeMcpDatabase();
+        closeCliAuthDatabase();
+        closeArtifactDeliveryDatabase();
         closeServiceCreditDatabase();
         closeAbuseProtectionDatabase();
         closeStateDatabase();

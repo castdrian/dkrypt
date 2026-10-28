@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { trackBackgroundWork } from '#backgroundWork.js';
+import { deliverCompletedArtifact } from '#artifactDelivery.js';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolveJobNotificationChannels } from '#appNotificationPreferences.js';
 import { rm } from 'node:fs/promises';
@@ -1802,6 +1803,11 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
   }
 
   const completedArtifact = job.status === 'done' && job.artifactId ? getArtifactById(job.artifactId) : undefined;
+  if (completedArtifact && job.queuedBy) {
+    void trackBackgroundWork('artifact-cloud-delivery', () => deliverCompletedArtifact(job.queuedBy!, job.id, completedArtifact)).catch((error: unknown) => {
+      log.warn('artifact cloud delivery could not start', { jobId: job.id, artifactId: completedArtifact.id, error: String(error) });
+    });
+  }
   const downloadUrl = job.status === 'done' && job.freeTierResult
     ? `/v1/dashboard/jobs/${encodeURIComponent(job.id)}/file`
     : completedArtifact ? buildDashboardArtifactFileUrl(completedArtifact.id) : undefined;

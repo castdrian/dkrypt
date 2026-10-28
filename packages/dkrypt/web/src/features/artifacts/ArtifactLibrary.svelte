@@ -566,7 +566,7 @@ import { sessionHasAnyPermission, sessionHasPermission, sessionState } from '#li
       </div>
 
       <div class="p-4 sm:p-5">
-        {#if sessionState.freeTier}
+        {#if sessionState.freeTier && !sessionHasPermission(PermissionFlag.administrator)}
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/25 bg-accent/5 px-3 py-2.5 text-sm"><span>The Free Library is read-only. Upgrade to download saved IPAs.</span><a href="/?tab=billing" class="font-medium text-accent hover:underline">Compare plans</a></div>
         {/if}
         <div class="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Saved library filters">

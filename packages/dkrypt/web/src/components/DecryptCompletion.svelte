@@ -15,6 +15,7 @@
   import { fmtDurationApprox } from '#lib/format.svelte';
   import PickupQrButton from '#components/PickupQrButton.svelte';
   import { ipaFileSharingAvailable, prepareIpaForSharing, sharePreparedIpa } from '#lib/shareIpa';
+  import { automaticDownloadFileName, saveCompletedIpaToFolder } from '#lib/automaticDownloads';
 
   interface CompletedDecrypt {
     label: string;
@@ -65,6 +66,11 @@
         onClick: () => window.location.assign(url),
       },
     });
+    void saveCompletedIpaToFolder(url, automaticDownloadFileName(label, d.id)).then((result) => {
+      if (result === 'saved') showToast('IPA saved to your automatic download folder.', 'success');
+      if (result === 'permission_required') showToast('Automatic downloads need folder access again. Re-select the folder in Settings.', 'error');
+      if (result === 'missing') showToast('Automatic downloads are enabled but the folder is unavailable. Choose it again in Settings.', 'error');
+    }).catch(() => showToast('The automatic save did not work. Use Download IPA to save this result.', 'error'));
   }
 
   async function poll(): Promise<void> {

@@ -940,6 +940,16 @@ const migrations = [
       CREATE INDEX free_decrypt_abuse_quota_by_expiry ON free_decrypt_abuse_quota(completed_at, browser_expires_at, turnstile_expires_at);
     `,
   },
+  {
+    version: 38,
+    sql: `
+      CREATE TABLE cloud_delivery_destinations (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL, owner_id TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, enabled INTEGER NOT NULL);
+      CREATE INDEX cloud_delivery_destinations_by_owner ON cloud_delivery_destinations(owner_id);
+      CREATE TABLE cloud_delivery_jobs (id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL, owner_id TEXT NOT NULL, job_id TEXT NOT NULL, status TEXT NOT NULL, next_attempt_at INTEGER, UNIQUE(owner_id, job_id));
+      CREATE INDEX cloud_delivery_jobs_by_owner ON cloud_delivery_jobs(owner_id, updated_at DESC);
+      CREATE INDEX cloud_delivery_jobs_by_retry ON cloud_delivery_jobs(status, next_attempt_at);
+    `,
+  },
 ] as const;
 
 export const LATEST_SQLITE_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
@@ -1003,6 +1013,8 @@ const collectionTables = new Set([
   'mcp_records',
   'decrypt_credit_records',
   'service_monitor_state',
+  'cloud_delivery_destinations',
+  'cloud_delivery_jobs',
 ]);
 
 function assertCollectionTable(table: string): void {

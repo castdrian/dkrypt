@@ -181,7 +181,7 @@
 
   function oauthLoginUrl(provider: 'github' | 'discord'): string {
     const params = new URLSearchParams(location.search);
-    const returnTo = params.get('return_to') ?? (params.get('continue') === 'decrypt' ? '/?continue=decrypt' : undefined);
+    const returnTo = params.get('return_to') ?? (location.pathname === '/cli/authorize' ? `${location.pathname}${location.search}` : params.get('continue') === 'decrypt' ? '/?continue=decrypt' : undefined);
     return `/v1/auth/${provider}/login${returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''}`;
   }
 </script>
@@ -198,6 +198,8 @@
       <Lock class="h-7 w-7 text-white" />
     </div>
     <h2 class="mb-6.5 text-[19px] font-semibold">Sign in</h2>
+
+    <a href="/demo" class="mb-4 inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-border px-3 text-sm font-medium text-text transition-colors hover:bg-panel-muted">Try the interactive demo</a>
 
     {#if sessionState.githubOauthEnabled && !signupProvider}
       <a
