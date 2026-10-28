@@ -38,7 +38,7 @@
   <div class="mt-3 grid gap-3 sm:grid-cols-2">
     <label class="grid gap-1 text-xs">Request<select class="h-9 rounded-md border border-border bg-background px-2" bind:value={kind}><option value="decrypt">Submit a decrypt</option><option value="resolve">Resolve without queueing</option><option value="job">Check a job</option><option value="artifact">Download an artifact</option></select></label>
     {#if kind === 'decrypt' || kind === 'resolve'}
-      <label class="grid gap-1 text-xs">Channel<select class="h-9 rounded-md border border-border bg-background px-2" bind:value={channel}><option value="appstore">App Store</option><option value="testflight">TestFlight</option></select></label>
+      <label class="grid gap-1 text-xs">App source<select class="h-9 rounded-md border border-border bg-background px-2" bind:value={channel}><option value="appstore">App Store</option><option value="testflight">TestFlight</option></select></label>
       <label class="grid gap-1 text-xs">Bundle ID<Input bind:value={bundleId} placeholder="com.example.app" /></label>
       <label class="grid gap-1 text-xs">Exact version (optional)<Input bind:value={version} placeholder={channel === 'testflight' ? '352.0_118977' : '350.0'} /></label>
     {:else if kind === 'job'}
