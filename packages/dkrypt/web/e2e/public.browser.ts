@@ -2103,8 +2103,8 @@ test('busy device verification opens the queue review without labeling the devic
   await page.goto('/?tab=home');
   await page.getByPlaceholder('Search the App Store to decrypt… (press / to focus)').fill('MyFitnessPal');
   await page.getByRole('button', { name: 'Decrypt', exact: true }).click();
-  await expect(page.getByText('Device health check is still running. Try again shortly.')).toBeVisible();
-  await expect(page.getByText('Device verification is still running. You can queue now; the worker will recheck before starting.')).toBeVisible();
+  await expect(page.getByText('dkrypt could not confirm an available device yet. You can still queue; availability will be checked again when the job starts.')).toBeVisible();
+  await expect(page.getByText('Busy iPad')).toHaveCount(0);
   await expect(page.getByText('Device unreachable')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Queue anyway' })).toBeVisible();
   await expectAccessible(page);
