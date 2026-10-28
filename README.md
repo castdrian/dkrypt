@@ -67,8 +67,8 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `ABUSE_SIGNAL_SECRET` | Stable key for pseudonymous signup and Free-tier network counters; use a separate random value of at least 32 characters |
 | `TRUSTED_PROXY_ADDRESSES` | Exact proxy IPs or CIDRs whose forwarded client addresses Fastify may trust; never use a catch-all range |
 | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Paired Cloudflare Turnstile keys required for every new OAuth account |
-| `IPAPI_IS_KEY` | Optional free ipapi.is API key for up to 1,000 daily VPN, proxy, Tor, relay, hosting, and abuse lookups; used only for internal signup risk checks |
-| `IPINFO_TOKEN` | Optional legacy IPinfo token used only when `IPAPI_IS_KEY` is unavailable or its service is temporarily unavailable |
+| `IPAPI_IS_KEY` | Optional free ipapi.is API key for up to 1,000 daily VPN, proxy, Tor, relay, hosting, and abuse lookups; used internally for signup and Free-tier decrypt risk checks |
+| `IPINFO_TOKEN` | Optional legacy IPinfo token used when `IPAPI_IS_KEY` is unset or its service is temporarily unavailable |
 | `ABUSE_BLOCKED_EMAIL_DOMAINS` | Comma-separated disposable email domains blocked for new accounts |
 | `FREE_NETWORK_DECRYPT_LIMIT`, `FREE_ANONYMOUS_NETWORK_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across an IPv4 `/24` or IPv6 `/56`; the lower cap applies to classified VPN/proxy/Tor/relay/hosting networks |
 | `FREE_ADDRESS_DECRYPT_LIMIT`, `FREE_ANONYMOUS_ADDRESS_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across one exact IP address; the lower cap applies to classified VPN/proxy/Tor/relay/hosting addresses |
@@ -103,7 +103,7 @@ New OAuth accounts require a verified GitHub or Discord email. One account can b
 
 Cloudflare Turnstile is mandatory for every new OAuth account. Until both keys are configured, new account creation is blocked while existing users can still sign in. dkrypt also sets a random, signed, first-party browser signal for up to seven days. Turnstile's optional ephemeral identifier is stored as a separate short-lived signal, not a hardware ID. dkrypt does not read persistent hardware identifiers or build a browser fingerprint.
 
-For network reputation checks, configure an IPinfo Plus, Max, or privacy API token. IPinfo receives the request IP only when signup checks or a Free decrypt need a missing classification; dkrypt caches only VPN, proxy, Tor, relay, residential-proxy, hosting, and anonymous-network flags against a keyed exact-address hash for up to 12 hours. Classified networks receive lower signup and Free-tier limits rather than an automatic ban. If classification is configured but temporarily unavailable, dkrypt applies those lower limits until a lookup succeeds. The dashboard doctor reports which optional controls are configured without exposing keys.
+For network reputation checks, configure a free ipapi.is API key or an optional legacy IPinfo token. The configured provider receives the request IP when signup checks or a Free decrypt need a missing classification; dkrypt caches only VPN, proxy, Tor, relay, residential-proxy, hosting, anonymous-network, and abuse flags against a keyed exact-address hash for up to 12 hours. Classified networks receive lower signup and Free-tier limits rather than an automatic ban. If classification is configured but temporarily unavailable, dkrypt applies those lower limits until a lookup succeeds. The dashboard doctor reports which optional controls are configured without exposing keys.
 
 If dkrypt is behind a reverse proxy, set `TRUSTED_PROXY_ADDRESSES` to that proxy's exact IP or narrow CIDR so rate limits use the real client network. dkrypt rejects catch-all proxy trust settings because they let clients forge forwarded IP headers. Shared limits use both one exact address and an IPv4 `/24` or IPv6 `/56` range; set the values high enough for households, offices, and schools that legitimately share a network.
 
