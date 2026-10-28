@@ -381,7 +381,7 @@ test('command palette searches dkrypt data without triggering live App Store sea
   await expect.poll(() => quickSearchQueries.at(-1)).toEqual({ q: 'Example' });
   expect(appStoreSearchRequests).toBe(0);
   await page.getByRole('button', { name: /Example App App com\.example\./ }).click();
-  await expect(page.getByPlaceholder('Search the App Store to decrypt… (press / to focus)')).toHaveValue('com.example.quick');
+  await expect(page.getByPlaceholder('Search or paste an App Store or TestFlight link…')).toHaveValue('com.example.quick');
   await expect.poll(() => appStoreSearchRequests).toBe(1);
 });
 
@@ -2101,7 +2101,7 @@ test('busy device verification opens the queue review without labeling the devic
   });
 
   await page.goto('/?tab=home');
-  await page.getByPlaceholder('Search the App Store to decrypt… (press / to focus)').fill('MyFitnessPal');
+  await page.getByPlaceholder('Search or paste an App Store or TestFlight link…').fill('MyFitnessPal');
   await page.getByRole('button', { name: 'Decrypt', exact: true }).click();
   await expect(page.getByText('dkrypt could not confirm an available device yet. You can still queue; availability will be checked again when the job starts.')).toBeVisible();
   await expect(page.getByText('Busy iPad')).toHaveCount(0);
