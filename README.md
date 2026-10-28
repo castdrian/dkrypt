@@ -67,7 +67,8 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `ABUSE_SIGNAL_SECRET` | Stable key for pseudonymous signup and Free-tier network counters; use a separate random value of at least 32 characters |
 | `TRUSTED_PROXY_ADDRESSES` | Exact proxy IPs or CIDRs whose forwarded client addresses Fastify may trust; never use a catch-all range |
 | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Paired Cloudflare Turnstile keys required for every new OAuth account |
-| `IPINFO_TOKEN` | Optional IPinfo Plus, Max, or privacy API token for VPN, proxy, Tor, relay, residential proxy, and hosting-network classification |
+| `IPAPI_IS_KEY` | Optional free ipapi.is API key for up to 1,000 daily VPN, proxy, Tor, relay, hosting, and abuse lookups; used only for internal signup risk checks |
+| `IPINFO_TOKEN` | Optional legacy IPinfo token used only when `IPAPI_IS_KEY` is unavailable or its service is temporarily unavailable |
 | `ABUSE_BLOCKED_EMAIL_DOMAINS` | Comma-separated disposable email domains blocked for new accounts |
 | `FREE_NETWORK_DECRYPT_LIMIT`, `FREE_ANONYMOUS_NETWORK_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across an IPv4 `/24` or IPv6 `/56`; the lower cap applies to classified VPN/proxy/Tor/relay/hosting networks |
 | `FREE_ADDRESS_DECRYPT_LIMIT`, `FREE_ANONYMOUS_ADDRESS_DECRYPT_LIMIT` | Rolling 30-day Free decrypt caps shared across one exact IP address; the lower cap applies to classified VPN/proxy/Tor/relay/hosting addresses |

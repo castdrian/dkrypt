@@ -56,6 +56,7 @@ export const config = {
   abuseSignalSecret: optional('ABUSE_SIGNAL_SECRET', ''),
   turnstileSiteKey: optional('TURNSTILE_SITE_KEY', ''),
   turnstileSecretKey: optional('TURNSTILE_SECRET_KEY', ''),
+  ipApiIsKey: optional('IPAPI_IS_KEY', ''),
   ipInfoToken: optional('IPINFO_TOKEN', ''),
   abuseBlockedEmailDomains: optionalList('ABUSE_BLOCKED_EMAIL_DOMAINS', 'mailinator.com,guerrillamail.com,10minutemail.com,temp-mail.org,tempmail.com,yopmail.com,maildrop.cc,getnada.com,dispostable.com,trashmail.com').map((value) => value.toLowerCase()),
   freeNetworkDecryptLimit: Math.max(1, optionalInt('FREE_NETWORK_DECRYPT_LIMIT', 60)),

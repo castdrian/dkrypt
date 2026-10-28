@@ -58,6 +58,7 @@ export interface IpReputation {
   hosting: boolean;
   residentialProxy: boolean;
   anonymous: boolean;
+  abuser?: boolean;
 }
 
 interface TurnstileResult {
@@ -189,9 +190,7 @@ export function blockedEmailDomain(email: string | undefined): boolean {
 
 function signupLimits(addressHash: string, now: number): { addressHourly: number; addressMonthly: number; networkMonthly: number } {
   const reputation = cachedIpReputation(addressHash, now);
-  const highRisk = reputation
-    ? reputation.vpn || reputation.proxy || reputation.tor || reputation.relay || reputation.hosting || reputation.residentialProxy || reputation.anonymous
-    : Boolean(config.ipInfoToken);
+  const highRisk = isHighRiskNetwork(reputation);
   return highRisk
     ? { addressHourly: HIGH_RISK_SIGNUP_ADDRESS_HOURLY_LIMIT, addressMonthly: HIGH_RISK_SIGNUP_ADDRESS_MONTHLY_LIMIT, networkMonthly: HIGH_RISK_SIGNUP_NETWORK_MONTHLY_LIMIT }
     : { addressHourly: SIGNUP_ADDRESS_HOURLY_LIMIT, addressMonthly: SIGNUP_ADDRESS_MONTHLY_LIMIT, networkMonthly: SIGNUP_NETWORK_MONTHLY_LIMIT };
@@ -364,13 +363,65 @@ function cachedIpReputation(addressHash: string | undefined, now = Date.now()): 
       hosting: value.hosting === true,
       residentialProxy: value.residentialProxy === true,
       anonymous: value.anonymous === true,
+      abuser: value.abuser === true,
     };
   } catch {
     return undefined;
   }
 }
 
-async function fetchIpReputation(ip: string, addressHash: string): Promise<IpReputation | undefined> {
+function ipReputationConfigured(): boolean {
+  return Boolean(config.ipApiIsKey || config.ipInfoToken);
+}
+
+function isHighRiskNetwork(reputation: IpReputation | undefined): boolean {
+  if (!reputation) return ipReputationConfigured();
+  return reputation.vpn || reputation.proxy || reputation.tor || reputation.relay || reputation.hosting || reputation.residentialProxy || reputation.anonymous || reputation.abuser === true;
+}
+
+function saveIpReputation(addressHash: string, result: IpReputation): IpReputation {
+  const now = Date.now();
+  database.query('INSERT INTO abuse_ip_reputation (address_hash, payload, checked_at, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(address_hash) DO UPDATE SET payload = excluded.payload, checked_at = excluded.checked_at, expires_at = excluded.expires_at').run(addressHash, JSON.stringify(result), now, now + REPUTATION_TTL_MS);
+  return result;
+}
+
+async function fetchIpApiIsReputation(ip: string, addressHash: string): Promise<IpReputation | undefined> {
+  const response = await fetch('https://api.ipapi.is', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: ip, key: config.ipApiIsKey }),
+    signal: AbortSignal.timeout(2500),
+  }).catch(() => undefined);
+  if (!response?.ok) {
+    log.warn('signup IP reputation lookup unavailable', { provider: 'ipapi.is', status: response?.status });
+    return undefined;
+  }
+  const raw = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+  const signals = ['is_vpn', 'is_proxy', 'is_tor', 'is_datacenter', 'is_abuser'];
+  if (!raw || !signals.every((field) => Object.hasOwn(raw, field))) {
+    log.warn('signup IP reputation lookup returned an unsupported response', { provider: 'ipapi.is', status: response.status });
+    return undefined;
+  }
+  const egressService = raw.egress_service && typeof raw.egress_service === 'object' && !Array.isArray(raw.egress_service)
+    ? raw.egress_service as Record<string, unknown>
+    : undefined;
+  const vpn = Boolean(raw.is_vpn);
+  const proxy = raw.is_proxy === true;
+  const tor = raw.is_tor === true;
+  const relay = egressService?.type === 'private_relay';
+  return saveIpReputation(addressHash, {
+    vpn,
+    proxy,
+    tor,
+    relay,
+    hosting: raw.is_datacenter === true,
+    residentialProxy: false,
+    anonymous: vpn || proxy || tor || relay,
+    abuser: raw.is_abuser === true,
+  });
+}
+
+async function fetchIpInfoReputation(ip: string, addressHash: string): Promise<IpReputation | undefined> {
   const encodedIp = encodeURIComponent(ip);
   const endpoints = [
     `https://api.ipinfo.io/lookup/${encodedIp}/anonymous`,
@@ -394,7 +445,7 @@ async function fetchIpReputation(ip: string, addressHash: string): Promise<IpRep
     break;
   }
   if (!raw) {
-    log.warn('signup IP reputation lookup unavailable', { status: lastStatus });
+    log.warn('signup IP reputation lookup unavailable', { provider: 'ipinfo', status: lastStatus });
     return undefined;
   }
   const nested = raw.anonymous && typeof raw.anonymous === 'object' ? raw.anonymous as Record<string, unknown> : {};
@@ -408,14 +459,22 @@ async function fetchIpReputation(ip: string, addressHash: string): Promise<IpRep
     hosting: values.hosting === true || values.is_hosting === true,
     residentialProxy: values.is_res_proxy === true || values.residential_proxy === true,
     anonymous: values.is_anonymous === true,
+    abuser: false,
   };
-  const now = Date.now();
-  database.query('INSERT INTO abuse_ip_reputation (address_hash, payload, checked_at, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(address_hash) DO UPDATE SET payload = excluded.payload, checked_at = excluded.checked_at, expires_at = excluded.expires_at').run(addressHash, JSON.stringify(result), now, now + REPUTATION_TTL_MS);
-  return result;
+  return saveIpReputation(addressHash, result);
+}
+
+async function fetchIpReputation(ip: string, addressHash: string): Promise<IpReputation | undefined> {
+  if (config.ipApiIsKey) {
+    const result = await fetchIpApiIsReputation(ip, addressHash);
+    if (result || !config.ipInfoToken) return result;
+  }
+  if (config.ipInfoToken) return fetchIpInfoReputation(ip, addressHash);
+  return undefined;
 }
 
 export async function refreshIpReputation(ip: string | undefined): Promise<IpReputation | undefined> {
-  if (!config.ipInfoToken || !ip) return undefined;
+  if (!ipReputationConfigured() || !ip) return undefined;
   const addressHash = abuseAddressHash(ip);
   if (!addressHash) return undefined;
   const cached = cachedIpReputation(addressHash);
@@ -435,9 +494,8 @@ export function requestAbuseContext(ip: string | undefined, cookieHeader: string
   const networkHash = abuseNetworkHash(ip);
   const addressHash = abuseAddressHash(ip);
   const reputation = cachedIpReputation(addressHash);
-  if (refreshMissingReputation && config.ipInfoToken && !reputation) void refreshIpReputation(ip).catch(() => undefined);
-  const anonymousNetwork = Boolean(config.ipInfoToken && !reputation)
-    || Boolean(reputation && (reputation.vpn || reputation.proxy || reputation.tor || reputation.relay || reputation.hosting || reputation.residentialProxy || reputation.anonymous));
+  if (refreshMissingReputation && ipReputationConfigured() && !reputation) void refreshIpReputation(ip).catch(() => undefined);
+  const anonymousNetwork = isHighRiskNetwork(reputation);
   return {
     networkHash,
     addressHash: abuseAddressHash(ip),

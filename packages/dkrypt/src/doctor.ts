@@ -139,12 +139,12 @@ export async function runConfigurationDoctor(): Promise<{ ok: boolean; checkedAt
   const timingSettings = [config.jobMaxWaitSeconds, config.jobMaxRetries, config.jobProcessGraceSeconds, config.jobRetentionMinutes, config.stateDbBusyTimeoutMs];
   checks.push({ id: 'runtime-limits', status: timingSettings.every((value) => Number.isInteger(value) && value > 0) ? 'ok' : 'error', detail: timingSettings.every((value) => Number.isInteger(value) && value > 0) ? 'Runtime limits are valid' : 'Runtime limits must be positive integers' });
   const signupChallengeReady = Boolean(config.turnstileSiteKey && config.turnstileSecretKey);
-  const ipReputationReady = Boolean(config.ipInfoToken);
+  const ipReputationReady = Boolean(config.ipApiIsKey || config.ipInfoToken);
   const abuseSignalKeyReady = config.abuseSignalSecret.length >= 32;
   checks.push({
     id: 'account-abuse-protection',
     status: signupChallengeReady && ipReputationReady && abuseSignalKeyReady ? 'ok' : 'warn',
-    detail: `Verified OAuth emails, disposable-domain checks, exact-address and network signup limits, short-lived browser signals, and Free-tier quotas are active; mandatory Turnstile ${signupChallengeReady ? 'is configured' : 'is missing, so new accounts are blocked'}; VPN, proxy, Tor, relay, and hosting classification ${ipReputationReady ? 'is configured and unverified networks receive stricter limits' : 'is not configured'}; ${abuseSignalKeyReady ? 'a dedicated abuse-signal key is configured' : 'ABUSE_SIGNAL_SECRET is not configured and abuse hashes follow session-secret rotation'}`,
+    detail: `Verified OAuth emails, disposable-domain checks, exact-address and network signup limits, short-lived browser signals, and Free-tier quotas are active; mandatory Turnstile ${signupChallengeReady ? 'is configured' : 'is missing, so new accounts are blocked'}; VPN, proxy, Tor, relay, hosting, and abuse classification ${ipReputationReady ? 'is configured and unverified networks receive stricter limits' : 'is not configured'}; ${abuseSignalKeyReady ? 'a dedicated abuse-signal key is configured' : 'ABUSE_SIGNAL_SECRET is not configured and abuse hashes follow session-secret rotation'}`,
   });
   try {
     const database = getStateDatabaseStatus();
