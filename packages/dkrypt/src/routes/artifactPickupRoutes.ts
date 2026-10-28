@@ -1,8 +1,6 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { artifactFileAvailable, getArtifactById, getArtifactForJob, touchArtifact } from '#artifacts.js';
-import { config } from '#config.js';
 import { getBillingEntitlements } from '#billing.js';
 import { PermissionFlag } from '#permissions.js';
 import { streamFilePath, jobFileAvailable } from '#jobs/http.js';
@@ -13,36 +11,11 @@ import { DEFAULT_PROJECT_ID, getUserPrefs } from '#store/state.js';
 import { canViewJobForUser } from '#dashboardAccess.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { formatArtifactFilename } from '#artifactFilename.js';
-
-const PICKUP_LINK_TTL_MS = 5 * 60_000;
+import { createPickupUrl, isValidPickupToken, PICKUP_LINK_TTL_MS, type PickupKind } from '#pickupLinks.js';
 const pickupKindSchema = Type.Union([Type.Literal('artifact'), Type.Literal('job')]);
 const pickupLinkBodySchema = Type.Object({ artifactId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })), jobId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })) });
 const pickupParamsSchema = Type.Object({ kind: pickupKindSchema, id: Type.String({ minLength: 1, maxLength: 128 }) });
 
-type PickupKind = 'artifact' | 'job';
-
-function userFingerprint(userId: string): string {
-  return createHmac('sha256', config.sessionSigningSecret).update(userId.toLowerCase()).digest('base64url');
-}
-
-function createPickupUrl(userId: string, kind: PickupKind, id: string, fileName: string, expiresAt: number): string {
-  const subject = userFingerprint(userId);
-  const signature = createHmac('sha256', config.sessionSigningSecret).update(`${subject}\n${kind}\n${id}\n${fileName}\n${expiresAt}`).digest('base64url');
-  const url = new URL(`/pickup/${kind}/${encodeURIComponent(id)}`, config.publicBaseUrl);
-  url.searchParams.set('subject', subject);
-  url.searchParams.set('name', fileName);
-  url.searchParams.set('expires', String(expiresAt));
-  url.searchParams.set('signature', signature);
-  return url.toString();
-}
-
-function isValidPickupToken(kind: PickupKind, id: string, subject: string, fileName: string, expiresText: string, signature: string): boolean {
-  const expiresAt = Number(expiresText);
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + PICKUP_LINK_TTL_MS + 60_000) return false;
-  const expected = createHmac('sha256', config.sessionSigningSecret).update(`${subject}\n${kind}\n${id}\n${fileName}\n${expiresAt}`).digest();
-  const supplied = Buffer.from(signature, 'base64url');
-  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
-}
 
 export const artifactPickupRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.post<{ Body: { artifactId?: string; jobId?: string } }>('/v1/dashboard/pickup-link', {

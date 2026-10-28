@@ -11,9 +11,10 @@
     preflight: DecryptPreflight | null;
     onOpenChange: (open: boolean) => void;
     onConfirm: () => void;
+    onUpgrade: () => void;
   }
 
-  let { open, preflight, onOpenChange, onConfirm }: Props = $props();
+  let { open, preflight, onOpenChange, onConfirm, onUpgrade }: Props = $props();
   const canViewOperations = $derived(sessionCanViewOperationalDashboard());
   const freeQuotaExhausted = $derived(preflight?.quota?.freeTier === true && preflight.quota.remaining === 0);
 </script>
@@ -49,7 +50,7 @@
         Existing jobs and cached results do not use a slot.
         {#if preflight.quota.nextAvailableAt && preflight.quota.remaining === 0} Next slot: {fmtDateTime(preflight.quota.nextAvailableAt)}.{/if}
         {#if preflight.quota.apiRatePerMinute} API rate: {preflight.quota.apiRatePerMinute} requests per minute across your keys.{/if}
-        {#if preflight.quota.freeTier && preflight.quota.remaining === 0}<a class="ml-1 font-medium text-accent underline underline-offset-2" href="/?tab=billing">Compare paid plans</a>{/if}
+        {#if preflight.quota.freeTier && preflight.quota.remaining === 0}<button class="ml-1 font-medium text-accent underline underline-offset-2" onclick={onUpgrade}>Compare paid plans and keep this release selected</button>{/if}
       </div>
     {/if}
 

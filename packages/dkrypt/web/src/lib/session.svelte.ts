@@ -352,6 +352,8 @@ export interface NotificationPrefs {
   emailOnFailure?: boolean;
   emailOnAlerts?: boolean;
   emailOnKeyExpiry?: boolean;
+  emailDownloadLinksOnSuccess?: boolean;
+  emailOnBillingReminders?: boolean;
   appNotificationPreferences?: Array<{
     bundleId: string;
     pushOnSuccess?: boolean;

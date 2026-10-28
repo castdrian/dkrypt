@@ -11,12 +11,14 @@
   let channel = $state<'appstore' | 'testflight'>('appstore');
   let version = $state('');
   let resolveOnly = $state(false);
+  let useLockfile = $state(false);
+  let updateLockfile = $state(false);
   let copied = $state(false);
 
   const bundleIds = $derived([...new Set(bundleIdsText.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean))]);
   const invalidBundleIds = $derived(bundleIds.filter((bundleId) => !bundleIdPattern.test(bundleId)));
   const tooManyBundleIds = $derived(bundleIds.length > 20);
-  const invalidVersion = $derived(Boolean(version.trim()) && (!/^v?\d+(?:\.\d+)*(?:_\d+)?$/i.test(version.trim()) || (channel === 'testflight' && !version.includes('_')) || (channel === 'appstore' && version.includes('_'))));
+  const invalidVersion = $derived(!useLockfile && Boolean(version.trim()) && (!/^v?\d+(?:\.\d+)*(?:_\d+)?$/i.test(version.trim()) || (channel === 'testflight' && !version.includes('_')) || (channel === 'appstore' && version.includes('_'))));
   const workflow = $derived.by(() => {
     const baseUrl = sessionState.publicBaseUrl ?? (typeof window === 'undefined' ? 'https://ipa.dylib.dev' : window.location.origin);
     const lines = [
@@ -35,10 +37,11 @@
       `          api-url: \${{ vars.DKRYPT_API_URL || '${baseUrl}' }}`,
       '          api-key: \${{ secrets.DKRYPT_API_KEY }}',
       `          bundle-ids: '${JSON.stringify(bundleIds)}'`,
-      `          channel: ${channel}`,
+      ...(useLockfile ? ['          lockfile: dkrypt.lock'] : [`          channel: ${channel}`]),
     ];
-    if (version.trim()) lines.push(`          version: ${version.trim()}`);
-    if (resolveOnly) lines.push("          resolve-only: 'true'");
+    if (useLockfile && updateLockfile) lines.push("          update-lockfile: 'true'");
+    if (!useLockfile && version.trim()) lines.push(`          version: ${version.trim()}`);
+    if (resolveOnly || (useLockfile && updateLockfile)) lines.push("          resolve-only: 'true'");
     return lines.join('\n');
   });
 
@@ -61,9 +64,11 @@
   <div class="mt-3 grid gap-3 sm:grid-cols-2">
     <label class="grid gap-1 text-xs">Bundle IDs <span class="text-muted">Separate multiple IDs with commas or new lines.</span><textarea class="min-h-24 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs" bind:value={bundleIdsText} aria-invalid={invalidBundleIds.length > 0 || tooManyBundleIds}></textarea></label>
     <div class="grid content-start gap-3">
-      <label class="grid gap-1 text-xs">Channel<select class="h-9 rounded-md border border-border bg-background px-2" bind:value={channel}><option value="appstore">App Store</option><option value="testflight">TestFlight</option></select></label>
-      <label class="grid gap-1 text-xs">Exact version <span class="text-muted">Leave blank to resolve the latest.</span><Input bind:value={version} placeholder={channel === 'testflight' ? '352.0_118977' : '350.0'} aria-invalid={invalidVersion} /></label>
+      <label class="grid gap-1 text-xs">Channel<select class="h-9 rounded-md border border-border bg-background px-2" bind:value={channel} disabled={useLockfile}><option value="appstore">App Store</option><option value="testflight">TestFlight</option></select></label>
+      <label class="grid gap-1 text-xs">Exact version <span class="text-muted">Leave blank to resolve the latest.</span><Input bind:value={version} placeholder={channel === 'testflight' ? '352.0_118977' : '350.0'} aria-invalid={invalidVersion} disabled={useLockfile} /></label>
       <label class="flex items-center gap-2 text-xs"><input type="checkbox" bind:checked={resolveOnly} />Resolve metadata only; do not queue or download</label>
+      <label class="flex items-center gap-2 text-xs"><input type="checkbox" bind:checked={useLockfile} />Read pins from <code>dkrypt.lock</code></label>
+      {#if useLockfile}<label class="flex items-center gap-2 text-xs"><input type="checkbox" bind:checked={updateLockfile} />Update the lockfile with resolved releases</label>{/if}
     </div>
   </div>
 

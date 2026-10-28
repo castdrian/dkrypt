@@ -95,6 +95,8 @@ const userPrefsProperties = {
   emailOnFailure: Type.Optional(Type.Boolean()),
   emailOnAlerts: Type.Optional(Type.Boolean()),
   emailOnKeyExpiry: Type.Optional(Type.Boolean()),
+  emailDownloadLinksOnSuccess: Type.Optional(Type.Boolean()),
+  emailOnBillingReminders: Type.Optional(Type.Boolean()),
   appNotificationPreferences: Type.Optional(Type.Array(appNotificationPreferenceSchema, { maxItems: 50 })),
   notifyEmail: Type.Optional(Type.String()),
   preferPrimaryDevice: Type.Optional(Type.Boolean()),

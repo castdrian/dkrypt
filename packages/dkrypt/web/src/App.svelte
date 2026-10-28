@@ -139,7 +139,7 @@
 		themeState,
 		type TabId,
 	} from "#lib/ui.svelte";
-	import { takeSignupRequestContinuation } from "#lib/requestContinuation";
+	import { takeCheckoutDecryptContinuation, takeSignupRequestContinuation } from "#lib/requestContinuation";
 	import { isFormattingLocalePreference, isInterfaceLanguagePreference, resolveInterfaceLanguage } from "#lib/locale";
 	import { translateMessage, translatePermissionLabel, type MessageKey } from "#lib/messages";
 	import { createVisitedTabs } from "#lib/visitedTabs.svelte";
@@ -526,9 +526,11 @@ initDensity();
 		appliedDeepLink = deepLinkKey;
 		const query = new URLSearchParams(location.search);
 		if (query.get("continue") === "decrypt") {
-			const continuation = takeSignupRequestContinuation();
-			if (continuation) {
-				signupDecryptContinuationState.request = continuation;
+			const checkoutRequest = takeCheckoutDecryptContinuation();
+			const continuation = checkoutRequest ? undefined : takeSignupRequestContinuation();
+			if (checkoutRequest || continuation) {
+				signupDecryptContinuationState.checkoutRequest = checkoutRequest ?? null;
+				signupDecryptContinuationState.request = continuation ?? null;
 				setActiveTab("home");
 			} else {
 				showToast("That app request expired. Check the link again to continue.", "error");

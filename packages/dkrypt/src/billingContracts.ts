@@ -11,6 +11,7 @@ export const billingCheckoutBodySchema = Type.Object(
     provider: Type.Optional(Type.Union([Type.Literal('stripe'), Type.Literal('crypto')])),
     cryptoAsset: Type.Optional(Type.String({ minLength: 2, maxLength: 32 })),
     preserveResultId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    resumeRequest: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: true },
 );

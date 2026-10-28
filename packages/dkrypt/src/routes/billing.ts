@@ -77,10 +77,11 @@ import { getNowPaymentsMinimumFiat, getNowPaymentsProviderStatus } from '#nowpay
 import { findStripeDecryptCreditOwner, getDecryptCreditBalance, getDecryptQuotaJournal, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, grantDecryptCredits, revokeStripeDecryptCredits } from '#jobs/repository.js';
 import { getAccountApiRateUsage } from '#auth.js';
 import { getAuthProfile, resolveAuthUserId } from '#identity.js';
+import { sendMailToUser } from '#mail.js';
 import { log } from '#logger.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { PermissionFlag } from '#permissions.js';
-import { areNewBillingCheckoutsPaused, recordAudit, setNewBillingCheckoutsPaused } from '#store/state.js';
+import { areNewBillingCheckoutsPaused, getUserPrefs, recordAudit, setNewBillingCheckoutsPaused } from '#store/state.js';
 import { constructStripeWebhookEvent, stripeRequest } from '#stripe.js';
 import { getStripeWebhookHealth as inspectStripeWebhookHealth, StripeWebhookEndpointNotFoundError, syncStripeWebhookEvents, type StripeWebhookHealth } from '#stripeWebhookHealth.js';
 import { claimWebhook, countWebhookInbox, getWebhookInboxRecord, listWebhookInbox, markWebhookFailed, markWebhookProcessed, quarantineWebhook, receiveWebhook, releaseWebhookClaim } from '#webhookInbox.js';
@@ -367,6 +368,22 @@ async function processInvoice(event: Stripe.Event, stripeClient?: Stripe): Promi
   });
 }
 
+async function sendUpcomingInvoiceReminder(event: Stripe.Event): Promise<void> {
+  const invoice = event.data.object as Stripe.Invoice;
+  const subscriptionId = invoiceSubscriptionId(invoice);
+  if (!subscriptionId) return;
+  const subscription = getBillingSubscriptionById(subscriptionId);
+  if (!subscription || subscription.provider !== 'stripe' || !subscription.userId) return;
+  if (getUserPrefs(subscription.userId).emailOnBillingReminders !== true) return;
+  const renewalAt = invoice.period_end ? new Date(invoice.period_end * 1000).toLocaleDateString('en-GB', { dateStyle: 'long', timeZone: 'UTC' }) : 'soon';
+  const amount = invoice.currency ? new Intl.NumberFormat('en-GB', { style: 'currency', currency: invoice.currency.toUpperCase() }).format(invoice.amount_due / 100) : undefined;
+  const planName = getPlan(subscription.planId)?.name ?? 'your current plan';
+  await sendMailToUser(subscription.userId, {
+    subject: 'Your dkrypt subscription renews soon',
+    text: `${planName} is scheduled to renew ${renewalAt}${amount ? ` for ${amount}` : ''}. Stripe will process the payment using your saved payment method. Review your billing details at ${config.publicBaseUrl}/?tab=billing.`,
+  });
+}
+
 export async function processStripeEvent(event: Stripe.Event, stripeClient?: Stripe): Promise<void> {
   switch (event.type) {
     case 'checkout.session.completed':
@@ -404,6 +421,9 @@ export async function processStripeEvent(event: Stripe.Event, stripeClient?: Str
     case 'invoice.paid':
     case 'invoice.payment_failed':
       await processInvoice(event, stripeClient);
+      return;
+    case 'invoice.upcoming':
+      await sendUpcomingInvoiceReminder(event);
       return;
   }
 }
@@ -963,7 +983,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         if (existingCryptoCheckout && (existingCryptoCheckout.planId !== target.id || (existingCryptoCheckout.asset?.toUpperCase() ?? requestedAsset) !== requestedAsset)) {
           return sendBillingError(request, reply, 409, 'Idempotency-Key was already used with a different checkout request', 'idempotency_conflict');
         }
-        const result = await createCryptoCheckout({ userId, planId: target.id, idempotencyKey, asset: request.body.cryptoAsset, preserveResultId: request.body.preserveResultId });
+        const result = await createCryptoCheckout({ userId, planId: target.id, idempotencyKey, asset: request.body.cryptoAsset, preserveResultId: request.body.preserveResultId, resumeRequest: request.body.resumeRequest });
         return reply.code(result.reused ? 200 : 201).send({ url: result.checkout.checkoutUrl, provider: 'nowpayments', checkoutId: result.checkout.checkoutId, status: result.checkout.status });
       } catch (error) {
         if (error instanceof CryptoBillingError) return sendBillingError(request, reply, error.statusCode, error.message);
@@ -985,13 +1005,14 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         client_reference_id: userId,
         metadata: { dkrypt_user_id: userId, plan_id: target.id, ...(request.body.preserveResultId ? { preserve_result_id: request.body.preserveResultId } : {}) },
         subscription_data: { metadata: { dkrypt_user_id: userId, plan_id: target.id, ...(request.body.preserveResultId ? { preserve_result_id: request.body.preserveResultId } : {}) } },
-        success_url: `${config.publicBaseUrl}/?tab=billing&checkout=success&session_id={CHECKOUT_SESSION_ID}${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}`,
-        cancel_url: `${config.publicBaseUrl}/?tab=billing&checkout=cancelled${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}`,
+        success_url: `${config.publicBaseUrl}/?tab=billing&checkout=success&session_id={CHECKOUT_SESSION_ID}${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}${request.body.resumeRequest ? '&resumeRequest=1' : ''}`,
+        cancel_url: `${config.publicBaseUrl}/?tab=billing&checkout=cancelled${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}${request.body.resumeRequest ? '&resumeRequest=1' : ''}`,
         billing_address_collection: 'required',
         managed_payments: { enabled: true },
+        allow_promotion_codes: true,
         integration_identifier: createIntegrationIdentifier(idempotencyKey),
       } satisfies Stripe.Checkout.SessionCreateParams;
-      const requestFingerprint = createHash('sha256').update(JSON.stringify({ provider, planId: target.id, preserveResultId: request.body.preserveResultId ?? null })).digest('hex');
+      const requestFingerprint = createHash('sha256').update(JSON.stringify({ provider, planId: target.id, preserveResultId: request.body.preserveResultId ?? null, resumeRequest: request.body.resumeRequest === true })).digest('hex');
       const parametersFingerprint = createHash('sha256').update(JSON.stringify(parameters)).digest('hex');
       if (existingStripeAttempt && existingStripeAttempt.requestFingerprint !== requestFingerprint) {
         return sendBillingError(request, reply, 409, 'Idempotency-Key was already used with a different checkout request', 'idempotency_conflict');

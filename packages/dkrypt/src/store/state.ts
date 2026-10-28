@@ -552,6 +552,8 @@ export interface UserPrefs {
   emailOnFailure?: boolean;
   emailOnAlerts?: boolean;
   emailOnKeyExpiry?: boolean;
+  emailDownloadLinksOnSuccess?: boolean;
+  emailOnBillingReminders?: boolean;
   appNotificationPreferences?: AppNotificationPreference[];
   formDrafts?: Record<string, AccountFormDraft>;
   notifyEmail?: string;

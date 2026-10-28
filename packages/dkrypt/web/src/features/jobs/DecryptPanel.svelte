@@ -49,6 +49,7 @@ import { pushAppFavoritesPref, sessionHasPermission, sessionState } from "#lib/s
 		shouldShowSearchResultStatus,
 	} from "#lib/searchResultPresentation";
 import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationState, showToast } from "#lib/ui.svelte";
+	import { saveCheckoutDecryptContinuation } from "#lib/requestContinuation";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { cn } from "#lib/utils";
 	import TestFlightPickerDialog from "#features/testflight/TestFlightPickerDialog.svelte";
@@ -436,6 +437,34 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 			inviteDialogOpen = true;
 		}
 	});
+
+	$effect(() => {
+		const request = signupDecryptContinuationState.checkoutRequest;
+		if (!request) return;
+		signupDecryptContinuationState.checkoutRequest = null;
+		term = request.bundleId;
+		if (request.channel === 'testflight' && request.testflight) {
+			testflightTrackName = request.trackName;
+			void decryptTestFlightBuild(request.bundleId, request.testflight.appId, request.testflight.build, `v${request.testflight.build.cfBundleShortVersion} (${request.testflight.build.cfBundleVersion})`);
+			return;
+		}
+		void queue(request.bundleId, request.trackName, request.externalVersionId, request.versionLabel, request.minimumOsVersion);
+	});
+
+	function continueAfterUpgrade(): void {
+		const request = pendingQueue;
+		if (!request) return;
+		saveCheckoutDecryptContinuation({
+			bundleId: request.bundleId,
+			trackName: request.trackName,
+			channel: request.testflight ? 'testflight' : 'appstore',
+			externalVersionId: request.externalVersionId,
+			versionLabel: request.versionLabel ?? '',
+			minimumOsVersion: request.minimumOsVersion,
+			...(request.testflight ? { testflight: request.testflight } : {}),
+		});
+		location.assign('/?tab=billing&resumeRequest=1');
+	}
 
 	$effect(() => {
 		for (const r of results) {
@@ -945,4 +974,5 @@ import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationS
 		}
 	}}
 	onConfirm={() => void confirmPreflight()}
+		onUpgrade={continueAfterUpgrade}
 />

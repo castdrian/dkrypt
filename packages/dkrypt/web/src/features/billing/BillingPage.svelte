@@ -9,6 +9,8 @@
   import { pushDecryptUsageAlertThresholds, refreshSession, sessionHasPermission } from '#lib/session.svelte';
   import { PermissionFlag } from '#lib/permissions';
   import { confirmDialog, decryptUsageAlertThresholdsState, showToast } from '#lib/ui.svelte';
+  import { hasCheckoutDecryptContinuation } from '#lib/requestContinuation';
+  import { clearBillingCheckoutRecovery, readBillingCheckoutRecovery, saveBillingCheckoutRecovery, type BillingCheckoutRecovery } from '#lib/billingCheckoutRecovery';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
   import { createBillingGiftCheckout, fetchBillingEntitlementHistory, fetchBillingInvoices, fetchBillingQuotaHistory, fetchPurchasedBillingGifts, redeemBillingAccessCode, retainTemporaryJobResult, type BillingEntitlementEvent, type BillingInvoice, type BillingQuotaHistoryEntry, type PurchasedBillingGift } from '#lib/api';
@@ -175,9 +177,15 @@
   let planChangePreviewLoading = $state(false);
   let planChangePreviewError = $state<string | undefined>();
   let planChangePreviewRequest = 0;
+  let expectedMonthlyDecrypts = $state(60);
+  let expectedPeakApiRate = $state(0);
+  let needsHighPriority = $state(false);
+  let initializedPlanEstimate = false;
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
+  const resumeRequestReturn = checkoutParams.get('resumeRequest') === '1';
+  let checkoutRecovery = $state<BillingCheckoutRecovery | undefined>();
   preserveResultId = checkoutParams.get('preserveResult')?.match(/^[A-Za-z0-9._:-]{1,128}$/) ? checkoutParams.get('preserveResult') ?? undefined : undefined;
   let creditCheckoutState = $state<CheckoutState>(checkoutParams.get('credits') as CheckoutState);
   const billingTimeline = $derived.by(() => {
@@ -209,22 +217,27 @@
       .slice(0, 100);
   });
   const planFit = $derived.by(() => {
-    if (!billing || billing.usageForecast.jobsInSample < 3) return null;
-    if (billing.entitlement.legacy) return { legacy: true as const, plan: undefined, expectedDaily: 0 };
-    const expectedDaily = billing.usageForecast.averagePerDay * 1.25;
-    const needsApi = billing.currentPlan?.api === true;
-    const needsPriority = (billing.currentPlan?.priority ?? 0) > 0;
+    if (!billing) return null;
+    const monthlyDecrypts = Math.max(0, Math.min(100_000, Math.floor(expectedMonthlyDecrypts || 0)));
+    const dailyWithBuffer = (monthlyDecrypts / 30) * 1.25;
+    const apiRate = Math.max(0, Math.min(10_000, Math.floor(expectedPeakApiRate || 0)));
     const plan = [...billing.plans]
-      .filter((candidate) => !candidate.legacy && (!needsApi || candidate.api) && (!needsPriority || candidate.priority > 0))
-      .sort((a, b) => a.amount - b.amount)
-      .find((candidate) => candidate.dailyDecryptLimit === undefined || candidate.dailyDecryptLimit >= expectedDaily);
-    return { legacy: false as const, plan, expectedDaily };
+      .filter((candidate) => !candidate.legacy && (apiRate === 0 || (candidate.apiRatePerMinute ?? 0) >= apiRate) && (!needsHighPriority || candidate.priority > 0))
+      .sort((left, right) => left.amount - right.amount)
+      .find((candidate) => candidate.dailyDecryptLimit === undefined || candidate.dailyDecryptLimit >= dailyWithBuffer);
+    return { legacy: billing.entitlement.legacy, plan, monthlyDecrypts, dailyWithBuffer, apiRate };
   });
 
   async function loadBilling(): Promise<void> {
     const response = await fetch('/v1/billing');
     if (!response.ok) throw new Error('billing unavailable');
     billing = (await response.json()) as BillingData;
+    if (!initializedPlanEstimate) {
+      expectedMonthlyDecrypts = billing.usageForecast.jobsInSample >= 3 ? Math.ceil(billing.usageForecast.averagePerDay * 30) : 60;
+      expectedPeakApiRate = billing.currentPlan?.apiRatePerMinute ?? 0;
+      needsHighPriority = (billing.currentPlan?.priority ?? 0) > 0;
+      initializedPlanEstimate = true;
+    }
     if (!billing.plans.some((plan) => plan.id === giftPlanId && !plan.legacy)) giftPlanId = billing.plans.find((plan) => !plan.legacy)?.id ?? '';
     const [invoiceResult, entitlementResult] = await Promise.allSettled([fetchBillingInvoices(), fetchBillingEntitlementHistory()]);
     if (invoiceResult.status === 'fulfilled') {
@@ -363,6 +376,7 @@
       await refreshAfterCheckout();
       if (billing?.entitlement.planId !== 'viewer') {
         activationStatus = 'active';
+        clearBillingCheckoutRecovery();
         showToast('Subscription active. Your paid features are ready.', 'success');
         return;
       }
@@ -538,18 +552,25 @@
       showToast("Couldn't start checkout", 'error');
       return;
     }
+    const resumeRequest = resumeRequestReturn || hasCheckoutDecryptContinuation();
+    saveBillingCheckoutRecovery({ planId: plan.id, provider: paymentProvider, preserveResultId, resumeRequest });
+    checkoutRecovery = readBillingCheckoutRecovery();
     try {
       const response = await fetch('/v1/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ planId: plan.id, provider: paymentProvider, cryptoAsset: paymentProvider === 'crypto' ? cryptoAsset : undefined, preserveResultId }),
+        body: JSON.stringify({ planId: plan.id, provider: paymentProvider, cryptoAsset: paymentProvider === 'crypto' ? cryptoAsset : undefined, preserveResultId, resumeRequest }),
       });
       const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
       if (!response.ok || !data.url) {
+        checkoutRecovery = readBillingCheckoutRecovery();
         showToast(data.error ?? "Couldn't start checkout", 'error');
         return;
       }
       location.assign(data.url);
+    } catch {
+      checkoutRecovery = readBillingCheckoutRecovery();
+      showToast("Could not reach checkout. Your plan selection is saved so you can retry.", 'error');
     } finally {
       openingPlan = undefined;
     }
@@ -699,6 +720,7 @@
 
   onMount(() => {
     void initializeBilling().then(() => {
+      checkoutRecovery = readBillingCheckoutRecovery();
       if (checkoutState === 'success') void waitForActivation();
       else void preserveResultAfterUpgrade();
       void refreshPurchasedGifts();
@@ -708,6 +730,17 @@
 </script>
 
 <div class="flex flex-col gap-4">
+  {#if resumeRequestReturn && hasCheckoutDecryptContinuation()}
+    <div class="rounded-xl border border-accent/35 bg-accent/5 px-4 py-3 text-sm" role="status">
+      <div class="font-medium">Your selected release is saved</div>
+      <p class="mt-1 text-muted">After your plan is active, return to Home and dkrypt will reopen the exact app release for you to review and queue.</p>
+      {#if activationStatus === 'active'}<Button class="mt-2" size="sm" onclick={() => location.assign('/?continue=decrypt')}>Continue to selected release</Button>{/if}
+    </div>
+  {/if}
+  {#if checkoutState !== 'success' && checkoutRecovery && (billing?.entitlement.freeTier ?? true)}
+    {@const retryPlan = billing?.plans.find((plan) => plan.id === checkoutRecovery?.planId)}
+    {#if retryPlan}<div class="rounded-xl border border-border bg-panel-muted/40 px-4 py-3 text-sm" role="status"><div class="font-medium">{checkoutState === 'cancelled' ? 'Checkout wasn’t completed' : 'Your checkout is ready to resume'}</div><p class="mt-1 text-muted">{checkoutState === 'cancelled' ? 'No payment was made.' : 'Checkout did not open or finish.'} Reopen {retryPlan.name}; your selected release stays saved.</p><Button class="mt-2" size="sm" variant="secondary" loading={openingPlan === retryPlan.id} onclick={() => { paymentProvider = checkoutRecovery?.provider ?? 'stripe'; preserveResultId = checkoutRecovery?.preserveResultId; void startCheckout(retryPlan); }}>Resume checkout</Button></div>{/if}
+  {/if}
   {#if preserveResultId && billing?.entitlement.freeTier}
     <div class="rounded-xl border border-accent/35 bg-accent/5 px-4 py-3 text-sm" role="status">
       <div class="font-medium">Keep your latest IPA</div>
@@ -789,7 +822,7 @@
         {/if}
         <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a><Button size="sm" variant="secondary" onclick={() => void toggleQuotaHistory()}>{quotaHistoryOpen ? 'Hide allowance history' : 'View allowance history'}</Button></div>
         {#if quotaHistoryOpen}<div class="mt-3 border-t border-border pt-3">{#if quotaHistoryLoading}<div class="text-xs text-muted" role="status">Loading allowance history…</div>{:else if quotaHistory?.length}<ul class="divide-y divide-border/70">{#each quotaHistory as entry (`${entry.jobId}-${entry.at}`)}<li class="flex flex-wrap items-center justify-between gap-2 py-2 text-xs"><span class="min-w-0"><span class="font-medium">{entry.bundleId ?? 'Decrypt request'}</span>{#if entry.versionLabel}<span class="text-muted"> · {entry.versionLabel}</span>{/if}<span class="mt-0.5 block text-muted">{entry.status} · {entry.source ?? 'unknown source'}</span></span><span class="shrink-0 text-muted">{formatDate(new Date(entry.at).toISOString())} · {entry.state === 'consumed' ? 'used' : 'reserved'}</span></li>{/each}</ul>{:else}<div class="text-xs text-muted">No allowance activity is recorded yet.</div>{/if}</div>{/if}
-        {#if planFit}<div class="mt-3 rounded-lg border border-border/70 bg-panel-muted/30 p-3 text-xs"><div class="font-medium">Plan fit for your recent usage</div>{#if planFit.legacy}<p class="mt-1 text-muted">Your current plan is grandfathered. Its benefits stay in place; dkrypt will not recommend a switch that could remove them.</p>{:else if planFit.plan}<p class="mt-1 text-muted">At about {planFit.expectedDaily.toFixed(1)} decrypts per day with a 25% buffer, {planFit.plan.name} is the lowest-priced tier that fits. This estimate uses your recent usage and preserves any API or priority access already on your plan.</p><Button class="mt-2" size="sm" variant="secondary" onclick={() => showPlan(planFit.plan!)}>Compare {planFit.plan.name}</Button>{:else}<p class="mt-1 text-muted">No new tier covers this usage while preserving your current API and priority benefits. Your existing plan remains unchanged.</p>{/if}</div>{/if}
+        {#if planFit}<div class="mt-3 rounded-lg border border-border/70 bg-panel-muted/30 p-3 text-xs"><div class="font-medium">Find the right plan</div><p class="mt-1 text-muted">Estimate your monthly decrypt volume and peak API use. The calculator adds a 25% allowance buffer and checks the account-wide API rate.</p><div class="mt-3 grid gap-2 sm:grid-cols-2"><label class="grid gap-1">New decrypts per month<input class="h-9 rounded-md border border-border bg-background px-2 text-sm tabular-nums" type="number" min="0" max="100000" step="1" bind:value={expectedMonthlyDecrypts} /></label><label class="grid gap-1">Peak API requests per minute<input class="h-9 rounded-md border border-border bg-background px-2 text-sm tabular-nums" type="number" min="0" max="10000" step="1" bind:value={expectedPeakApiRate} /></label></div><label class="mt-2 inline-flex min-h-9 items-center gap-2"><input class="size-4 accent-accent" type="checkbox" bind:checked={needsHighPriority} />Higher queue priority matters to me</label>{#if planFit.legacy}<p class="mt-1 text-muted">Your current plan is grandfathered. Its benefits stay in place; compare a new plan only if you are ready to give those legacy benefits up.</p>{:else if planFit.plan}<p class="mt-1 text-muted">{planFit.plan.name} is the lowest-priced tier that fits about {planFit.dailyWithBuffer.toFixed(1)} decrypts per day{planFit.apiRate > 0 ? ` and ${planFit.apiRate} API requests per minute` : ''}{needsHighPriority ? ' with higher queue priority' : ''}.</p><Button class="mt-2" size="sm" variant="secondary" onclick={() => showPlan(planFit.plan!)}>Compare {planFit.plan.name}</Button>{:else}<p class="mt-1 text-muted">No current tier fits that estimate. Reduce the expected API rate or decrypt volume to compare available plans.</p>{/if}</div>{/if}
       </div>
     {/if}
   </Card>
@@ -906,7 +939,7 @@
       <Card>
         <div class="mb-3 text-sm font-medium">Payment method</div>
         <div class="grid gap-2 sm:grid-cols-2">
-          <button class={paymentProvider === 'stripe' ? 'rounded-xl border border-accent bg-accent/5 px-3 py-3 text-left transition' : 'rounded-xl border px-3 py-3 text-left transition'} onclick={() => (paymentProvider = 'stripe')}><div class="font-medium">Card or bank</div><div class="mt-1 text-xs text-muted">Hosted Stripe checkout with Managed Payments.</div></button>
+          <button class={paymentProvider === 'stripe' ? 'rounded-xl border border-accent bg-accent/5 px-3 py-3 text-left transition' : 'rounded-xl border px-3 py-3 text-left transition'} onclick={() => (paymentProvider = 'stripe')}><div class="font-medium">Card or bank</div><div class="mt-1 text-xs text-muted">Hosted Stripe checkout with Managed Payments. Enter a promotion code there; Stripe confirms eligibility, discount duration, and renewal price before payment.</div></button>
           <button class={paymentProvider === 'crypto' ? 'rounded-xl border border-accent bg-accent/5 px-3 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50' : 'rounded-xl border px-3 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50'} disabled={!cryptoReady()} onclick={() => (paymentProvider = 'crypto')}><div class="flex items-center justify-between gap-2 font-medium"><span>Crypto</span><Badge variant="secondary">{billing.providers.crypto.assets.join(' / ')}</Badge></div><div class="mt-1 text-xs text-muted">Hosted NOWPayments invoice priced in EUR. Renew with a new crypto payment every 30 days.</div></button>
         </div>
         {#if paymentProvider === 'crypto'}

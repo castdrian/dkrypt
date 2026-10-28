@@ -65,6 +65,7 @@ export async function createCryptoCheckout(input: {
   idempotencyKey: string;
   asset?: string;
   preserveResultId?: string;
+  resumeRequest?: boolean;
 }): Promise<CryptoCheckoutResult> {
   const existing = findCryptoCheckout(input.userId, input.idempotencyKey);
   if (existing) return { checkout: existing, reused: true };
@@ -100,8 +101,8 @@ export async function createCryptoCheckout(input: {
       orderId,
       orderDescription: `dkrypt ${plan.name} plan`,
       ipnCallbackUrl: `${config.publicBaseUrl}/v1/nowpayments/webhook`,
-      successUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=success${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}`,
-      cancelUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=cancelled${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}`,
+      successUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=success${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}${input.resumeRequest ? '&resumeRequest=1' : ''}`,
+      cancelUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=cancelled${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}${input.resumeRequest ? '&resumeRequest=1' : ''}`,
     });
     const checkout = checkoutFromResponse(response, {
       checkoutId: orderId,

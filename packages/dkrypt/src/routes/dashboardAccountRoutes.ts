@@ -214,6 +214,8 @@ export const dashboardAccountRoutes: FastifyPluginAsyncTypebox = async (server) 
     if (typeof body.emailOnFailure === 'boolean') patch.emailOnFailure = body.emailOnFailure;
     if (typeof body.emailOnAlerts === 'boolean') patch.emailOnAlerts = body.emailOnAlerts;
     if (typeof body.emailOnKeyExpiry === 'boolean') patch.emailOnKeyExpiry = body.emailOnKeyExpiry;
+    if (typeof body.emailDownloadLinksOnSuccess === 'boolean') patch.emailDownloadLinksOnSuccess = body.emailDownloadLinksOnSuccess;
+    if (typeof body.emailOnBillingReminders === 'boolean') patch.emailOnBillingReminders = body.emailOnBillingReminders;
     if (body.appNotificationPreferences) {
       const seenBundleIds = new Set<string>();
       const preferences = [];

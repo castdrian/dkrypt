@@ -90,6 +90,8 @@ import { fetchNotificationPrefs, pushNotificationPrefs, sessionState, type Notif
 	let appFormError = $state("");
 	let accountEmail = $state<string | undefined>(undefined);
 	let notifyEmail = $state("");
+	let emailDownloadLinksOnSuccess = $state(false);
+	let emailOnBillingReminders = $state(false);
 	let sendingTestEmail = $state(false);
 	let appPreferenceWrite = Promise.resolve();
 
@@ -104,6 +106,8 @@ import { fetchNotificationPrefs, pushNotificationPrefs, sessionState, type Notif
 			notificationPreferences = preferencesWithDefaults(prefs);
 			accountEmail = prefs.accountEmail;
 			notifyEmail = prefs.notifyEmail ?? "";
+			emailDownloadLinksOnSuccess = prefs.emailDownloadLinksOnSuccess ?? false;
+			emailOnBillingReminders = prefs.emailOnBillingReminders ?? false;
 			appNotificationPreferences = prefs.appNotificationPreferences ?? [];
 		});
 	});
@@ -118,6 +122,12 @@ import { fetchNotificationPrefs, pushNotificationPrefs, sessionState, type Notif
 
 	async function saveNotifyEmail(): Promise<void> {
 		await pushNotificationPrefs({ notifyEmail: notifyEmail.trim() });
+	}
+
+	async function saveDeliveryPreference(key: "emailDownloadLinksOnSuccess" | "emailOnBillingReminders", value: boolean): Promise<void> {
+		if (key === "emailDownloadLinksOnSuccess") emailDownloadLinksOnSuccess = value;
+		else emailOnBillingReminders = value;
+		await pushNotificationPrefs({ [key]: value });
 	}
 
 	function appPreferenceValue(bundleId: string, key: "pushOnSuccess" | "pushOnFailure" | "emailOnSuccess" | "emailOnFailure"): boolean {
@@ -245,6 +255,10 @@ import { fetchNotificationPrefs, pushNotificationPrefs, sessionState, type Notif
 				aria-label={msg(category.emailLabel)}
 			/>
 		{/each}
+	</div>
+	<div class="mt-3 space-y-2 border-t border-border/70 pt-3 text-xs text-muted">
+		<label class="flex min-h-9 items-center gap-2"><Checkbox checked={emailDownloadLinksOnSuccess} onCheckedChange={(value) => saveDeliveryPreference("emailDownloadLinksOnSuccess", value)} aria-label={msg("notifications.emailDownloadLinks")} /><span>{msg("notifications.emailDownloadLinks")} <span class="block text-[11px]">{msg("notifications.emailDownloadLinksDescription")}</span></span></label>
+		<label class="flex min-h-9 items-center gap-2"><Checkbox checked={emailOnBillingReminders} onCheckedChange={(value) => saveDeliveryPreference("emailOnBillingReminders", value)} aria-label={msg("notifications.emailBillingReminders")} /><span>{msg("notifications.emailBillingReminders")} <span class="block text-[11px]">{msg("notifications.emailBillingRemindersDescription")}</span></span></label>
 	</div>
 
 	<details class="mt-4 rounded-lg border border-border/70 px-3 py-2.5">

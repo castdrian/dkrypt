@@ -11,5 +11,6 @@ export const STRIPE_WEBHOOK_EVENTS = [
   'customer.subscription.deleted',
   'invoice.paid',
   'invoice.payment_failed',
+  'invoice.upcoming',
   'charge.refunded',
 ] as const satisfies readonly Stripe.WebhookEndpointCreateParams.EnabledEvent[];

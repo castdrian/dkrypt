@@ -19,7 +19,7 @@ import { getCachedDeviceHealth } from '#deviceHealthCache.js';
 import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
-import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, promoteArtifact, type ArtifactRecord } from '#artifacts.js';
+import { artifactDownloadName, artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, promoteArtifact, type ArtifactRecord } from '#artifacts.js';
 import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
@@ -34,6 +34,7 @@ import { delayWithSignal } from '#util/abort.js';
 import { getJobDeviceBlocker, minimumOsVersionForBuild } from '#jobs/deviceDispatch.js';
 import { OfflineAppStoreUnsupportedPackageError, offlineAppStoreProcessor, setOfflineAppStoreDispatchNotifier } from '#offlineAppStore.js';
 import { computeOfflineAttemptBudgetMs, OfflineAppStoreCircuitBreaker, runWithOfflineAttemptTimeout } from '#jobs/offlineAppStorePolicy.js';
+import { createPickupUrl, EMAIL_PICKUP_LINK_TTL_MS } from '#pickupLinks.js';
 
 const jobs = new Map<string, Job>();
 
@@ -1836,10 +1837,25 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
       });
     }
 
-    const shouldMail = notificationChannels.email;
+    const sendDownloadLink = job.status === 'done' && prefs.emailDownloadLinksOnSuccess === true;
+    const pickupExpiresAt = sendDownloadLink ? Math.min(Date.now() + EMAIL_PICKUP_LINK_TTL_MS, job.temporaryResultExpiresAt ?? Number.MAX_SAFE_INTEGER) : undefined;
+    const canCreateDownloadLink = sendDownloadLink && pickupExpiresAt !== undefined && pickupExpiresAt > Date.now() && Boolean(completedArtifact || job.filePath);
+    const emailArtifact = job.freeTierResult ? undefined : completedArtifact;
+    const downloadLink = canCreateDownloadLink
+      ? createPickupUrl(
+          job.queuedBy,
+          emailArtifact ? 'artifact' : 'job',
+          emailArtifact?.id ?? job.id,
+          emailArtifact ? artifactDownloadName(emailArtifact) : `${job.bundleId.replace(/[^A-Za-z0-9._-]/g, '_')}.ipa`,
+          pickupExpiresAt!,
+        )
+      : undefined;
+    const shouldMail = notificationChannels.email || Boolean(downloadLink);
     if (shouldMail) void sendMailToUser(job.queuedBy, {
       subject: title,
-      text: downloadUrl ? `${body}\n\nDownload: ${downloadUrl}` : body,
+      text: downloadLink
+        ? `${body}\n\nDownload: ${downloadLink}\nThis private link expires ${new Date(pickupExpiresAt!).toISOString()}.`
+        : downloadUrl ? `${body}\n\nDownload: ${downloadUrl}` : body,
     });
   }
 
