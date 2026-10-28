@@ -56,14 +56,22 @@ function createIpaWithSinf(license: Buffer): string {
   return ipaPath;
 }
 
-function createIpaWithLicenses(sinfs: Buffer[], supfs: Buffer[] = []): string {
+function supf(version: 3 | 5): Buffer {
+  const license = Buffer.alloc(12);
+  license[0] = version;
+  license.write('612', 1, 3, 'ascii');
+  license.writeUInt32BE(1, 8);
+  return license;
+}
+
+function createIpaWithLicenses(sinfs: Buffer[], supfs: Buffer[] = [], sinfSuffix = '.sinf', supfSuffix = '.supf'): string {
   const directory = mkdtempSync(path.join(tmpdir(), 'dkrypt-fairplay-compatibility-'));
   const ipaPath = path.join(directory, 'app.ipa');
   const archive = new AdmZip();
   archive.addFile('Payload/Example.app/Info.plist', Buffer.from(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Example</string></dict></plist>`));
   archive.addFile('Payload/Example.app/Example', machO(1));
-  sinfs.forEach((license, index) => archive.addFile(`Payload/Example.app/SC_Info/Example${index}.sinf`, license));
-  supfs.forEach((license, index) => archive.addFile(`Payload/Example.app/SC_Info/Example${index}.supf`, license));
+  sinfs.forEach((license, index) => archive.addFile(`Payload/Example.app/SC_Info/Example${index}${sinfSuffix}`, license));
+  supfs.forEach((license, index) => archive.addFile(`Payload/Example.app/SC_Info/Example${index}${supfSuffix}`, license));
   archive.writeZip(ipaPath);
   return ipaPath;
 }
@@ -145,12 +153,31 @@ test('FairPlay compatibility accepts multiple SINF files with one shared selecto
   }
 });
 
-test('FairPlay compatibility rejects multiple selectors and SUPF licenses', () => {
+test('FairPlay compatibility accepts SUPF licenses paired with versioned SINF selectors', () => {
+  const ipaPath = createIpaWithLicenses(
+    [sinf([1, 2, 3, 4], [5, 6, 7, 8])],
+    [supf(5)],
+    '.v4.sinf',
+    '.v5.supf',
+  );
+  try {
+    expect(inspectIpaFairPlayCompatibility(ipaPath)).toMatchObject({
+      supported: true,
+      licenseFormat: 'supf',
+      architectures: ['arm64'],
+      selector: getIpaFairPlayLicenseSelector(ipaPath),
+    });
+  } finally {
+    rmSync(path.dirname(ipaPath), { recursive: true, force: true });
+  }
+});
+
+test('FairPlay compatibility rejects multiple selectors and unsupported SUPF formats', () => {
   const differentSelectorsPath = createIpaWithLicenses([
     sinf([1, 2, 3, 4], [5, 6, 7, 8]),
     sinf([1, 2, 3, 4], [8, 7, 6, 5]),
   ]);
-  const supfPath = createIpaWithLicenses([], [Buffer.from('supf')]);
+  const supfPath = createIpaWithLicenses([sinf([1, 2, 3, 4], [5, 6, 7, 8])], [Buffer.from('supf')]);
   try {
     expect(inspectIpaFairPlayCompatibility(differentSelectorsPath)).toMatchObject({
       supported: false,
@@ -159,7 +186,7 @@ test('FairPlay compatibility rejects multiple selectors and SUPF licenses', () =
     expect(inspectIpaFairPlayCompatibility(supfPath)).toMatchObject({
       supported: false,
       licenseFormat: 'supf',
-      reason: 'SUPF licenses are not supported by the current server decryptor',
+      reason: 'SUPF license format is not supported by the current server decryptor',
     });
   } finally {
     rmSync(path.dirname(differentSelectorsPath), { recursive: true, force: true });

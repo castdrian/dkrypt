@@ -134,6 +134,18 @@ function selectorFromSinf(sinf: Buffer): string {
   return createHash('sha256').update(user).update(key).digest('hex');
 }
 
+function isSupportedSupf(supf: Buffer): boolean {
+  const version = supf[0];
+  const format = supf.toString('ascii', 1, 4);
+  const architectureCount = readUInt32(supf, 8, false);
+  return supf.length >= 12
+    && (version === 3 || version === 5)
+    && ['507', '510', '612'].includes(format)
+    && architectureCount !== undefined
+    && architectureCount > 0
+    && architectureCount <= 16;
+}
+
 export function inspectIpaFairPlayCompatibility(ipaPath: string): IpaFairPlayCompatibility {
   const archive = new AdmZip(ipaPath);
   const entries = archive.getEntries().filter((entry) => !entry.isDirectory);
@@ -148,11 +160,17 @@ export function inspectIpaFairPlayCompatibility(ipaPath: string): IpaFairPlayCom
   const architectureNames = new Map<number, string>([[0x0100000c, 'arm64'], [0x01000007, 'x86_64'], [12, 'arm'], [7, 'i386']]);
   const architectures = [...new Set(slices.map((slice) => architectureNames.get(slice.cpuType) ?? `cpu-${slice.cpuType}`))];
   const licenseDirectory = `Payload/${appRoot}/SC_Info/`;
-  const sinfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.sinf') && !entry.entryName.endsWith('.v4.sinf'));
-  const supfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.supf'));
+  const sinfEntries = entries.filter((entry) => (
+    entry.entryName.startsWith(licenseDirectory)
+    && entry.entryName.endsWith('.sinf')
+  ));
+  const supfEntries = entries.filter((entry) => (
+    entry.entryName.startsWith(licenseDirectory)
+    && entry.entryName.endsWith('.supf')
+  ));
   const licenseFormat = supfEntries.length > 0 ? 'supf' : sinfEntries.length > 0 ? 'sinf' : 'unknown';
-  if (supfEntries.length > 0) {
-    return { supported: false, licenseFormat, architectures, reason: 'SUPF licenses are not supported by the current server decryptor' };
+  if (supfEntries.length > 0 && !supfEntries.some((entry) => isSupportedSupf(entry.getData()))) {
+    return { supported: false, licenseFormat, architectures, reason: 'SUPF license format is not supported by the current server decryptor' };
   }
   if (sinfEntries.length === 0) return { supported: false, licenseFormat, architectures, reason: 'IPA does not contain a supported SINF license' };
   if (!architectures.includes('arm64')) return { supported: false, licenseFormat, architectures, reason: 'primary executable has no supported arm64 slice' };
@@ -174,7 +192,6 @@ export function getIpaFairPlayLicenseSelector(ipaPath: string): string {
   const sinfEntries = entries.filter((entry) => (
     entry.entryName.startsWith(`Payload/${appRoot}/SC_Info/`)
     && entry.entryName.endsWith('.sinf')
-    && !entry.entryName.endsWith('.v4.sinf')
   ));
   const selectors = new Set(sinfEntries.map((entry) => selectorFromSinf(entry.getData())));
   if (selectors.size === 0) throw new Error('downloaded IPA does not contain a supported FairPlay license selector');
