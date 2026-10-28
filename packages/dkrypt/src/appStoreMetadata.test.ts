@@ -225,10 +225,10 @@ describe('iTunes storefront selection', () => {
     { platform: 'tvos' as const, family: 'tvos', attribute: 'appletvos', requestedPlatform: 'appletv', version: '24.2', minimumOsVersion: '17.0' },
     { platform: 'visionos' as const, family: 'realityDevice', attribute: 'xros', requestedPlatform: 'realityDevice', version: '5.20.1', minimumOsVersion: '2.0' },
   ])('resolves the current $platform release from its platform-specific catalog history', async (fixture) => {
-    const requests: URL[] = [];
-    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    const requests: Array<{ url: URL; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = new URL(String(input));
-      requests.push(url);
+      requests.push({ url, init });
       if (url.pathname === '/lookup') {
         return new Response(JSON.stringify({
           resultCount: 1,
@@ -271,8 +271,11 @@ describe('iTunes storefront selection', () => {
         version: fixture.version,
         minimumOsVersion: fixture.minimumOsVersion,
       });
-      expect(requests[1]?.searchParams.get('platform')).toBe(fixture.requestedPlatform);
-      expect(requests[1]?.searchParams.get('extend')).toBe('versionHistory');
+      expect(requests[1]?.url.searchParams.get('platform')).toBe(fixture.requestedPlatform);
+      expect(requests[1]?.url.searchParams.get('extend')).toBe('versionHistory');
+      const catalogHeaders = new Headers(requests[1]?.init?.headers);
+      expect(catalogHeaders.get('accept')).toBe('application/json');
+      expect(catalogHeaders.get('user-agent')).toMatch(/^Mozilla\/5\.0 \(Macintosh;/);
     } finally {
       restoreFetch();
     }

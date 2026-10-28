@@ -5,6 +5,11 @@ import type { AppStorePlatform } from '#platform.js';
 
 const DEFAULT_ITUNES_COUNTRY = 'US';
 const DEFAULT_ITUNES_LANGUAGE = 'en_us';
+const PLATFORM_CATALOG_HEADERS = {
+  accept: 'application/json',
+  'accept-language': 'en-US,en;q=0.9',
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+};
 
 export async function defaultStorefrontCountry(): Promise<string> {
   let status: ReturnType<typeof getAppleAccountVaultStatus>;
@@ -125,7 +130,7 @@ export async function lookupCurrentPlatformVersion(bundleId: string, platform: E
   catalogUrl.searchParams.set('platform', platform === 'tvos' ? 'appletv' : 'realityDevice');
   catalogUrl.searchParams.set('extend', 'versionHistory');
   throwIfAborted(signal);
-  const response = await fetch(catalogUrl, { signal: signal ?? AbortSignal.timeout(8000) });
+  const response = await fetch(catalogUrl, { headers: PLATFORM_CATALOG_HEADERS, signal: signal ?? AbortSignal.timeout(8000) });
   throwIfAborted(signal);
   if (!response.ok) throw new Error(`App Store ${platform} version lookup failed: HTTP ${response.status}`);
   const body = await response.json() as {
