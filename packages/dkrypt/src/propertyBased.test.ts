@@ -67,6 +67,9 @@ function sortById<T extends { id: string }>(records: T[]): T[] {
 }
 
 function restoreSchemaAtVersion(database: ReturnType<typeof openStateDatabase>, version: number): void {
+  if (version < 38) {
+    database.db.exec('DROP INDEX IF EXISTS cloud_delivery_jobs_by_owner; DROP INDEX IF EXISTS cloud_delivery_jobs_by_retry; DROP TABLE IF EXISTS cloud_delivery_jobs; DROP INDEX IF EXISTS cloud_delivery_destinations_by_owner; DROP TABLE IF EXISTS cloud_delivery_destinations;');
+  }
   if (version < 37) {
     database.db.exec('DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_expiry; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_turnstile; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_browser; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_address; DROP INDEX IF EXISTS free_decrypt_abuse_quota_by_network; DROP TABLE IF EXISTS free_decrypt_abuse_quota;');
   }

@@ -67,6 +67,11 @@ test('deployment preflight dry-runs and restores a database without changing the
       ALTER TABLE billing_events DROP COLUMN processed_at;
       DROP TABLE job_worker_leases;
       DROP TABLE job_worker_generations;
+      DROP INDEX cloud_delivery_jobs_by_owner;
+      DROP INDEX cloud_delivery_jobs_by_retry;
+      DROP TABLE cloud_delivery_jobs;
+      DROP INDEX cloud_delivery_destinations_by_owner;
+      DROP TABLE cloud_delivery_destinations;
       DELETE FROM schema_migrations WHERE version > 16;
     `);
 
