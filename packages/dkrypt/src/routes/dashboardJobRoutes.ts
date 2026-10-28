@@ -4,11 +4,13 @@ import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { dashboardHistoryEntry } from '#dashboardJobPresentation.js';
 import { getRouteContract } from '#contracts.js';
 import { jobSummary } from '#jobs/http.js';
-import { getJob } from '#jobs/store.js';
+import { getJob, retainFreeJobResult } from '#jobs/store.js';
+import { getBillingEntitlements } from '#billing.js';
 import type { Job, JobExecutionStage } from '#jobs/types.js';
 import type { DeviceTransport } from '#apiCommonContracts.js';
 import { getFailureGuidance } from '#util/failureGuidance.js';
-import { fastifyRequireSession, getFastifySession } from '#session.js';
+import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
+import { PermissionFlag } from '#permissions.js';
 import { getJobHistoryEntryById, getJobHistoryPage } from '#store/state.js';
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { getOfflineAppStoreReadiness } from '#offlineAppStore.js';
@@ -48,9 +50,10 @@ type TimelineSource = {
   finishedAt?: number;
   error?: string;
   filePath?: string;
+  quotaReservationState?: 'reserved' | 'consumed' | 'released';
 };
 
-function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number }, memberView = false) {
+function dashboardJobTimeline(source: TimelineSource, quotaReceipt?: { state: 'reserved' | 'consumed' | 'released'; admittedAt: number }, memberView = false) {
   const events = source.timeline ?? [
     { at: source.createdAt, label: 'Queued', status: 'queued' as const },
     ...(source.startedAt !== undefined ? [{ at: source.startedAt, label: `Started on ${source.deviceId ?? 'unknown device'}`, status: 'running' as const }] : []),
@@ -178,13 +181,33 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
     await streamJobFile(job, request.raw, new Response(reply), false);
   });
 
+  server.post('/v1/dashboard/jobs/:id/retain', {
+    schema: getRouteContract('POST', '/v1/dashboard/jobs/:id/retain'),
+    preHandler: [fastifyRequirePermission(PermissionFlag.requestDecrypt)],
+  }, async (request, reply) => {
+    const session = getFastifySession(request)!;
+    const job = getJob((request.params as { id: string }).id);
+    if (!job || !job.freeTierResult || job.billingOwnerId?.toLowerCase() !== session.sub.toLowerCase()) {
+      return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'temporary result not found'));
+    }
+    const entitlement = getBillingEntitlements(session.sub);
+    if (!entitlement.decrypt || entitlement.freeTier) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'an active paid plan is required to keep this result'));
+    if (job.status !== 'done') return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'this result is not ready to keep'));
+    if (job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) {
+      return reply.code(410).send(createHttpErrorEnvelope(request.id, 410, 'the temporary download window has expired'));
+    }
+    const retained = await retainFreeJobResult(job.id, session.sub);
+    if (!retained) return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'this result is no longer available to keep'));
+    return { artifactId: retained.artifactId, fileAvailable: true };
+  });
+
   server.get<DashboardJobTimelineRoute>('/v1/dashboard/jobs/:id/timeline', { schema: getRouteContract('GET', '/v1/dashboard/jobs/:id/timeline') }, async (request, reply) => {
     const session = getFastifySession(request)!;
     const active = getJob(request.params.id);
     const memberView = !canViewOperationalDashboard(session.permissions);
     if (active) {
       if (!canViewJobForUser(active, session.sub, session.permissions)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
-      return dashboardJobTimeline(active, getDecryptQuotaReceipt(active.id, session.sub), memberView);
+      return dashboardJobTimeline(active, getDecryptQuotaReceipt(active.id, session.sub) ?? (active.quotaReservationState ? { state: active.quotaReservationState, admittedAt: active.createdAt } : undefined), memberView);
     }
 
     const entry = getJobHistoryEntryById(request.params.id);
@@ -192,6 +215,6 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
     }
     if (!canViewJobForUser(entry, session.sub, session.permissions)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'job not found'));
-    return dashboardJobTimeline(entry, getDecryptQuotaReceipt(entry.id, session.sub), memberView);
+    return dashboardJobTimeline(entry, getDecryptQuotaReceipt(entry.id, session.sub) ?? (entry.quotaReservationState ? { state: entry.quotaReservationState, admittedAt: entry.createdAt } : undefined), memberView);
   });
 };

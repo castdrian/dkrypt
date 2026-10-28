@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Copy, Download, FileSearch, GitBranch, Mail } from 'lucide-svelte';
   import Alert from '#lib/components/ui/Alert.svelte';
-  import { fetchJobResolutionNotice, fetchJobTimeline, jobDiagnosticUrl, sendJobResolutionNotice, type JobResolutionNoticePreview, type JobTimeline } from '#lib/api';
+import { fetchJobResolutionNotice, fetchJobTimeline, jobDiagnosticUrl, retryJob, sendJobResolutionNotice, type JobResolutionNoticePreview, type JobTimeline } from '#lib/api';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
   import InspectorPane from '#components/InspectorPane.svelte';
@@ -19,6 +19,7 @@
   let resolutionDialogOpen = $state(false);
   let sendingResolution = $state(false);
   let copyingApiRequest = $state(false);
+  let retrying = $state(false);
 
   async function load(): Promise<void> {
     if (!jobId) return;
@@ -90,6 +91,22 @@
     }
   }
 
+  async function retryExactRequest(): Promise<void> {
+    retrying = true;
+    try {
+      const result = await retryJob(jobId);
+      if (!result.ok) {
+        showToast("Couldn't retry this decrypt", 'error');
+        return;
+      }
+      showToast('Your original decrypt request was queued again', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Couldn't retry this decrypt", 'error');
+    } finally {
+      retrying = false;
+    }
+  }
+
   function eventDurationWidth(durationMs: number | undefined): string {
     const durations = timeline?.events.flatMap((event) => event.durationMs === undefined ? [] : [event.durationMs]) ?? [];
     const largest = Math.max(1, ...durations);
@@ -152,8 +169,13 @@
     {/if}
     {#if timeline.quotaReceipt}
       <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 px-3 py-2 text-xs">
-        <span class="font-medium">Decrypt allowance</span>
-        <span class="text-muted">{timeline.quotaReceipt.state === 'consumed' ? 'This job used one daily decrypt' : 'One daily decrypt is reserved for this job'} · admitted {fmtTime(timeline.quotaReceipt.admittedAt)}</span>
+        <div>
+          <span class="font-medium">Decrypt allowance</span>
+          <span class="ml-2 text-muted">{timeline.quotaReceipt.state === 'consumed' ? 'This job used one decrypt from your allowance' : timeline.quotaReceipt.state === 'released' ? 'Your allowance was restored after this failure' : 'One decrypt is reserved for this job'} · admitted {fmtTime(timeline.quotaReceipt.admittedAt)}</span>
+        </div>
+        {#if timeline.status === 'failed' && timeline.quotaReceipt.state === 'released' && sessionHasPermission(PermissionFlag.requestDecrypt)}
+          <Button size="sm" variant="secondary" loading={retrying} onclick={() => void retryExactRequest()}>Retry this request</Button>
+        {/if}
       </div>
     {/if}
     {#if timeline.warnings?.length}

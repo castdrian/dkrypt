@@ -64,6 +64,7 @@ export async function createCryptoCheckout(input: {
   planId: Exclude<PlanId, 'viewer'>;
   idempotencyKey: string;
   asset?: string;
+  preserveResultId?: string;
 }): Promise<CryptoCheckoutResult> {
   const existing = findCryptoCheckout(input.userId, input.idempotencyKey);
   if (existing) return { checkout: existing, reused: true };
@@ -99,8 +100,8 @@ export async function createCryptoCheckout(input: {
       orderId,
       orderDescription: `dkrypt ${plan.name} plan`,
       ipnCallbackUrl: `${config.publicBaseUrl}/v1/nowpayments/webhook`,
-      successUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=success`,
-      cancelUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=cancelled`,
+      successUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=success${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}`,
+      cancelUrl: `${config.publicBaseUrl}/?tab=billing&crypto_checkout=cancelled${input.preserveResultId ? `&preserveResult=${encodeURIComponent(input.preserveResultId)}` : ''}`,
     });
     const checkout = checkoutFromResponse(response, {
       checkoutId: orderId,

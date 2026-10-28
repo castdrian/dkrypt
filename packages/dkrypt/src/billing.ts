@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { openStateCollectionDatabase, writeStateMirror, type StateCollectionReplacement } from '#store/sqlite.js';
@@ -169,6 +169,22 @@ export interface BillingAccessCode {
   redeemedAt?: string;
   expiresAt?: string;
   revokedAt?: string;
+  purchaseStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
+  purchaserId?: string;
+  purchaseIdempotencyKey?: string;
+  checkoutSessionId?: string;
+  paymentIntentId?: string;
+  encryptedCode?: { iv: string; tag: string; ciphertext: string };
+}
+
+export interface PurchasedBillingGift {
+  id: string;
+  planId: string;
+  durationDays: number;
+  createdAt: string;
+  redeemBy: string;
+  status: 'pending_payment' | 'payment_failed' | 'available' | 'redeemed' | 'expired' | 'revoked';
+  code?: string;
 }
 
 export const STRIPE_CHECKOUT_IDEMPOTENCY_TTL_MS = 23 * 60 * 60 * 1000;
@@ -467,6 +483,11 @@ export function anonymizeBillingUser(userId: string): void {
       accessCode.createdBy = undefined;
       changed = true;
     }
+    if (accessCode.purchaserId === userId) {
+      accessCode.purchaserId = undefined;
+      accessCode.purchaseIdempotencyKey = undefined;
+      changed = true;
+    }
     if (accessCode.redeemedBy === userId) {
       accessCode.redeemedBy = undefined;
       changed = true;
@@ -558,8 +579,113 @@ export function createBillingAccessCode(input: { planId: string; durationDays: n
   return { code, accessCode: structuredClone(accessCode) };
 }
 
-export function listBillingAccessCodes(): Array<Omit<BillingAccessCode, 'codeHash'>> {
-  return (state.accessCodes ?? []).map(({ codeHash: _codeHash, ...accessCode }) => structuredClone(accessCode));
+export function billingGiftPurchasesEnabled(): boolean {
+  return config.billingGiftEncryptionSecret.length >= 32;
+}
+
+export function createPurchasedBillingGift(input: { planId: string; months: number; purchaserId: string; idempotencyKey: string; now?: number }): BillingAccessCode | undefined {
+  const plan = planDefinitions.find((definition) => definition.id === input.planId);
+  if (!billingGiftPurchasesEnabled() || !plan || plan.legacy || ![1, 3, 6, 12].includes(input.months) || !input.purchaserId || !input.idempotencyKey) return undefined;
+  state.accessCodes ??= [];
+  const existing = state.accessCodes.find((accessCode) => accessCode.purchaserId === input.purchaserId && accessCode.purchaseIdempotencyKey === input.idempotencyKey);
+  if (existing) return structuredClone(existing);
+  const code = formatBillingAccessCode(randomBytes(16).toString('hex'));
+  const normalized = normalizeBillingAccessCode(code);
+  const now = input.now ?? Date.now();
+  const accessCode: BillingAccessCode = {
+    id: `gift_${randomBytes(12).toString('hex')}`,
+    codeHash: hashBillingAccessCode(normalized),
+    prefix: `${code.slice(0, 12)}…`,
+    planId: plan.id,
+    durationDays: input.months * 30,
+    redeemBy: new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    createdBy: input.purchaserId,
+    createdAt: new Date(now).toISOString(),
+    purchaseStatus: 'pending',
+    purchaserId: input.purchaserId,
+    purchaseIdempotencyKey: input.idempotencyKey,
+    encryptedCode: encryptBillingGiftCode(code),
+  };
+  state.accessCodes.push(accessCode);
+  persist();
+  emitBillingChanged();
+  return structuredClone(accessCode);
+}
+
+export function setPurchasedBillingGiftCheckout(id: string, purchaserId: string, checkoutSessionId: string): boolean {
+  const accessCode = (state.accessCodes ?? []).find((candidate) => candidate.id === id && candidate.purchaserId === purchaserId);
+  if (!accessCode || accessCode.purchaseStatus !== 'pending') return false;
+  if (accessCode.checkoutSessionId && accessCode.checkoutSessionId !== checkoutSessionId) return false;
+  accessCode.checkoutSessionId = checkoutSessionId;
+  persist();
+  return true;
+}
+
+export function fulfillPurchasedBillingGift(input: { id: string; purchaserId: string; checkoutSessionId: string; paymentIntentId?: string }): 'paid' | 'refunded' | undefined {
+  const accessCode = (state.accessCodes ?? []).find((candidate) => candidate.id === input.id && candidate.purchaserId === input.purchaserId);
+  if (!accessCode || accessCode.revokedAt && accessCode.purchaseStatus !== 'refunded' || accessCode.checkoutSessionId && accessCode.checkoutSessionId !== input.checkoutSessionId) return undefined;
+  if (accessCode.purchaseStatus === 'refunded') return accessCode.paymentIntentId === input.paymentIntentId ? 'refunded' : undefined;
+  if (accessCode.purchaseStatus === 'paid') return accessCode.paymentIntentId === input.paymentIntentId || !accessCode.paymentIntentId ? 'paid' : undefined;
+  if (accessCode.purchaseStatus !== 'pending') return undefined;
+  accessCode.purchaseStatus = 'paid';
+  accessCode.checkoutSessionId = input.checkoutSessionId;
+  accessCode.paymentIntentId = input.paymentIntentId;
+  persist();
+  emitBillingChanged();
+  return 'paid';
+}
+
+export function failPurchasedBillingGiftCheckout(checkoutSessionId: string, giftId?: string): boolean {
+  const accessCode = (state.accessCodes ?? []).find((candidate) => candidate.id === giftId || candidate.checkoutSessionId === checkoutSessionId);
+  if (!accessCode || accessCode.purchaseStatus !== 'pending') return false;
+  accessCode.purchaseStatus = 'failed';
+  persist();
+  emitBillingChanged();
+  return true;
+}
+
+export function refundPurchasedBillingGift(paymentIntentId: string, giftId?: string): BillingAccessCode | undefined {
+  const accessCode = (state.accessCodes ?? []).find((candidate) =>
+    (candidate.paymentIntentId === paymentIntentId || candidate.id === giftId)
+    && ['pending', 'paid', 'refunded'].includes(candidate.purchaseStatus ?? ''),
+  );
+  if (!accessCode) return undefined;
+  if (accessCode.purchaseStatus === 'refunded') return structuredClone(accessCode);
+  accessCode.purchaseStatus = 'refunded';
+  accessCode.paymentIntentId = paymentIntentId;
+  accessCode.revokedAt = new Date().toISOString();
+  persist();
+  emitBillingChanged();
+  return structuredClone(accessCode);
+}
+
+export function listPurchasedBillingGifts(purchaserId: string, now = Date.now()): PurchasedBillingGift[] {
+  return (state.accessCodes ?? []).filter((accessCode) => accessCode.purchaserId === purchaserId).map((accessCode) => {
+    const status: PurchasedBillingGift['status'] = accessCode.purchaseStatus === 'failed'
+        ? 'payment_failed'
+        : accessCode.revokedAt || accessCode.purchaseStatus === 'refunded'
+          ? 'revoked'
+        : accessCode.purchaseStatus !== 'paid'
+          ? 'pending_payment'
+          : accessCode.redeemedAt
+            ? 'redeemed'
+            : Date.parse(accessCode.redeemBy) <= now
+              ? 'expired'
+              : 'available';
+    return {
+      id: accessCode.id,
+      planId: accessCode.planId,
+      durationDays: accessCode.durationDays,
+      createdAt: accessCode.createdAt,
+      redeemBy: accessCode.redeemBy,
+      status,
+      code: status === 'available' && accessCode.encryptedCode ? decryptBillingGiftCode(accessCode.encryptedCode) : undefined,
+    };
+  }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function listBillingAccessCodes(): Array<Omit<BillingAccessCode, 'codeHash' | 'encryptedCode' | 'purchaseIdempotencyKey' | 'checkoutSessionId' | 'paymentIntentId'>> {
+  return (state.accessCodes ?? []).map(({ codeHash: _codeHash, encryptedCode: _encryptedCode, purchaseIdempotencyKey: _purchaseIdempotencyKey, checkoutSessionId: _checkoutSessionId, paymentIntentId: _paymentIntentId, ...accessCode }) => structuredClone(accessCode));
 }
 
 export function revokeBillingAccessCode(id: string, now = Date.now()): BillingAccessCode | undefined {
@@ -581,7 +707,7 @@ export function redeemBillingAccessCode(inputCode: string, userId: string, now =
     const matches = storedHash.length === candidateHash.length && timingSafeEqual(storedHash, candidateHash);
     if (matches) selected = accessCode;
   }
-  if (!selected || selected.redeemedAt || selected.revokedAt || Date.parse(selected.redeemBy) <= now) return { error: 'invalid_or_expired' };
+  if (!selected || selected.redeemedAt || selected.revokedAt || (selected.purchaseStatus !== undefined && selected.purchaseStatus !== 'paid') || Date.parse(selected.redeemBy) <= now) return { error: 'invalid_or_expired' };
   selected.redeemedBy = userId;
   selected.redeemedAt = new Date(now).toISOString();
   selected.expiresAt = new Date(now + selected.durationDays * 24 * 60 * 60 * 1000).toISOString();
@@ -606,6 +732,28 @@ function formatBillingAccessCode(value: string): string {
 
 function hashBillingAccessCode(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function billingGiftEncryptionKey(): Buffer {
+  if (!billingGiftPurchasesEnabled()) throw new Error('paid gift code encryption is not configured');
+  return createHash('sha256').update(config.billingGiftEncryptionSecret).digest();
+}
+
+function encryptBillingGiftCode(code: string): NonNullable<BillingAccessCode['encryptedCode']> {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', billingGiftEncryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(code, 'utf8'), cipher.final()]);
+  return { iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), ciphertext: ciphertext.toString('base64url') };
+}
+
+function decryptBillingGiftCode(encrypted: NonNullable<BillingAccessCode['encryptedCode']>): string | undefined {
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', billingGiftEncryptionKey(), Buffer.from(encrypted.iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, 'base64url')), decipher.final()]).toString('utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 export function hasActiveBillingSubscription(userId: string, now = Date.now()): boolean {
@@ -679,6 +827,10 @@ export function mergeBillingAccounts(targetUserId: string, sourceUserId: string)
     }
     if (accessCode.createdBy === sourceUserId) {
       accessCode.createdBy = targetUserId;
+      changed = true;
+    }
+    if (accessCode.purchaserId === sourceUserId) {
+      accessCode.purchaserId = targetUserId;
       changed = true;
     }
   }
@@ -970,7 +1122,14 @@ function isBillingAccessCode(value: unknown): value is BillingAccessCode {
     && (record.redeemedBy === undefined || typeof record.redeemedBy === 'string')
     && (record.redeemedAt === undefined || (typeof record.redeemedAt === 'string' && Number.isFinite(Date.parse(record.redeemedAt))))
     && (record.expiresAt === undefined || (typeof record.expiresAt === 'string' && Number.isFinite(Date.parse(record.expiresAt))))
-    && (record.revokedAt === undefined || (typeof record.revokedAt === 'string' && Number.isFinite(Date.parse(record.revokedAt))));
+    && (record.revokedAt === undefined || (typeof record.revokedAt === 'string' && Number.isFinite(Date.parse(record.revokedAt))))
+    && (record.purchaseStatus === undefined || ['pending', 'paid', 'failed', 'refunded'].includes(String(record.purchaseStatus)))
+    && (record.purchaserId === undefined || typeof record.purchaserId === 'string')
+    && (record.purchaseIdempotencyKey === undefined || typeof record.purchaseIdempotencyKey === 'string')
+    && (record.checkoutSessionId === undefined || typeof record.checkoutSessionId === 'string')
+    && (record.paymentIntentId === undefined || typeof record.paymentIntentId === 'string')
+    && (record.encryptedCode === undefined || typeof record.encryptedCode === 'object' && record.encryptedCode !== null && typeof (record.encryptedCode as Record<string, unknown>).iv === 'string' && typeof (record.encryptedCode as Record<string, unknown>).tag === 'string' && typeof (record.encryptedCode as Record<string, unknown>).ciphertext === 'string')
+    && (record.purchaserId === undefined || record.purchaseStatus !== undefined && record.encryptedCode !== undefined);
 }
 
 function isStripeCheckoutIdempotencyAttempt(value: unknown): value is StripeCheckoutIdempotencyAttempt {

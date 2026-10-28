@@ -84,6 +84,7 @@ Copy `.env.example` to `.env` and configure the required values. The important r
 | `DISCORD_OAUTH_CLIENT_SECRET_PREVIOUS` | Previous Discord OAuth secret retained during a provider-supported rotation window |
 | `STRIPE_SECRET_KEY` | Current Stripe API secret key |
 | `STRIPE_SECRET_KEY_PREVIOUS` | Previous Stripe API key tried only after an explicit HTTP 401 authentication rejection from the current key |
+| `BILLING_GIFT_ENCRYPTION_SECRET` | Stable secret used to encrypt paid gift codes; keep it outside backups and preserve it when restoring billing data |
 | `NOWPAYMENTS_API_KEY` | Current NOWPayments API credential |
 | `NOWPAYMENTS_API_KEY_PREVIOUS` | Previous NOWPayments API key tried only after HTTP 401 from the current key |
 | `APPSTORE_OFFLINE_AUTHENTICATION_TIMEOUT_SECONDS` | Maximum Apple Account sign-in time; defaults to 300 seconds and is bounded to 60–900 seconds |
@@ -161,7 +162,7 @@ Do not copy database files while the service is running. Use the dashboard backu
 <details>
 <summary>Stripe billing</summary>
 
-Stripe remains the card and bank payment path. Configure the live Stripe secret, recurring price IDs, webhook secret, and tax settings in the runtime environment. Rotate API keys with `STRIPE_SECRET_KEY_PREVIOUS` during the overlap window; webhook signing-secret rotation remains separate. Stripe readiness is visible in the manager billing view and the configuration doctor.
+Stripe remains the card and bank payment path. Configure the live Stripe secret, recurring price IDs, webhook secret, and tax settings in the runtime environment. Set `BILLING_GIFT_ENCRYPTION_SECRET` to a stable random secret of at least 32 characters to enable one-time paid gift codes; keep it outside backups and preserve it when restoring billing data so gift codes can still be revealed to their purchasers. Rotate API keys with `STRIPE_SECRET_KEY_PREVIOUS` during the overlap window; webhook signing-secret rotation remains separate. Stripe readiness is visible in the manager billing view and the configuration doctor.
 
 The current catalog has six tiers: Access (€2.50, two new decrypts per rolling 24 hours), Standard (€5, ten), Plus (€10, 25), Developer (€15, 50 and 30 API requests/minute), Unlimited (€20, unlimited and 60 API requests/minute), and Unlimited Priority (€30, unlimited, 120 API requests/minute, and higher queue priority). Every new tier includes IPA Library access. Library downloads, exact cached results, duplicate active jobs, and internal retries do not use a decrypt slot. API limits are per account across all keys, in addition to key-specific limits.
 

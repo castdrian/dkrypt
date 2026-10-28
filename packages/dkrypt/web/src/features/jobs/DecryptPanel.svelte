@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from "svelte";
 	import { CircleAlert, Clock3, Ellipsis, FlaskConical, History, Link2, RefreshCw, Star, X } from "lucide-svelte";
 	import BatchDecryptDialog from "#components/BatchDecryptDialog.svelte";
 	import CopyButton from "#components/CopyButton.svelte";
@@ -6,7 +7,9 @@
 	import JobPreflightDialog from "#components/JobPreflightDialog.svelte";
 	import {
 		fetchDecryptPreflight,
+		fetchAppStorefrontContext,
 		fetchJobEta,
+		lookupAppStoreTrack,
 		queueDecrypt,
 		queueTestFlightDecrypt,
 		searchApps,
@@ -57,6 +60,9 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 	let loading = $state(false);
 	let searched = $state(false);
 	let highlighted = $state(-1);
+	let storefrontCountry = $state("");
+	let accountStorefrontCountry = $state<string | undefined>();
+	let storefrontCountries = $state<Array<{ code: string; name: string }>>([]);
 	let inputEl: HTMLInputElement | undefined = $state();
 	let searchToken = 0;
 	let queueing = $state<Set<string>>(new Set());
@@ -84,6 +90,34 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 
 	async function runSearch(q: string): Promise<void> {
 		const trimmed = q.trim();
+		const sharedUrl = trimmed.match(/https?:\/\/[^\s<>]+/i)?.[0]?.replace(/[),.;!?]+$/, "");
+		if (sharedUrl) {
+			try {
+				const url = new URL(sharedUrl);
+				const hostname = url.hostname.replace(/^www\./, "");
+				if (hostname === "testflight.apple.com" && /^\/join\/[A-Za-z0-9]+\/?$/.test(url.pathname)) {
+					if (!canRequestTestFlight) {
+						showToast("You don’t have permission to request TestFlight apps", "error");
+						return;
+					}
+					inviteInitialUrl = url.toString();
+					inviteDialogOpen = true;
+					return;
+				}
+				if (["apps.apple.com", "itunes.apple.com"].includes(hostname)) {
+					const trackId = url.pathname.match(/(?:^|\/)id(\d+)(?:\/|$)/)?.[1];
+					if (trackId) {
+						const lookup = await lookupAppStoreTrack(Number(trackId));
+						term = lookup.bundleId;
+						void runSearch(lookup.bundleId);
+						return;
+					}
+				}
+			} catch {
+				showToast("That Apple app link couldn’t be opened", "error");
+				return;
+			}
+		}
 		const token = ++searchToken;
 		if (!trimmed) {
 			results = [];
@@ -92,7 +126,7 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 		}
 		loading = true;
 		try {
-			const data = await searchApps(trimmed);
+			const data = await searchApps(trimmed, storefrontCountry || undefined);
 			if (token !== searchToken) return;
 			if ("error" in data) {
 				showToast(data.error, "error");
@@ -117,6 +151,32 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 		} finally {
 			if (token === searchToken) loading = false;
 		}
+	}
+
+	function submitSharedValue(value: string): void {
+		const trimmed = value.trim();
+		if (!trimmed) return;
+		term = trimmed;
+		void runSearch(trimmed);
+	}
+
+	onMount(() => {
+		void fetchAppStorefrontContext().then((context) => {
+			storefrontCountries = context.countries;
+			accountStorefrontCountry = context.accountCountry;
+		}).catch(() => {});
+		const params = new URLSearchParams(location.search);
+		const sharedValue = params.get("url") || params.get("text") || params.get("title");
+		if (sharedValue) {
+			for (const key of ["url", "text", "title"]) params.delete(key);
+			const query = params.toString();
+			history.replaceState(history.state, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
+			submitSharedValue(sharedValue);
+		}
+	});
+
+	function onStorefrontChange(): void {
+		if (term.trim()) void runSearch(term);
 	}
 
 	const debouncedSearch = debounce((q: string) => void runSearch(q), 400);
@@ -456,7 +516,7 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 			bind:value={term}
 			oninput={onInput}
 			onkeydown={onKeydown}
-			placeholder="Search the App Store to decrypt… (press / to focus)"
+			placeholder="Search or paste an App Store or TestFlight link…"
 			class={term ? "pr-8" : ""}
 		/>
 		{#if term}
@@ -472,6 +532,20 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 			</Button>
 		{/if}
 	</div>
+	{#if storefrontCountries.length > 0}
+		<div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+			<label for="decrypt-storefront" class="text-muted">Search storefront</label>
+			<select id="decrypt-storefront" bind:value={storefrontCountry} onchange={onStorefrontChange} class="h-8 max-w-full rounded-md border border-border bg-panel px-2 text-xs text-text">
+				<option value="">Apple Account{accountStorefrontCountry ? ` · ${accountStorefrontCountry}` : " · default"}</option>
+				{#each storefrontCountries as country (country.code)}
+					<option value={country.code}>{country.name} ({country.code})</option>
+				{/each}
+			</select>
+			{#if storefrontCountry && storefrontCountry !== accountStorefrontCountry}
+				<span class="text-muted">Results use this storefront; downloads still use your Apple Account storefront.</span>
+			{/if}
+		</div>
+	{/if}
 
 	{#if canDecrypt}
 		<div class="mt-2.5 flex flex-wrap items-center gap-2 sm:hidden">

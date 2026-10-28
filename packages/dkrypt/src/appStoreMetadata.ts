@@ -5,7 +5,7 @@ import { getAppleAccountVaultStatus } from '#appleAccountVault.js';
 const DEFAULT_ITUNES_COUNTRY = 'US';
 const DEFAULT_ITUNES_LANGUAGE = 'en_us';
 
-async function defaultStorefrontCountry(): Promise<string> {
+export async function defaultStorefrontCountry(): Promise<string> {
   let status: ReturnType<typeof getAppleAccountVaultStatus>;
   try {
     status = getAppleAccountVaultStatus();
@@ -178,8 +178,9 @@ interface ItunesSearchResponse {
   }>;
 }
 
-export async function searchApps(term: string, limit = 10, signal?: AbortSignal): Promise<ItunesSearchResult[]> {
-  const url = await buildItunesUrl('search', { entity: 'software', limit: String(limit), term });
+export async function searchApps(term: string, limit = 10, signal?: AbortSignal, storefrontCountry?: string): Promise<ItunesSearchResult[]> {
+  if (storefrontCountry !== undefined && !/^[A-Z]{2}$/.test(storefrontCountry)) throw new Error('country must be a two-letter uppercase storefront code');
+  const url = await buildItunesUrl('search', { entity: 'software', limit: String(limit), term, ...(storefrontCountry ? { country: storefrontCountry } : {}) });
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(describeHttpError('itunes search failed', res));
 

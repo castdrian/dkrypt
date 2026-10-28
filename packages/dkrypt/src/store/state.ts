@@ -429,6 +429,7 @@ export interface JobHistoryEntry {
   cacheHit?: boolean;
   freeTierResult?: boolean;
   temporaryResultExpiresAt?: number;
+  quotaReservationState?: 'reserved' | 'consumed' | 'released';
   deadlineAt?: number;
   deadlineExceeded?: boolean;
   failureClass?: JobFailureClass;

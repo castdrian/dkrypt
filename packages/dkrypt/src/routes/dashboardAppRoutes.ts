@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type {
   DashboardAppVersionsRoute,
+  DashboardAppStorefrontContextRoute,
   DashboardAppStorefrontsRoute,
   DashboardAppCatalogStatsRoute,
   DashboardAppMetadataRefreshRoute,
@@ -24,6 +25,8 @@ import { decorateSearchResults, type TestFlightCatalogApp } from '#testflightSub
 import { createHttpErrorEnvelope } from '#util/httpResponse.js';
 import { listAppVersions } from '#versions.js';
 import { canViewOperationalDashboard } from '#dashboardAccess.js';
+import { iso31661 } from 'iso-3166';
+import { getAppleAccountVaultStatus } from '#appleAccountVault.js';
 
 type SearchResult = ItunesSearchResult & {
   testflight?: Pick<TestFlightCatalogApp, 'appId' | 'devices' | 'available' | 'lastVerifiedAt'>;
@@ -101,13 +104,18 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
       schema: getRouteContract('GET', '/v1/dashboard/search'),
     }, async (request, reply) => {
       const term = request.query.q.trim();
+      const country = request.query.country;
       if (!term) {
         reply.code(400);
         return createHttpErrorEnvelope(request.id, 400, 'query param q is required');
       }
 
       try {
-        const results = await services.decorateSearchResults(await services.searchApps(term));
+        if (country && !iso31661.some((entry) => entry.alpha2 === country)) {
+          reply.code(400);
+          return createHttpErrorEnvelope(request.id, 400, 'country is not a supported App Store storefront');
+        }
+        const results = await services.decorateSearchResults(await services.searchApps(term, 10, undefined, country));
         const session = getFastifySession(request)!;
         const visibleResults = canViewOperationalDashboard(session.permissions)
           ? results
@@ -138,6 +146,19 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
           retryable: true,
         };
       }
+    });
+
+    server.get<DashboardAppStorefrontContextRoute>('/v1/dashboard/apps/storefront-context', {
+      schema: getRouteContract('GET', '/v1/dashboard/apps/storefront-context'),
+    }, () => {
+      let accountCountry: string | undefined;
+      try {
+        accountCountry = getAppleAccountVaultStatus().storefrontCountry;
+      } catch {}
+      return {
+        accountCountry,
+        countries: iso31661.map((entry) => ({ code: entry.alpha2, name: entry.name })).sort((left, right) => left.name.localeCompare(right.name)),
+      };
     });
 
     server.get<{ Querystring: { trackId: string } }>('/v1/dashboard/apps/lookup-track', {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, CircleCheck, CircleX, Download, ExternalLink, Gauge, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, Search, ShieldCheck, X, Zap } from 'lucide-svelte';
+  import { Check, CircleCheck, CircleX, Copy, Download, ExternalLink, Gauge, Gift, KeyRound, LoaderCircle, LockKeyhole, RefreshCw, Search, ShieldCheck, X, Zap } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
   import Button from '#lib/components/ui/Button.svelte';
@@ -11,7 +11,7 @@
   import { confirmDialog, decryptUsageAlertThresholdsState, showToast } from '#lib/ui.svelte';
   import type { BadgeVariant } from '#lib/components/ui/variants';
   import { fmtCalendarDate, fmtCurrency } from '#lib/format.svelte';
-  import { fetchBillingEntitlementHistory, fetchBillingInvoices, fetchBillingQuotaHistory, redeemBillingAccessCode, type BillingEntitlementEvent, type BillingInvoice, type BillingQuotaHistoryEntry } from '#lib/api';
+  import { createBillingGiftCheckout, fetchBillingEntitlementHistory, fetchBillingInvoices, fetchBillingQuotaHistory, fetchPurchasedBillingGifts, redeemBillingAccessCode, retainTemporaryJobResult, type BillingEntitlementEvent, type BillingInvoice, type BillingQuotaHistoryEntry, type PurchasedBillingGift } from '#lib/api';
 
   type PlanId = 'viewer' | 'regular' | 'priority' | 'api' | 'priority_api' | 'access' | 'standard' | 'plus' | 'developer' | 'unlimited' | 'unlimited_priority';
   type CheckoutState = 'success' | 'cancelled' | undefined;
@@ -68,6 +68,7 @@
 
   interface BillingData {
     enabled: boolean;
+    giftPurchasesEnabled: boolean;
     provider: 'stripe' | 'nowpayments' | 'legacy' | 'gift';
     environment: 'test' | 'live';
     managedPayments: boolean;
@@ -149,6 +150,15 @@
   let resumeIdempotencyKey = $state<string | undefined>();
   let accessCode = $state('');
   let redeemingAccessCode = $state(false);
+  let purchasedGifts = $state<PurchasedBillingGift[]>([]);
+  let giftPlanId = $state('access');
+  let giftMonths = $state<1 | 3 | 6 | 12>(1);
+  let creatingGift = $state(false);
+  const giftReturn = new URLSearchParams(location.search).get('gift');
+  let giftCheckoutState = $state<'success' | 'cancelled' | undefined>(giftReturn === 'success' || giftReturn === 'cancelled' ? giftReturn : undefined);
+  let giftStatusChecking = $state(false);
+  let giftCheckoutFingerprint = '';
+  let giftCheckoutIdempotencyKey: string | undefined;
   let cancelIdempotencyKey = $state<string | undefined>();
   let activationStatus = $state<ActivationStatus>('idle');
   let checkoutIdempotencyKey = $state<string | undefined>();
@@ -157,6 +167,8 @@
   let paymentProvider = $state<PaymentProvider>('stripe');
   let buyingCredits = $state(false);
   let creditCheckoutIdempotencyKey = $state<string | undefined>();
+  let preserveResultId = $state<string | undefined>();
+  let retainingResult = $state(false);
   let planChangeOpen = $state(false);
   let pendingPlanChange = $state<Plan | undefined>();
   let planChangePreview = $state<PlanChangePreview | undefined>();
@@ -166,6 +178,7 @@
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
+  preserveResultId = checkoutParams.get('preserveResult')?.match(/^[A-Za-z0-9._:-]{1,128}$/) ? checkoutParams.get('preserveResult') ?? undefined : undefined;
   let creditCheckoutState = $state<CheckoutState>(checkoutParams.get('credits') as CheckoutState);
   const billingTimeline = $derived.by(() => {
     const accessItems: BillingHistoryEntry[] = entitlementEvents.map((event) => ({
@@ -212,6 +225,7 @@
     const response = await fetch('/v1/billing');
     if (!response.ok) throw new Error('billing unavailable');
     billing = (await response.json()) as BillingData;
+    if (!billing.plans.some((plan) => plan.id === giftPlanId && !plan.legacy)) giftPlanId = billing.plans.find((plan) => !plan.legacy)?.id ?? '';
     const [invoiceResult, entitlementResult] = await Promise.allSettled([fetchBillingInvoices(), fetchBillingEntitlementHistory()]);
     if (invoiceResult.status === 'fulfilled') {
       invoices = invoiceResult.value.invoices;
@@ -317,10 +331,28 @@
     return `At your recent pace, the remaining allowance may last about ${days.toFixed(days < 10 ? 1 : 0)} days`;
   }
 
+  async function preserveResultAfterUpgrade(): Promise<void> {
+    if (!preserveResultId || !billing || billing.entitlement.freeTier || retainingResult) return;
+    retainingResult = true;
+    try {
+      await retainTemporaryJobResult(preserveResultId);
+      showToast('This IPA is now saved in your library', 'success');
+      preserveResultId = undefined;
+      const url = new URL(location.href);
+      url.searchParams.delete('preserveResult');
+      history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not keep this result', 'error');
+    } finally {
+      retainingResult = false;
+    }
+  }
+
   async function refreshAfterCheckout(): Promise<void> {
     try {
       await loadBilling();
       await refreshSession();
+      await preserveResultAfterUpgrade();
     } catch {}
   }
 
@@ -449,6 +481,49 @@
     }
   }
 
+  async function refreshPurchasedGifts(): Promise<void> {
+    try {
+      purchasedGifts = (await fetchPurchasedBillingGifts()).gifts;
+    } catch {}
+  }
+
+  async function startGiftCheckout(): Promise<void> {
+    if (!giftPlanId || creatingGift || !billing?.providers.stripe.ready || !billing.giftPurchasesEnabled) return;
+    creatingGift = true;
+    try {
+      const fingerprint = `${giftPlanId}:${giftMonths}`;
+      if (!giftCheckoutIdempotencyKey || giftCheckoutFingerprint !== fingerprint) {
+        giftCheckoutFingerprint = fingerprint;
+        giftCheckoutIdempotencyKey = crypto.randomUUID();
+      }
+      const result = await createBillingGiftCheckout({ planId: giftPlanId, months: giftMonths }, giftCheckoutIdempotencyKey);
+      location.assign(result.url);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not start gift checkout', 'error');
+    } finally {
+      creatingGift = false;
+    }
+  }
+
+  async function waitForPurchasedGift(): Promise<void> {
+    giftStatusChecking = true;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await refreshPurchasedGifts();
+      if (purchasedGifts.some((gift) => gift.status === 'available')) break;
+      if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    giftStatusChecking = false;
+  }
+
+  async function copyGiftCode(code: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast('Gift code copied', 'success');
+    } catch {
+      showToast('Could not copy the gift code', 'error');
+    }
+  }
+
   async function startCheckout(plan: Plan): Promise<void> {
     openingPlan = plan.id;
     if (checkoutIdempotencyPlan !== plan.id || checkoutIdempotencyProvider !== paymentProvider) {
@@ -466,7 +541,7 @@
       const response = await fetch('/v1/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ planId: plan.id, provider: paymentProvider, cryptoAsset: paymentProvider === 'crypto' ? cryptoAsset : undefined }),
+        body: JSON.stringify({ planId: plan.id, provider: paymentProvider, cryptoAsset: paymentProvider === 'crypto' ? cryptoAsset : undefined, preserveResultId }),
       });
       const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
       if (!response.ok || !data.url) {
@@ -624,11 +699,22 @@
   onMount(() => {
     void initializeBilling().then(() => {
       if (checkoutState === 'success') void waitForActivation();
+      else void preserveResultAfterUpgrade();
+      void refreshPurchasedGifts();
+      if (giftCheckoutState === 'success') void waitForPurchasedGift();
     });
   });
 </script>
 
 <div class="flex flex-col gap-4">
+  {#if preserveResultId && billing?.entitlement.freeTier}
+    <div class="rounded-xl border border-accent/35 bg-accent/5 px-4 py-3 text-sm" role="status">
+      <div class="font-medium">Keep your latest IPA</div>
+      <p class="mt-1 text-muted">Choose a paid plan before the temporary download window closes. Once payment is confirmed, dkrypt will save this result in your IPA Library.</p>
+    </div>
+  {:else if preserveResultId && retainingResult}
+    <div class="rounded-xl border border-accent/35 bg-accent/5 px-4 py-3 text-sm" role="status">Saving your IPA to the library…</div>
+  {/if}
   {#if checkoutState === 'success'}
     <div class="flex items-start gap-3 rounded-[1.2rem] border border-ok/30 bg-ok/10 px-4 py-3 text-sm" aria-live="polite">
       <CircleCheck class="mt-0.5 h-5 w-5 shrink-0 text-ok" />
@@ -651,6 +737,11 @@
       <CircleX class="mt-0.5 h-5 w-5 shrink-0 text-muted" />
       <div><div class="font-semibold">Checkout canceled</div><p class="mt-1 text-muted">No charge was made. Choose a plan whenever you’re ready.</p></div>
     </div>
+  {/if}
+  {#if giftCheckoutState === 'success'}
+    <div class="rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-sm" role="status"><div class="font-semibold text-ok">Gift payment received</div><p class="mt-1 text-muted">Your code is ready to share once Stripe confirms the payment.{#if giftStatusChecking} Checking payment status…{/if}</p><Button class="mt-2" size="sm" variant="secondary" onclick={() => void waitForPurchasedGift()}><RefreshCw class="size-4" />Check gift status</Button></div>
+  {:else if giftCheckoutState === 'cancelled'}
+    <div class="rounded-xl border border-border bg-bg/50 px-4 py-3 text-sm" role="status">Gift checkout was canceled. No gift code was activated.</div>
   {/if}
 
   <Card>
@@ -744,6 +835,23 @@
 
   {#if billing?.legacyBilling}
     <Card class="border-accent/40 bg-accent/5"><div class="text-sm"><div class="font-medium">Previous billing record needs review</div><div class="mt-1 text-muted">Your previous payment-provider record was kept for reconciliation. Contact support before starting a new subscription so the account is not charged twice.</div></div></Card>
+  {/if}
+
+  {#if billing}
+    {@const selectedGiftPlan = billing.plans.find((plan) => plan.id === giftPlanId)}
+    <Card title="Gift a plan">
+      <p class="text-sm text-muted">Buy fixed-term access for someone else. The code activates when they redeem it and does not renew.</p>
+      <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+        <label class="block text-xs text-muted">Plan<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftPlanId} onchange={() => { giftCheckoutIdempotencyKey = undefined; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}>{#each billing.plans.filter((plan) => !plan.legacy) as plan (plan.id)}<option value={plan.id}>{plan.name} · {fallbackPrice(plan)}/month</option>{/each}</select></label>
+        <label class="block text-xs text-muted">Gift length<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftMonths} onchange={() => { giftCheckoutIdempotencyKey = undefined; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}><option value={1}>30 days</option><option value={3}>90 days</option><option value={6}>180 days</option><option value={12}>360 days</option></select></label>
+        <Button loading={creatingGift} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled || !giftPlanId} onclick={() => void startGiftCheckout()}><Gift class="size-4" />Buy gift</Button>
+      </div>
+      {#if selectedGiftPlan}<p class="mt-2 text-xs text-muted">One-time total: {fmtCurrency(selectedGiftPlan.amount * giftMonths, selectedGiftPlan.currency)} for {giftMonths * 30} days.</p>{/if}
+      {#if !billing.giftPurchasesEnabled}<p class="mt-2 text-xs text-muted">Gift purchases are not configured on this instance.</p>{:else if !billing.providers.stripe.ready}<p class="mt-2 text-xs text-muted">Gift purchases are temporarily unavailable because Stripe checkout is not ready.</p>{/if}
+      {#if purchasedGifts.length}
+        <div class="mt-4 border-t border-border pt-3"><div class="mb-2 text-sm font-medium">Your gift codes</div><ul class="divide-y divide-border/70">{#each purchasedGifts as gift (gift.id)}<li class="flex flex-wrap items-center justify-between gap-3 py-2"><span class="min-w-0"><span class="block text-sm font-medium">{planLabel(gift.planId as PlanId)} · {gift.durationDays} days</span><span class="text-xs text-muted">{gift.status === 'available' ? `Redeem by ${formatDate(gift.redeemBy)}` : gift.status.replace('_', ' ')}</span></span>{#if gift.code}<span class="flex items-center gap-2"><code class="rounded bg-panel-muted px-2 py-1 font-mono text-xs" data-sensitive="true">{gift.code}</code><Button variant="secondary" size="icon" aria-label="Copy gift code" onclick={() => void copyGiftCode(gift.code!)}><Copy class="size-4" /></Button></span>{/if}</li>{/each}</ul></div>
+      {/if}
+    </Card>
   {/if}
 
   {#if planChangeOpen && pendingPlanChange && billing}

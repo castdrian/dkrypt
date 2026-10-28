@@ -4,6 +4,15 @@
   "description": "Authenticated API and dashboard for on-demand and automated App Store IPA decryption.",
   "start_url": "/",
   "display": "standalone",
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "background_color": "#080b14",
   "theme_color": "#080b14",
   "icons": [

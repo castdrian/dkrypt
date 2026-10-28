@@ -1,42 +1,42 @@
 export const GENERATED_CHANGELOG = [
   {
-    "date": "2026-10-27",
-    "title": "feat: add public request checks and QR pickup",
-    "description": "Released in 9e9943a."
+    "date": "2026-10-28",
+    "title": "docs(security): clarify IP reputation data use",
+    "description": "Released in 3fb4403."
+  },
+  {
+    "date": "2026-10-28",
+    "title": "feat(security): add free IP reputation provider",
+    "description": "Released in ac35e40."
+  },
+  {
+    "date": "2026-10-28",
+    "title": "fix(dashboard): hide device check details from members",
+    "description": "Released in 66eb1b9."
+  },
+  {
+    "date": "2026-10-28",
+    "title": "fix(dashboard): keep member status simple and TestFlight device-aware",
+    "description": "Released in 48891a9."
   },
   {
     "date": "2026-10-27",
-    "title": "feat(billing): add free tier and simplify member dashboard",
-    "description": "Released in 56debe3."
+    "title": "test(security): isolate queue load from free abuse caps",
+    "description": "Released in 7fb7512."
   },
   {
     "date": "2026-10-27",
-    "title": "fix: prioritize device work and verify artifact downloads",
-    "description": "Released in 82d7ad7."
+    "title": "test(auth): mock verified github email lookup",
+    "description": "Released in 5523835."
   },
   {
     "date": "2026-10-27",
-    "title": "fix(autoinstall): read account storefront asynchronously",
-    "description": "Released in a6ba4ec."
+    "title": "test(auth): preserve oauth rotation coverage with signup checks",
+    "description": "Released in 323d63f."
   },
   {
     "date": "2026-10-27",
-    "title": "feat(autoinstall): report App Store storefront",
-    "description": "Released in 3ecca2d."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "feat: improve device arbitration and IPA workflows",
-    "description": "Released in 80c8088."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "feat: add queue progress and on-device controls",
-    "description": "Released in 804c028."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "fix: harden billing self-service edge cases",
-    "description": "Released in c7f73cc."
+    "title": "fix(security): align fixtures with abuse controls",
+    "description": "Released in c843e65."
   }
 ] as const;

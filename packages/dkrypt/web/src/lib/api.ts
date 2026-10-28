@@ -611,7 +611,7 @@ export interface JobTimeline {
   offlineDeviceFallbackStartedAt?: number;
   deviceFallbackDurationMs?: number;
   offlineFailureReason?: string;
-  quotaReceipt?: { state: 'reserved' | 'consumed'; admittedAt: number };
+  quotaReceipt?: { state: 'reserved' | 'consumed' | 'released'; admittedAt: number };
   testflight?: { appId: number; build: { id: number; cfBundleShortVersion: string; cfBundleVersion: string; bundleId: string } };
   dependencies?: Array<{ id: string; label: string; state: 'ready' | 'active' | 'waiting' | 'failed' | 'blocked' | 'not_applicable' | 'unknown'; detail: string }>;
   events: JobTimelineEvent[];
@@ -1738,8 +1738,14 @@ export function supportBundleUrl(): string {
   return '/v1/dashboard/support-bundle';
 }
 
-export function searchApps(term: string): Promise<{ results: AppStoreSearchResult[] } | { error: string }> {
-  return apiJson(`/v1/dashboard/search?q=${encodeURIComponent(term)}`);
+export function searchApps(term: string, country?: string): Promise<{ results: AppStoreSearchResult[] } | { error: string }> {
+  const params = new URLSearchParams({ q: term });
+  if (country) params.set('country', country);
+  return apiJson(`/v1/dashboard/search?${params}`);
+}
+
+export function fetchAppStorefrontContext(): Promise<{ accountCountry?: string; countries: Array<{ code: string; name: string }> }> {
+  return apiJson('/v1/dashboard/apps/storefront-context');
 }
 
 export function lookupAppStoreTrack(trackId: number): Promise<{ bundleId: string; trackName: string; trackId: number }> {
@@ -1821,6 +1827,10 @@ export function fetchAppVersions(bundleId: string, force = false): Promise<{ ver
 
 export function fetchJobStatus(id: string): Promise<JobSummary> {
   return apiJson(`/v1/dashboard/jobs/${id}/status`);
+}
+
+export function retainTemporaryJobResult(id: string): Promise<{ artifactId: string; fileAvailable: boolean }> {
+  return apiJson(`/v1/dashboard/jobs/${encodeURIComponent(id)}/retain`, { method: 'POST' });
 }
 
 export interface TFTrain {
@@ -2688,7 +2698,27 @@ export interface BillingAccessCode {
   redeemedAt?: string;
   expiresAt?: string;
   revokedAt?: string;
-  status: 'available' | 'redeemed' | 'expired' | 'revoked';
+  purchaseStatus?: 'pending' | 'paid' | 'failed' | 'refunded';
+  purchaserId?: string;
+  status: 'available' | 'pending_payment' | 'payment_failed' | 'redeemed' | 'expired' | 'revoked';
+}
+
+export interface PurchasedBillingGift {
+  id: string;
+  planId: string;
+  durationDays: number;
+  createdAt: string;
+  redeemBy: string;
+  status: 'pending_payment' | 'payment_failed' | 'available' | 'redeemed' | 'expired' | 'revoked';
+  code?: string;
+}
+
+export function fetchPurchasedBillingGifts(): Promise<{ gifts: PurchasedBillingGift[] }> {
+  return apiJson('/v1/billing/gifts');
+}
+
+export function createBillingGiftCheckout(input: { planId: string; months: 1 | 3 | 6 | 12 }, idempotencyKey: string): Promise<{ giftId: string; url: string; amountMinor: number; currency: 'EUR' }> {
+  return apiJson('/v1/billing/gifts/checkout', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(input) });
 }
 
 export function fetchBillingAccessCodes(): Promise<{ accessCodes: BillingAccessCode[] }> {

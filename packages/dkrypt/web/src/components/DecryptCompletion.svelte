@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download } from 'lucide-svelte';
+  import { Download, Share, Sparkles } from 'lucide-svelte';
   import CopyButton from '#components/CopyButton.svelte';
   import Alert from '#lib/components/ui/Alert.svelte';
   import Badge from '#lib/components/ui/Badge.svelte';
@@ -14,6 +14,7 @@
   import { showToast, soundEnabledState } from '#lib/ui.svelte';
   import { fmtDurationApprox } from '#lib/format.svelte';
   import PickupQrButton from '#components/PickupQrButton.svelte';
+  import { ipaFileSharingAvailable, prepareIpaForSharing, sharePreparedIpa } from '#lib/shareIpa';
 
   interface CompletedDecrypt {
     label: string;
@@ -30,7 +31,10 @@
 
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let completed = $state<CompletedDecrypt[]>([]);
+  let preparedIpa = $state<File | null>(null);
+  let preparingIpa = $state(false);
   const current = $derived(completed[0]);
+  const shareSupported = $derived(ipaFileSharingAvailable());
 
   function decryptLabel(d: TrackedDecrypt): string {
     const name = appDisplayName(d.bundleId, d.trackName);
@@ -121,7 +125,29 @@
   });
 
   function onOpenChange(open: boolean): void {
-    if (!open) completed = completed.slice(1);
+    if (!open) {
+      completed = completed.slice(1);
+      preparedIpa = null;
+    }
+  }
+
+  async function handoffCurrent(): Promise<void> {
+    if (!current || preparingIpa) return;
+    try {
+      if (!preparedIpa) {
+        preparingIpa = true;
+        preparedIpa = await prepareIpaForSharing(current.url, current.label);
+        showToast('IPA ready. Tap Share IPA now to choose an app.', 'success');
+        return;
+      }
+      await sharePreparedIpa(preparedIpa, current.label);
+      preparedIpa = null;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      showToast(error instanceof Error ? error.message : 'Could not send the IPA to another app', 'error');
+    } finally {
+      preparingIpa = false;
+    }
   }
 </script>
 
@@ -140,11 +166,16 @@
     {/if}
     {#if current.freeTierResult && current.temporaryResultExpiresAt}
       <div class="mb-4 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-muted">Temporary download · available until {new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(current.temporaryResultExpiresAt)}</div>
+      <a href={`/?tab=billing&preserveResult=${encodeURIComponent(current.jobId)}`} class={buttonVariants('secondary', 'sm') + ' mb-2 w-full justify-center'}><Sparkles class="h-4 w-4" />Upgrade and keep this result</a>
     {/if}
     <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
       <a href={current.url} class={buttonVariants('default', 'sm') + ' justify-center'}><Download class="h-4 w-4" />Download IPA</a>
       <PickupQrButton artifactId={current.artifactId} jobId={current.freeTierResult ? current.jobId : undefined} label="QR code" />
     </div>
+    {#if shareSupported}
+      <Button class="mt-2 w-full" variant="secondary" size="sm" loading={preparingIpa} onclick={() => void handoffCurrent()}><Share class="h-4 w-4" />{preparedIpa ? 'Share IPA now' : 'Prepare to send to another app'}</Button>
+      <p class="mt-1 text-center text-[11px] text-muted">After preparation, choose Files, Drive, Dropbox, or a sideloading app from your system share sheet.</p>
+    {/if}
     <div class="mt-2 flex justify-end"><Button variant="ghost" size="sm" onclick={() => onOpenChange(false)}>Done</Button></div>
     <details class="mt-4 border-t border-border pt-3">
       <summary class="cursor-pointer text-xs text-muted">Job details and link</summary>

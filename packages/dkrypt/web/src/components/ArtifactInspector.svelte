@@ -14,6 +14,7 @@
   import { showToast } from '#lib/ui.svelte';
   import IpaAnalysisPanel from '#features/artifacts/IpaAnalysisPanel.svelte';
   import PickupQrButton from '#components/PickupQrButton.svelte';
+  import { ipaFileSharingAvailable, prepareIpaForSharing, sharePreparedIpa } from '#lib/shareIpa';
 
   let artifact = $state<ArtifactRecord | null>(null);
   let open = $state(false);
@@ -37,6 +38,8 @@
   let noteError = $state('');
   let optimizationDevices = $state<DeviceRecord[]>([]);
   let optimizationDeviceId = $state('');
+  let preparedArtifactFile = $state<File | null>(null);
+  let preparingArtifactFile = $state(false);
   let requestVersion = 0;
 
   async function loadArtifact(id: string): Promise<void> {
@@ -55,6 +58,7 @@
       const result = await fetchDashboardArtifact(id);
       if (version === requestVersion) {
         artifact = result;
+        preparedArtifactFile = null;
         contentsOpen = false;
         contentsEntries = [];
         contentsNextOffset = undefined;
@@ -94,6 +98,7 @@
     if (!next) {
       requestVersion += 1;
       artifact = null;
+      preparedArtifactFile = null;
       contentsOpen = false;
       contentsEntries = [];
       contentsNextOffset = undefined;
@@ -131,6 +136,25 @@
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return;
       showToast('Could not share this artifact', 'error');
+    }
+  }
+
+  async function exportArtifact(): Promise<void> {
+    if (!artifact?.fileUrl || preparingArtifactFile) return;
+    try {
+      if (!preparedArtifactFile) {
+        preparingArtifactFile = true;
+        preparedArtifactFile = await prepareIpaForSharing(artifact.fileUrl, `${artifact.bundleId}-${artifact.versionLabel ?? 'app'}`);
+        showToast('IPA ready. Tap the share button again to choose an app.', 'success');
+        return;
+      }
+      await sharePreparedIpa(preparedArtifactFile, artifact.bundleId);
+      preparedArtifactFile = null;
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
+      showToast(cause instanceof Error ? cause.message : 'Could not send this IPA to another app', 'error');
+    } finally {
+      preparingArtifactFile = false;
     }
   }
 
@@ -232,7 +256,7 @@
           {#if artifact.archivedAt}<Badge variant="secondary">Archived</Badge>{/if}
         </div>
       </div>
-      <div class="flex shrink-0 gap-1"><Button variant="secondary" size="icon" aria-label="Share artifact" onclick={() => void shareArtifact()}><Share2 class="h-4 w-4" /></Button><Button variant="secondary" size="icon" aria-label="Copy artifact link" onclick={() => void copyDeepLink()}><Copy class="h-4 w-4" /></Button>{#if artifact.fileUrl}<PickupQrButton artifactId={artifact.id} />{/if}<a href={artifact.fileUrl} download class={buttonVariants('secondary', 'sm')}><Download class="h-3.5 w-3.5" />Download</a></div>
+      <div class="flex shrink-0 gap-1"><Button variant="secondary" size="icon" aria-label="Share artifact link" title="Share artifact link" onclick={() => void shareArtifact()}><Share2 class="h-4 w-4" /></Button>{#if artifact.fileUrl && ipaFileSharingAvailable()}<Button variant="secondary" size="icon" aria-label={preparedArtifactFile ? 'Share IPA now' : 'Prepare IPA for sharing'} title={preparingArtifactFile ? 'Preparing IPA…' : preparedArtifactFile ? 'Share IPA to Drive, Dropbox, Files, or a sideloading app' : 'Prepare IPA to send to Drive, Dropbox, Files, or a sideloading app'} loading={preparingArtifactFile} onclick={() => void exportArtifact()}><Download class="h-4 w-4" /></Button>{/if}<Button variant="secondary" size="icon" aria-label="Copy artifact link" onclick={() => void copyDeepLink()}><Copy class="h-4 w-4" /></Button>{#if artifact.fileUrl}<PickupQrButton artifactId={artifact.id} />{/if}<a href={artifact.fileUrl} download class={buttonVariants('secondary', 'sm')}><Download class="h-3.5 w-3.5" />Download</a></div>
     </div>
     <section class="rounded-xl border border-border/70 p-4" aria-labelledby="artifact-inspector-metadata">
       <h3 id="artifact-inspector-metadata" class="mb-3 flex items-center gap-2 text-sm font-semibold"><FileSearch class="h-4 w-4 text-accent" />Artifact metadata</h3>

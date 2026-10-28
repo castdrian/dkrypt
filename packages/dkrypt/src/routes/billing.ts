@@ -10,6 +10,7 @@ import type {
   BillingPauseRoute,
   BillingCheckoutControlRoute,
   BillingCheckoutRoute,
+  BillingGiftCheckoutRoute,
   BillingProviderStatusRoute,
   BillingReconciliationRoute,
   BillingReconciliationSyncRoute,
@@ -24,7 +25,11 @@ import type {
 import { getRouteContract } from '#contracts.js';
 import {
   acquireBillingCheckoutLock,
+  billingGiftPurchasesEnabled,
   createBillingAccessCode,
+  createPurchasedBillingGift,
+  failPurchasedBillingGiftCheckout,
+  fulfillPurchasedBillingGift,
   getBillingCustomerId,
   getBillingSubscriptionById,
   getBillingEntitlements,
@@ -32,6 +37,7 @@ import {
   getBillingSubscriptionsForUser,
   getBillingUserId,
   listBillingAccessCodes,
+  listPurchasedBillingGifts,
   getPlan,
   getPurchasablePlan,
   isBillingSubscriptionActive,
@@ -51,6 +57,8 @@ import {
   releaseBillingCheckoutLock,
   redeemBillingAccessCode,
   revokeBillingAccessCode,
+  refundPurchasedBillingGift,
+  setPurchasedBillingGiftCheckout,
   recordStripeCheckoutIdempotencyAttempt,
 } from '#billing.js';
 import { config, stripeEnabled, stripeEnvironment, stripeMissingConfiguration, stripeNewCatalogMissingConfiguration } from '#config.js';
@@ -188,6 +196,8 @@ async function processStripeRefund(event: Stripe.Event, stripeClient?: Stripe): 
   recordAudit(actor, 'billing.refund', charge.id, `${refundSummary}; Stripe event ${event.id}`);
 
   if (!charge.refunded) return;
+  const paymentIntentId = stripeObjectId(charge.payment_intent);
+  if (paymentIntentId && await processStripeGiftRefund(charge, paymentIntentId, stripeClient, actor)) return;
   if (await processStripeCreditRefund(charge, stripeClient)) return;
   const subscriptionId = await subscriptionIdForRefundedCharge(charge, stripeClient);
   if (!subscriptionId) {
@@ -239,9 +249,36 @@ async function processStripeRefund(event: Stripe.Event, stripeClient?: Stripe): 
   });
 }
 
+async function processStripeGiftRefund(charge: Stripe.Charge, paymentIntentId: string, stripeClient: Stripe | undefined, actor: string): Promise<boolean> {
+  let gift = refundPurchasedBillingGift(paymentIntentId);
+  if (!gift) {
+    if (stripeClient && typeof stripeClient.paymentIntents?.retrieve !== 'function') return false;
+    const paymentIntent = await stripeOperation(stripeClient, (client) => client.paymentIntents.retrieve(paymentIntentId));
+    if (paymentIntent.metadata.purpose !== 'paid_gift_access_code') return false;
+    const giftId = paymentIntent.metadata.gift_id;
+    if (!giftId) throw new Error(`refunded gift payment ${charge.id} has no gift code identifier`);
+    gift = refundPurchasedBillingGift(paymentIntentId, giftId);
+    if (!gift) throw new Error(`refunded gift payment ${charge.id} could not be matched to a gift code`);
+  }
+  recordAudit(gift.purchaserId ?? actor, 'billing.refund', gift.id, `full refund of ${charge.id} revoked the gift code`);
+  return true;
+}
+
 async function reconcileSuccessfulCheckoutSession(event: Stripe.Event, stripeClient?: Stripe): Promise<void> {
   processCheckoutSession(event);
   const session = event.data.object as Stripe.Checkout.Session;
+  if (session.metadata?.purpose === 'paid_gift_access_code') {
+    if (session.mode !== 'payment' || session.payment_status !== 'paid') return;
+    const giftId = session.metadata.gift_id;
+    const purchaserId = metadataUserId(session.metadata);
+    if (!giftId || !purchaserId) {
+      throw new Error(`paid gift checkout ${session.id} could not be matched to a pending gift`);
+    }
+    const fulfillment = fulfillPurchasedBillingGift({ id: giftId, purchaserId, checkoutSessionId: session.id, paymentIntentId: stripeObjectId(session.payment_intent) });
+    if (!fulfillment) throw new Error(`paid gift checkout ${session.id} could not be matched to a pending gift`);
+    recordAudit(purchaserId, 'billing.access_code.create', giftId, fulfillment === 'paid' ? `paid gift code activated by checkout ${session.id}` : `checkout ${session.id} was already refunded; gift code remains revoked`);
+    return;
+  }
   const subscriptionId = stripeObjectId(session.subscription);
   if (!subscriptionId) return;
   const userId = metadataUserId(session.metadata);
@@ -341,7 +378,16 @@ export async function processStripeEvent(event: Stripe.Event, stripeClient?: Str
       return;
     case 'checkout.session.async_payment_failed':
       processCheckoutSession(event);
+      if ((event.data.object as Stripe.Checkout.Session).metadata?.purpose === 'paid_gift_access_code') {
+        const session = event.data.object as Stripe.Checkout.Session;
+        failPurchasedBillingGiftCheckout(session.id, session.metadata?.gift_id);
+      }
       return;
+    case 'checkout.session.expired': {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.metadata?.purpose === 'paid_gift_access_code') failPurchasedBillingGiftCheckout(session.id, session.metadata.gift_id);
+      return;
+    }
     case 'customer.created':
     case 'customer.updated':
       processCustomer(event);
@@ -753,6 +799,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       provider: entitlement.provider ?? 'stripe',
       environment: stripeEnvironment,
       managedPayments: true,
+      giftPurchasesEnabled: billingGiftPurchasesEnabled() && stripeEnabled,
       missingConfiguration: stripeEnabled ? [] : stripeMissingConfiguration,
       providers: {
         stripe: { enabled: stripeEnabled, environment: stripeEnvironment, managedPayments: true, missingConfiguration: stripeMissingConfiguration },
@@ -915,7 +962,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         if (existingCryptoCheckout && (existingCryptoCheckout.planId !== target.id || (existingCryptoCheckout.asset?.toUpperCase() ?? requestedAsset) !== requestedAsset)) {
           return sendBillingError(request, reply, 409, 'Idempotency-Key was already used with a different checkout request', 'idempotency_conflict');
         }
-        const result = await createCryptoCheckout({ userId, planId: target.id, idempotencyKey, asset: request.body.cryptoAsset });
+        const result = await createCryptoCheckout({ userId, planId: target.id, idempotencyKey, asset: request.body.cryptoAsset, preserveResultId: request.body.preserveResultId });
         return reply.code(result.reused ? 200 : 201).send({ url: result.checkout.checkoutUrl, provider: 'nowpayments', checkoutId: result.checkout.checkoutId, status: result.checkout.status });
       } catch (error) {
         if (error instanceof CryptoBillingError) return sendBillingError(request, reply, error.statusCode, error.message);
@@ -935,15 +982,15 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         customer: customerId,
         customer_email: customerId ? undefined : profile?.email,
         client_reference_id: userId,
-        metadata: { dkrypt_user_id: userId, plan_id: target.id },
-        subscription_data: { metadata: { dkrypt_user_id: userId, plan_id: target.id } },
-        success_url: `${config.publicBaseUrl}/?tab=billing&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${config.publicBaseUrl}/?tab=billing&checkout=cancelled`,
+        metadata: { dkrypt_user_id: userId, plan_id: target.id, ...(request.body.preserveResultId ? { preserve_result_id: request.body.preserveResultId } : {}) },
+        subscription_data: { metadata: { dkrypt_user_id: userId, plan_id: target.id, ...(request.body.preserveResultId ? { preserve_result_id: request.body.preserveResultId } : {}) } },
+        success_url: `${config.publicBaseUrl}/?tab=billing&checkout=success&session_id={CHECKOUT_SESSION_ID}${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}`,
+        cancel_url: `${config.publicBaseUrl}/?tab=billing&checkout=cancelled${request.body.preserveResultId ? `&preserveResult=${encodeURIComponent(request.body.preserveResultId)}` : ''}`,
         billing_address_collection: 'required',
         managed_payments: { enabled: true },
         integration_identifier: createIntegrationIdentifier(idempotencyKey),
       } satisfies Stripe.Checkout.SessionCreateParams;
-      const requestFingerprint = createHash('sha256').update(JSON.stringify({ provider, planId: target.id })).digest('hex');
+      const requestFingerprint = createHash('sha256').update(JSON.stringify({ provider, planId: target.id, preserveResultId: request.body.preserveResultId ?? null })).digest('hex');
       const parametersFingerprint = createHash('sha256').update(JSON.stringify(parameters)).digest('hex');
       if (existingStripeAttempt && existingStripeAttempt.requestFingerprint !== requestFingerprint) {
         return sendBillingError(request, reply, 409, 'Idempotency-Key was already used with a different checkout request', 'idempotency_conflict');
@@ -969,6 +1016,65 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     } catch (error) {
       log.error('Stripe checkout session failed', { userId, planId: target.id, error: String(error) });
       return sendBillingError(request, reply, 502, 'could not start checkout');
+    } finally {
+      releaseBillingCheckoutLock(userId);
+    }
+  });
+
+  server.get('/v1/billing/gifts', { schema: getRouteContract('GET', '/v1/billing/gifts'), preHandler: fastifyRequireSession }, (request) => {
+    return { gifts: listPurchasedBillingGifts(getFastifySession(request)!.sub) };
+  });
+
+  server.post<BillingGiftCheckoutRoute>('/v1/billing/gifts/checkout', { schema: getRouteContract('POST', '/v1/billing/gifts/checkout'), preHandler: fastifyRequireSession }, async (request, reply) => {
+    const userId = getFastifySession(request)!.sub;
+    const plan = getPurchasablePlan(request.body.planId, userId);
+    if (!plan || plan.legacy) return sendBillingError(request, reply, 400, 'choose an available paid plan');
+    if (!billingGiftPurchasesEnabled()) return sendBillingError(request, reply, 503, 'gift checkout is temporarily unavailable');
+    const idempotencyKey = getBillingIdempotencyKey(request, reply, userId, 'gift-checkout');
+    if (!idempotencyKey) return;
+    if (!requireStripeBilling(request, reply)) return;
+    if (areNewBillingCheckoutsPaused()) return sendBillingError(request, reply, 503, 'New checkouts are temporarily paused by an administrator', 'billing_checkouts_paused');
+    if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another checkout is already in progress for this account');
+    let gift;
+    try {
+      gift = createPurchasedBillingGift({ planId: plan.id, months: request.body.months, purchaserId: userId, idempotencyKey });
+    } catch (error) {
+      releaseBillingCheckoutLock(userId);
+      log.error('paid gift reservation failed', { userId, planId: plan.id, error: String(error) });
+      return sendBillingError(request, reply, 503, 'gift checkout is temporarily unavailable');
+    }
+    if (!gift) {
+      releaseBillingCheckoutLock(userId);
+      return sendBillingError(request, reply, 400, 'gift purchase details are invalid');
+    }
+    if (gift.planId !== plan.id || gift.durationDays !== request.body.months * 30 || gift.purchaseStatus !== 'pending') {
+      releaseBillingCheckoutLock(userId);
+      return sendBillingError(request, reply, 409, 'Idempotency-Key was already used for a different or completed gift purchase', 'idempotency_conflict');
+    }
+    const amountMinor = Math.round(plan.amount * request.body.months * 100);
+    const metadata = { purpose: 'paid_gift_access_code', gift_id: gift.id, dkrypt_user_id: userId, plan_id: plan.id, duration_days: String(gift.durationDays) };
+    try {
+      const session = await callStripe((client) => client.checkout.sessions.create({
+        mode: 'payment',
+        line_items: [{ price_data: { currency: 'eur', unit_amount: amountMinor, product_data: { name: `${plan.name} gift access`, description: `${gift.durationDays} days of dkrypt access` } }, quantity: 1 }],
+        customer: getBillingCustomerId(userId),
+        customer_email: getBillingCustomerId(userId) ? undefined : getAuthProfile(userId)?.email,
+        client_reference_id: userId,
+        metadata,
+        payment_intent_data: { metadata },
+        billing_address_collection: 'required',
+        managed_payments: { enabled: true },
+        success_url: `${config.publicBaseUrl}/?tab=billing&gift=success`,
+        cancel_url: `${config.publicBaseUrl}/?tab=billing&gift=cancelled`,
+      } satisfies Stripe.Checkout.SessionCreateParams, { idempotencyKey }));
+      if (!session.url || !setPurchasedBillingGiftCheckout(gift.id, userId, session.id)) {
+        return sendBillingError(request, reply, 502, 'Stripe could not start gift checkout');
+      }
+      recordAudit(userId, 'billing.checkout', gift.id, `started ${plan.id} gift checkout for ${gift.durationDays} days`);
+      return reply.code(201).send({ giftId: gift.id, url: session.url, amountMinor, currency: 'EUR' });
+    } catch (error) {
+      log.error('Stripe gift checkout session failed', { userId, giftId: gift.id, planId: plan.id, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not start gift checkout');
     } finally {
       releaseBillingCheckoutLock(userId);
     }
@@ -1084,7 +1190,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const now = Date.now();
     const accessCodes = listBillingAccessCodes().map((accessCode) => ({
       ...accessCode,
-      status: accessCode.revokedAt ? 'revoked' : accessCode.redeemedAt ? Date.parse(accessCode.expiresAt ?? '') <= now ? 'expired' : 'redeemed' : Date.parse(accessCode.redeemBy) <= now ? 'expired' : 'available',
+      status: accessCode.purchaseStatus === 'pending' ? 'pending_payment' : accessCode.purchaseStatus === 'failed' ? 'payment_failed' : accessCode.revokedAt ? 'revoked' : accessCode.redeemedAt ? Date.parse(accessCode.expiresAt ?? '') <= now ? 'expired' : 'redeemed' : Date.parse(accessCode.redeemBy) <= now ? 'expired' : 'available',
     }));
     return reply.send({ accessCodes });
   });
@@ -1118,7 +1224,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     recordAudit(actor, 'billing.access_code.revoke', revoked.id, 'revoked access code');
     const now = Date.now();
     const status = revoked.redeemedAt && Date.parse(revoked.expiresAt ?? '') <= now ? 'expired' : 'revoked';
-    const { codeHash: _codeHash, ...safeRecord } = revoked;
+    const { codeHash: _codeHash, encryptedCode: _encryptedCode, purchaseIdempotencyKey: _purchaseIdempotencyKey, checkoutSessionId: _checkoutSessionId, paymentIntentId: _paymentIntentId, ...safeRecord } = revoked;
     return reply.send({ ...safeRecord, status });
   });
 

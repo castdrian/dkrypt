@@ -44,6 +44,7 @@ export interface Job {
   freeTierResult?: boolean;
   temporaryResultExpiresAt?: number;
   temporaryResultSharedCache?: boolean;
+  quotaReservationState?: 'reserved' | 'consumed' | 'released';
   apiKeyId?: string;
   preferredDeviceId?: string;
   priority: number;

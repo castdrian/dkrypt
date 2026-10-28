@@ -19,6 +19,7 @@ import {
   billingAccessCodeCreateBodySchema,
   billingAccessCodeParamsSchema,
   billingAccessCodeRedeemBodySchema,
+  billingGiftCheckoutBodySchema,
   billingCheckoutBodySchema,
   billingCheckoutControlBodySchema,
   billingIdempotencyKeyHeadersSchema,
@@ -81,6 +82,7 @@ import {
   dashboardAppStorefrontsResponseSchema,
   dashboardAppSearchQuerySchema,
   dashboardAppSearchResponseSchema as SearchResponse,
+  dashboardAppStorefrontContextResponseSchema,
   dashboardAppTrackLookupQuerySchema,
   dashboardAppTrackLookupResponseSchema,
   dashboardAppVersionsParamsSchema,
@@ -383,6 +385,7 @@ const BillingProviderResponse = object({
 });
 const BillingResponse = object({
   enabled: Type.Boolean(),
+  giftPurchasesEnabled: Type.Boolean(),
   provider: Type.Union([Type.Literal('stripe'), Type.Literal('nowpayments'), Type.Literal('legacy'), Type.Literal('gift')]),
   environment: ProviderEnvironment,
   managedPayments: Type.Boolean(),
@@ -447,11 +450,24 @@ const BillingAccessCodeResponse = object({
   redeemedAt: Type.Optional(Type.String({ format: 'date-time' })),
   expiresAt: Type.Optional(Type.String({ format: 'date-time' })),
   revokedAt: Type.Optional(Type.String({ format: 'date-time' })),
-  status: Type.Union([Type.Literal('available'), Type.Literal('redeemed'), Type.Literal('expired'), Type.Literal('revoked')]),
+  purchaserId: Type.Optional(Type.String()),
+  purchaseStatus: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('paid'), Type.Literal('failed'), Type.Literal('refunded')])),
+  status: Type.Union([Type.Literal('available'), Type.Literal('pending_payment'), Type.Literal('payment_failed'), Type.Literal('redeemed'), Type.Literal('expired'), Type.Literal('revoked')]),
 });
 const BillingAccessCodeListResponse = object({ accessCodes: Type.Array(BillingAccessCodeResponse) });
 const BillingAccessCodeCreateResponse = object({ code: Type.String(), accessCode: BillingAccessCodeResponse });
 const BillingAccessCodeRedeemResponse = object({ planId: Identifier, expiresAt: Type.String({ format: 'date-time' }) });
+const PurchasedBillingGiftResponse = object({
+  id: Identifier,
+  planId: Identifier,
+  durationDays: Type.Integer({ minimum: 1, maximum: 3650 }),
+  createdAt: Type.String({ format: 'date-time' }),
+  redeemBy: Type.String({ format: 'date-time' }),
+  status: Type.Union([Type.Literal('pending_payment'), Type.Literal('payment_failed'), Type.Literal('available'), Type.Literal('redeemed'), Type.Literal('expired'), Type.Literal('revoked')]),
+  code: Type.Optional(Type.String({ minLength: 8, maxLength: 128 })),
+});
+const PurchasedBillingGiftListResponse = object({ gifts: Type.Array(PurchasedBillingGiftResponse) });
+const BillingGiftCheckoutResponse = object({ giftId: Identifier, url: Type.String({ format: 'uri' }), amountMinor: Type.Integer({ minimum: 1 }), currency: Type.Literal('EUR') });
 const ArtifactPage = object({ artifacts: Type.Array(JsonObject), total: Type.Integer({ minimum: 0 }), totalBytes: Type.Number(), maxBytes: Type.Number(), nextCursor: PageCursor });
 const DeviceListResponse = object({ devices: Type.Array(DeviceResponse) });
 const DeviceDisableImpactResponse = object({ deviceId: Identifier, queuedJobCount: Type.Integer({ minimum: 0 }), runningJobCount: Type.Integer({ minimum: 0 }) });
@@ -478,7 +494,7 @@ export const JobTimelineResponse = object({
   offlineDeviceFallbackStartedAt: Type.Optional(Type.Number()),
   deviceFallbackDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   offlineFailureReason: Type.Optional(Type.String()),
-  quotaReceipt: Type.Optional(Type.Object({ state: Type.Union([Type.Literal('reserved'), Type.Literal('consumed')]), admittedAt: Type.Number() }, { additionalProperties: false })),
+  quotaReceipt: Type.Optional(Type.Object({ state: Type.Union([Type.Literal('reserved'), Type.Literal('consumed'), Type.Literal('released')]), admittedAt: Type.Number() }, { additionalProperties: false })),
   offlineCompatibility: Type.Optional(Type.Object({ supported: Type.Boolean(), licenseFormat: Type.Union([Type.Literal('sinf'), Type.Literal('supf'), Type.Literal('unknown')]), architectures: Type.Array(Type.String()), reason: Type.Optional(Type.String()) }, { additionalProperties: false })),
   shutdownRecoveryAt: Type.Optional(Type.Number()),
   versionLabel: Type.Optional(Type.String()),
@@ -1027,6 +1043,8 @@ register('GET', '/v1/billing/access-codes', {});
 register('POST', '/v1/billing/access-codes', { body: billingAccessCodeCreateBodySchema });
 register('POST', '/v1/billing/access-codes/redeem', { body: billingAccessCodeRedeemBodySchema });
 register('POST', '/v1/billing/access-codes/:id/revoke', { params: billingAccessCodeParamsSchema });
+register('GET', '/v1/billing/gifts', {});
+register('POST', '/v1/billing/gifts/checkout', { headers: billingIdempotencyKeyHeadersSchema, body: billingGiftCheckoutBodySchema });
 
 register('POST', '/v1/billing/cancel', { headers: billingIdempotencyKeyHeadersSchema });
 register('POST', '/v1/billing/pause', { headers: billingIdempotencyKeyHeadersSchema, body: billingPauseBodySchema });
@@ -1079,6 +1097,7 @@ register('GET', '/v1/artifacts/:id', { params: object({ id: Identifier }) });
 register('GET', '/v1/artifacts/:id/file', { params: object({ id: Identifier }) });
 register('GET', '/v1/dashboard/jobs/:id/status', { params: dashboardJobParamsSchema });
 register('GET', '/v1/dashboard/jobs/:id/timeline', { params: dashboardJobParamsSchema });
+register('POST', '/v1/dashboard/jobs/:id/retain', { params: dashboardJobParamsSchema });
 register('GET', '/v1/dashboard/jobs/:id/diagnostic', { params: dashboardJobParamsSchema });
 register('POST', '/v1/dashboard/jobs/:id/cancel', { params: object({ id: Identifier }) });
 register('POST', '/v1/dashboard/jobs/:id/prioritize', { params: object({ id: Identifier }) });
@@ -1173,6 +1192,7 @@ const remainingContracts: Array<[ContractMethod, string]> = [
   ['GET', '/v1/dashboard/apps/cache'],
   ['POST', '/v1/dashboard/apps/metadata/refresh'],
   ['GET', '/v1/dashboard/apps/storefronts'],
+  ['GET', '/v1/dashboard/apps/storefront-context'],
   ['GET', '/v1/dashboard/versions/:bundleId'],
   ['GET', '/v1/dashboard/devices/discover'],
   ['GET', '/v1/dashboard/testflight/:appId/trains'],
@@ -1262,6 +1282,8 @@ register('GET', '/v1/billing/access-codes', { response: { 200: BillingAccessCode
 register('POST', '/v1/billing/access-codes', { response: { 201: BillingAccessCodeCreateResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 403: ErrorEnvelope } });
 register('POST', '/v1/billing/access-codes/redeem', { response: { 200: BillingAccessCodeRedeemResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 409: ErrorEnvelope } });
 register('POST', '/v1/billing/access-codes/:id/revoke', { response: { 200: BillingAccessCodeResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
+register('GET', '/v1/billing/gifts', { response: { 200: PurchasedBillingGiftListResponse, 401: ErrorEnvelope } });
+register('POST', '/v1/billing/gifts/checkout', { response: { 201: BillingGiftCheckoutResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 409: ErrorEnvelope, 503: ErrorEnvelope } });
 register('GET', '/v1/billing/subscriptions', { response: { 200: BillingSubscriptionPage } });
 register('GET', '/v1/billing/revenue', { querystring: billingRevenueQuerySchema, response: { 200: BillingRevenueResponse, 401: ErrorEnvelope, 403: ErrorEnvelope } });
 register('GET', '/v1/billing/reconciliation', { querystring: billingReconciliationQuerySchema, response: { 200: BillingReconciliationResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 503: ErrorEnvelope } });
@@ -1280,6 +1302,7 @@ register('GET', '/v1/dashboard/devices/:id/recoveries', { params: object({ id: I
 register('GET', '/v1/dashboard/devices/:id/recoveries/:operationId', { params: object({ id: Identifier, operationId: Identifier }), response: { 200: DeviceRecoveryResponse, 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/jobs/:id/status', { params: dashboardJobParamsSchema, response: { 200: JobSummaryResponse, 404: ErrorEnvelope } });
 register('GET', '/v1/dashboard/jobs/:id/timeline', { params: dashboardJobParamsSchema, response: { 200: JobTimelineResponse, 404: ErrorEnvelope } });
+register('POST', '/v1/dashboard/jobs/:id/retain', { params: dashboardJobParamsSchema, response: { 200: object({ artifactId: Identifier, fileAvailable: Type.Boolean() }), 401: ErrorEnvelope, 403: ErrorEnvelope, 404: ErrorEnvelope, 409: ErrorEnvelope, 410: ErrorEnvelope } });
 register('GET', '/v1/dashboard/testflight/catalog', { querystring: testFlightCatalogQuerySchema, response: { 200: testFlightCatalogResponseSchema } });
 register('GET', '/v1/auth/session', { response: { 200: AuthSessionResponse } });
 register('POST', '/v1/auth/signup-challenge', { body: authSignupChallengeBodySchema, response: { 200: OkResponse, 400: ErrorEnvelope, 429: ErrorEnvelope, 503: ErrorEnvelope } });
@@ -1487,6 +1510,9 @@ register('POST', '/v1/dashboard/testflight/decrypt', {
 register('GET', '/v1/dashboard/search', {
   querystring: dashboardAppSearchQuerySchema,
   response: { 200: SearchResponse, 400: ErrorEnvelope, 401: ErrorEnvelope, 500: ErrorEnvelope, 502: ErrorEnvelope },
+});
+register('GET', '/v1/dashboard/apps/storefront-context', {
+  response: { 200: dashboardAppStorefrontContextResponseSchema, 401: ErrorEnvelope },
 });
 register('GET', '/v1/dashboard/apps/lookup-track', {
   querystring: dashboardAppTrackLookupQuerySchema,

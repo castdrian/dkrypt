@@ -10,6 +10,7 @@ export const billingCheckoutBodySchema = Type.Object(
     planId: Type.String({ minLength: 1, maxLength: 200 }),
     provider: Type.Optional(Type.Union([Type.Literal('stripe'), Type.Literal('crypto')])),
     cryptoAsset: Type.Optional(Type.String({ minLength: 2, maxLength: 32 })),
+    preserveResultId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   },
   { additionalProperties: true },
 );
@@ -27,6 +28,11 @@ export const billingAccessCodeCreateBodySchema = Type.Object({
 
 export const billingAccessCodeRedeemBodySchema = Type.Object({
   code: Type.String({ minLength: 8, maxLength: 128 }),
+}, { additionalProperties: false });
+
+export const billingGiftCheckoutBodySchema = Type.Object({
+  planId: Type.String({ minLength: 1, maxLength: 64 }),
+  months: Type.Union([Type.Literal(1), Type.Literal(3), Type.Literal(6), Type.Literal(12)]),
 }, { additionalProperties: false });
 
 export const billingAccessCodeParamsSchema = Type.Object({
@@ -105,6 +111,10 @@ export type BillingAccessCodeCreateRoute = {
 
 export type BillingAccessCodeRedeemRoute = {
   Body: Static<typeof billingAccessCodeRedeemBodySchema>;
+};
+
+export type BillingGiftCheckoutRoute = BillingCancelRoute & {
+  Body: Static<typeof billingGiftCheckoutBodySchema>;
 };
 
 export type BillingAccessCodeRevokeRoute = {

@@ -4,7 +4,10 @@ import { bundleIdSchema, identifierSchema } from '#apiCommonContracts.js';
 
 const additionalProperties = { additionalProperties: true } as const;
 
-export const dashboardAppSearchQuerySchema = Type.Object({ q: Type.String({ minLength: 1, maxLength: 200 }) }, additionalProperties);
+export const dashboardAppSearchQuerySchema = Type.Object({
+  q: Type.String({ minLength: 1, maxLength: 200 }),
+  country: Type.Optional(Type.String({ minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$' })),
+}, additionalProperties);
 export const dashboardAppSearchResultSchema = Type.Object({
   bundleId: bundleIdSchema,
   trackId: Type.Integer({ minimum: 1 }),
@@ -22,6 +25,10 @@ export const dashboardAppSearchResultSchema = Type.Object({
   }, additionalProperties)),
 }, additionalProperties);
 export const dashboardAppSearchResponseSchema = Type.Object({ results: Type.Array(dashboardAppSearchResultSchema) }, additionalProperties);
+export const dashboardAppStorefrontContextResponseSchema = Type.Object({
+  accountCountry: Type.Optional(Type.String({ minLength: 2, maxLength: 2 })),
+  countries: Type.Array(Type.Object({ code: Type.String({ minLength: 2, maxLength: 2 }), name: Type.String() }, additionalProperties)),
+}, additionalProperties);
 export const dashboardAppTrackLookupQuerySchema = Type.Object({ trackId: Type.String() });
 export const dashboardAppTrackLookupResponseSchema = Type.Object({ bundleId: bundleIdSchema, trackName: Type.String(), trackId: Type.Integer({ minimum: 1 }) });
 export const dashboardAppMetadataQuerySchema = Type.Object({
@@ -89,6 +96,7 @@ export const dashboardAppStorefrontsResponseSchema = Type.Object({
 
 export type DashboardAppSearchQuery = Static<typeof dashboardAppSearchQuerySchema>;
 export type DashboardAppSearchResponse = Static<typeof dashboardAppSearchResponseSchema>;
+export type DashboardAppStorefrontContextResponse = Static<typeof dashboardAppStorefrontContextResponseSchema>;
 export type DashboardAppMetadataQuery = Static<typeof dashboardAppMetadataQuerySchema>;
 export type DashboardAppMetadataResponse = Static<typeof dashboardAppMetadataResponseSchema>;
 export type DashboardAppCatalogStatsResponse = Static<typeof dashboardAppCatalogStatsResponseSchema>;
@@ -104,6 +112,9 @@ type CommonRouteErrors = { 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 403: Ap
 export type DashboardAppSearchRoute = {
   Querystring: DashboardAppSearchQuery;
   Reply: { 200: DashboardAppSearchResponse; 502: ApiErrorEnvelope } & CommonRouteErrors;
+};
+export type DashboardAppStorefrontContextRoute = {
+  Reply: { 200: DashboardAppStorefrontContextResponse } & Pick<CommonRouteErrors, 401 | 500>;
 };
 
 export type DashboardAppMetadataRoute = {

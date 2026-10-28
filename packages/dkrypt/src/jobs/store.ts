@@ -19,7 +19,7 @@ import { getCachedDeviceHealth } from '#deviceHealthCache.js';
 import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
-import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, type ArtifactRecord } from '#artifacts.js';
+import { artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, promoteArtifact, type ArtifactRecord } from '#artifacts.js';
 import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
@@ -340,6 +340,7 @@ function mergePersistedJob(saved: Job): boolean {
   }
 
   if ((merged.status === 'done' || merged.status === 'failed') && (previousStatus === 'queued' || previousStatus === 'running')) {
+    if (merged.quotaReservationState === 'reserved') merged.quotaReservationState = merged.status === 'done' ? 'consumed' : 'released';
     recordJobHistory(toHistoryEntry(merged));
     settleDecryptQuota(merged.id, merged.status === 'done');
     if (existing) settle(existing);
@@ -610,10 +611,10 @@ function failExpiredQueuedJob(job: Job, now = Date.now()): void {
   appendJobTimelineEvent(job, `Failed: ${job.error}`, 'failed', now);
   incrementMetric('jobs_failed_total', { source: job.source, failureClass: job.failureClass });
   log.warn('queued job expired before it could start', { jobId: job.id, bundleId: job.bundleId });
+  settleJobQuota(job, false);
   recordJobHistory(toHistoryEntry(job));
   settle(job);
   persistActiveJobs();
-  settleDecryptQuota(job.id, false);
   emitJobsChanged();
 }
 
@@ -799,6 +800,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
       if (quotaLimit !== undefined) previousUsage = getDecryptQuotaUsage(billingOwnerId, quotaLimit).used;
     }
   }
+  if (quotaOwnerId && (freeTierResult || quotaLimit !== undefined)) job.quotaReservationState = 'reserved';
   const admittedId = admitPersistedJob(job, quotaOwnerId, quotaLimit, freeTierResult, {
     networkHash: options.abuseNetworkHash,
     addressHash: options.abuseAddressHash,
@@ -870,6 +872,42 @@ export function getJob(id: string): Job | undefined {
     if (persisted) mergePersistedJob(persisted as Job);
   }
   return jobs.get(id);
+}
+
+export async function retainFreeJobResult(jobId: string, ownerId: string): Promise<Job | undefined> {
+  const job = getJob(jobId);
+  if (!job || !job.freeTierResult || job.status !== 'done' || job.billingOwnerId?.toLowerCase() !== ownerId.toLowerCase()) return undefined;
+  if (job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) return undefined;
+  const existingArtifact = getArtifactForJob(job);
+  let artifact = existingArtifact;
+  if (!artifact) {
+    if (!job.filePath) return undefined;
+    artifact = await promoteArtifact({
+      key: artifactKeyForJob(job),
+      bundleId: job.bundleId,
+      channel: job.testflight ? 'testflight' : 'appstore',
+      externalVersionId: job.externalVersionId,
+      testflightBuildId: job.testflight?.build.id,
+      versionLabel: job.ipaMetadata?.shortVersion ?? job.testflight?.build.cfBundleShortVersion ?? job.versionLabel,
+      buildNumber: job.ipaMetadata?.bundleVersion ?? job.testflight?.build.cfBundleVersion,
+      stagingPath: job.filePath,
+      sourceJobId: job.id,
+      warnings: job.warnings,
+      projectId: job.projectId,
+    });
+  }
+  job.freeTierResult = false;
+  job.temporaryResultExpiresAt = undefined;
+  job.temporaryResultSharedCache = false;
+  job.artifactId = artifact.id;
+  job.filePath = artifact.filePath;
+  job.fileSizeBytes = artifact.fileSizeBytes;
+  job.sha256 = artifact.sha256;
+  persistDoneJobs();
+  persistActiveJobs();
+  recordJobHistory(toHistoryEntry(job));
+  emitJobsChanged();
+  return job;
 }
 
 export function getActiveJobs(): Job[] {
@@ -1065,6 +1103,11 @@ function settle(job: Job): void {
   for (const w of waiters) w(job);
 }
 
+function settleJobQuota(job: Job, success: boolean): void {
+  if (job.quotaReservationState === 'reserved') job.quotaReservationState = success ? 'consumed' : 'released';
+  settleDecryptQuota(job.id, success);
+}
+
 function toHistoryEntry(job: Job) {
   if (job.freeTierResult && job.temporaryResultExpiresAt === undefined && (job.status === 'done' || job.status === 'failed')) {
     job.temporaryResultExpiresAt = (job.finishedAt ?? Date.now()) + 30 * 60_000;
@@ -1100,6 +1143,7 @@ function toHistoryEntry(job: Job) {
     artifactId: job.artifactId,
     freeTierResult: job.freeTierResult,
     temporaryResultExpiresAt: job.temporaryResultExpiresAt,
+    quotaReservationState: job.quotaReservationState,
     sha256: job.sha256,
     timeline: job.timeline,
     attempt: job.attempt,
@@ -1128,9 +1172,9 @@ export function cancelQueuedJob(id: string, cancelledBy: string): boolean {
   appendJobTimelineEvent(job, job.error, 'failed', job.finishedAt);
   log.info('job cancelled', { jobId: id, bundleId: job.bundleId, cancelledBy });
 
+  settleJobQuota(job, false);
   persistActiveJobs();
   recordJobHistory(toHistoryEntry(job));
-  settleDecryptQuota(job.id, false);
   settle(job);
 
   emitJobsChanged();
@@ -1623,9 +1667,9 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     appendJobTimelineEvent(job, 'Finished', 'done', job.finishedAt);
     log.info('job done', { jobId: job.id, bundleId: job.bundleId, deviceId: device?.id, executionPath: job.executionPath, sizeBytes: job.fileSizeBytes });
     if (device) recordDeviceActivity({ deviceId: device.id, kind: 'job', bundleId: job.bundleId, message: 'Decrypt completed' });
+    settleJobQuota(job, true);
     persistDoneJobs();
     persistActiveJobs();
-    settleDecryptQuota(job.id, true);
   } catch (err) {
     if (job.filePath?.startsWith(`${config.artifactDir}/.staging/`)) {
       await rm(job.filePath, { force: true }).catch(() => {});
@@ -1720,9 +1764,9 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
         job.failureClass = classifyJobFailure(job.error);
         appendJobTimelineEvent(job, job.error, 'failed', job.finishedAt);
         log.info('job cancelled during retry backoff', { jobId: job.id, bundleId: job.bundleId, cancelledBy: job.cancelledBy });
+        settleJobQuota(job, false);
         persistActiveJobs();
         recordJobHistory(toHistoryEntry(job));
-        settleDecryptQuota(job.id, false);
         emitJobsChanged();
         settle(job);
         return;
@@ -1751,8 +1795,8 @@ async function runOneJob(device: DeviceRecord | undefined, job: Job): Promise<vo
     appendJobTimelineEvent(job, `Failed: ${message}`, 'failed', job.finishedAt);
     log.error('job failed', { jobId: job.id, bundleId: job.bundleId, deviceId: device?.id, executionPath: job.executionPath, error: job.error, retried: (job.retryCount ?? 0) > 0 });
     if (device) recordDeviceActivity({ deviceId: device.id, kind: 'job', bundleId: job.bundleId, message: 'Decrypt failed' });
+    settleJobQuota(job, false);
     persistActiveJobs();
-    settleDecryptQuota(job.id, false);
   }
 
   const completedArtifact = job.status === 'done' && job.artifactId ? getArtifactById(job.artifactId) : undefined;
