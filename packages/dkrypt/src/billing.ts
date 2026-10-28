@@ -183,7 +183,7 @@ export interface PurchasedBillingGift {
   durationDays: number;
   createdAt: string;
   redeemBy: string;
-  status: 'pending_payment' | 'payment_failed' | 'available' | 'redeemed' | 'expired' | 'revoked';
+  status: BillingAccessCodeStatus;
   code?: string;
 }
 
