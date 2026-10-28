@@ -72,6 +72,33 @@
           },
           {
             "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "ios"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "tvos"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "visionos"
+                  ]
+                }
+              ]
+            },
+            "in": "query",
+            "name": "platform",
+            "required": false
+          },
+          {
+            "schema": {
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[A-Za-z0-9._:-]+$",
@@ -168,6 +195,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "externalVersionId": {
                       "minLength": 1,
@@ -923,6 +972,28 @@
                           "pattern": "^[A-Za-z0-9.-]+$",
                           "type": "string"
                         },
+                        "platform": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ios"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tvos"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "visionos"
+                              ]
+                            }
+                          ]
+                        },
                         "externalVersionId": {
                           "minLength": 1,
                           "maxLength": 200,
@@ -1552,6 +1623,28 @@
                           "pattern": "^[A-Za-z0-9.-]+$",
                           "type": "string"
                         },
+                        "platform": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ios"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tvos"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "visionos"
+                              ]
+                            }
+                          ]
+                        },
                         "externalVersionId": {
                           "minLength": 1,
                           "maxLength": 200,
@@ -2120,6 +2213,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "externalVersionId": {
                       "minLength": 1,
@@ -3206,6 +3321,28 @@
                       }
                     ]
                   },
+                  "platform": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ios"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "tvos"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "visionos"
+                        ]
+                      }
+                    ]
+                  },
                   "resolveOnly": {
                     "type": "boolean"
                   }
@@ -3264,6 +3401,28 @@
                           "maxLength": 200,
                           "pattern": "^[A-Za-z0-9.-]+$",
                           "type": "string"
+                        },
+                        "platform": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ios"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tvos"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "visionos"
+                              ]
+                            }
+                          ]
                         },
                         "externalVersionId": {
                           "minLength": 1,
@@ -3649,6 +3808,28 @@
                               "pattern": "^[A-Za-z0-9.-]+$",
                               "type": "string"
                             },
+                            "platform": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ios"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "tvos"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "visionos"
+                                  ]
+                                }
+                              ]
+                            },
                             "channel": {
                               "anyOf": [
                                 {
@@ -3730,6 +3911,33 @@
                           "pattern": "^[A-Za-z0-9.-]+$",
                           "type": "string"
                         },
+                        "platform": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ios"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tvos"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "visionos"
+                              ]
+                            }
+                          ]
+                        },
+                        "externalVersionId": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        },
                         "selector": {
                           "type": "string"
                         },
@@ -3786,6 +3994,28 @@
                               "maxLength": 200,
                               "pattern": "^[A-Za-z0-9.-]+$",
                               "type": "string"
+                            },
+                            "platform": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ios"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "tvos"
+                                  ]
+                                },
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "visionos"
+                                  ]
+                                }
+                              ]
                             },
                             "channel": {
                               "anyOf": [
@@ -3923,6 +4153,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "externalVersionId": {
                       "minLength": 1,
@@ -4307,6 +4559,28 @@
                           "maxLength": 200,
                           "pattern": "^[A-Za-z0-9.-]+$",
                           "type": "string"
+                        },
+                        "platform": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ios"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "tvos"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "visionos"
+                              ]
+                            }
+                          ]
                         },
                         "channel": {
                           "anyOf": [
@@ -5351,6 +5625,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "externalVersionId": {
                       "minLength": 1,
@@ -6582,6 +6878,28 @@
                             "pattern": "^[A-Za-z0-9.-]+$",
                             "type": "string"
                           },
+                          "platform": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "ios"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "tvos"
+                                ]
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "visionos"
+                                ]
+                              }
+                            ]
+                          },
                           "channel": {
                             "anyOf": [
                               {
@@ -7389,6 +7707,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "channel": {
                       "anyOf": [
@@ -8951,6 +9291,28 @@
                                 "pattern": "^[A-Za-z0-9.-]+$",
                                 "type": "string"
                               },
+                              "platform": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "ios"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "tvos"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "visionos"
+                                    ]
+                                  }
+                                ]
+                              },
                               "externalVersionId": {
                                 "minLength": 1,
                                 "maxLength": 200,
@@ -10060,6 +10422,28 @@
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
                     },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
+                    },
                     "externalVersionId": {
                       "minLength": 1,
                       "maxLength": 200,
@@ -10491,6 +10875,28 @@
                       "maxLength": 200,
                       "pattern": "^[A-Za-z0-9.-]+$",
                       "type": "string"
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ios"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "tvos"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "visionos"
+                          ]
+                        }
+                      ]
                     },
                     "externalVersionId": {
                       "minLength": 1,
