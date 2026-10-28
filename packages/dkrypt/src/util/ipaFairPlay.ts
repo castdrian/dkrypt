@@ -150,13 +150,16 @@ export function inspectIpaFairPlayCompatibility(ipaPath: string): IpaFairPlayCom
   const licenseDirectory = `Payload/${appRoot}/SC_Info/`;
   const sinfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.sinf') && !entry.entryName.endsWith('.v4.sinf'));
   const supfEntries = entries.filter((entry) => entry.entryName.startsWith(licenseDirectory) && entry.entryName.endsWith('.supf'));
-  const licenseFormat = sinfEntries.length > 0 ? 'sinf' : supfEntries.length > 0 ? 'supf' : 'unknown';
-  if (sinfEntries.length !== 1 || supfEntries.length > 0) {
-    return { supported: false, licenseFormat, architectures, reason: licenseFormat === 'supf' ? 'SUPF licenses are not supported by the current server decryptor' : 'IPA must contain exactly one supported SINF license' };
+  const licenseFormat = supfEntries.length > 0 ? 'supf' : sinfEntries.length > 0 ? 'sinf' : 'unknown';
+  if (supfEntries.length > 0) {
+    return { supported: false, licenseFormat, architectures, reason: 'SUPF licenses are not supported by the current server decryptor' };
   }
+  if (sinfEntries.length === 0) return { supported: false, licenseFormat, architectures, reason: 'IPA does not contain a supported SINF license' };
   if (!architectures.includes('arm64')) return { supported: false, licenseFormat, architectures, reason: 'primary executable has no supported arm64 slice' };
   try {
-    return { supported: true, licenseFormat, architectures, selector: selectorFromSinf(sinfEntries[0].getData()) };
+    const selectors = new Set(sinfEntries.map((entry) => selectorFromSinf(entry.getData())));
+    if (selectors.size > 1) return { supported: false, licenseFormat, architectures, reason: 'IPA contains multiple FairPlay license selectors' };
+    return { supported: true, licenseFormat, architectures, selector: selectors.values().next().value! };
   } catch {
     return { supported: false, licenseFormat, architectures, reason: 'SINF license layout is not supported by the current server decryptor' };
   }
