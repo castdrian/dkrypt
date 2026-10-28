@@ -2,7 +2,16 @@ import { expect, test } from 'bun:test';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { config } from '#config.js';
 import { deleteAuthProfile, upsertAuthIdentity } from '#identity.js';
+import type { Response as HttpResponse } from '#http.js';
+import { setSessionCookie } from '#session.js';
 import { buildTestServer } from '#testServer.js';
+
+function sessionCookie(userId: string): string {
+  let value = '';
+  const response = { setHeader: (_name: string, cookie: string) => { value = cookie; } } as unknown as HttpResponse;
+  setSessionCookie(response, { sub: userId, permissions: 0n, reauthenticatedAt: Date.now() });
+  return value.split(';', 1)[0]!;
+}
 
 function encodePart(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -140,6 +149,87 @@ test('Apple OAuth validates form-post state and signed identity tokens before is
   } finally {
     await server.close();
     deleteAuthProfile(userId);
+    global.fetch = originalFetch;
+    config.appleOauthServiceId = previous.serviceId;
+    config.appleOauthTeamId = previous.teamId;
+    config.appleOauthKeyId = previous.keyId;
+    config.appleOauthPrivateKey = previous.privateKey;
+    config.publicBaseUrl = previous.publicBaseUrl;
+  }
+});
+
+test('Apple OAuth links a verified Apple identity to the signed-in account after review', async () => {
+  const previous = {
+    serviceId: config.appleOauthServiceId,
+    teamId: config.appleOauthTeamId,
+    keyId: config.appleOauthKeyId,
+    privateKey: config.appleOauthPrivateKey,
+    publicBaseUrl: config.publicBaseUrl,
+  };
+  const signingPair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const identityPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const signingPrivateKey = signingPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+  const identityPrivateKey = identityPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+  const publicJwk = identityPair.publicKey.export({ format: 'jwk' });
+  const appleSubject = `apple-link-${crypto.randomUUID()}`;
+  const appleEmail = 'linked-apple@example.test';
+  const ownerId = `github:${crypto.randomUUID()}`;
+  const ownerProviderId = crypto.randomUUID();
+  const ownerUpdatedAt = new Date().toISOString();
+  const originalFetch = global.fetch;
+  let authorizationNonce = '';
+  config.appleOauthServiceId = 'dev.dkrypt.signin';
+  config.appleOauthTeamId = 'TEAMID1234';
+  config.appleOauthKeyId = 'KEYID12345';
+  config.appleOauthPrivateKey = Buffer.from(signingPrivateKey).toString('base64');
+  config.publicBaseUrl = 'https://dkrypt.example.test';
+  global.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === 'https://appleid.apple.com/auth/token') {
+      return Response.json({ access_token: 'apple-access-token', id_token: signIdentityToken({ privateKey: identityPrivateKey, keyId: 'JWKSKEY03', subject: appleSubject, nonce: authorizationNonce, email: appleEmail }) });
+    }
+    if (url === 'https://appleid.apple.com/auth/keys') return Response.json({ keys: [{ ...publicJwk, kid: 'JWKSKEY03', alg: 'RS256', use: 'sig' }] });
+    throw new Error(`unexpected Apple OAuth request: ${url}`);
+  }) as typeof fetch;
+  const server = await buildTestServer({ includePublicRoutes: false });
+
+  try {
+    upsertAuthIdentity(ownerId, { provider: 'github', providerId: ownerProviderId, username: 'original-account', displayName: 'Original Account', source: 'oauth', updatedAt: ownerUpdatedAt });
+    const ownerCookie = sessionCookie(ownerId);
+    const connect = await server.inject({ method: 'GET', url: '/v1/auth/apple/connect', headers: { cookie: ownerCookie } });
+    const authorization = new URL(String(connect.headers.location));
+    authorizationNonce = authorization.searchParams.get('nonce') ?? '';
+    const connectCookies = Array.isArray(connect.headers['set-cookie']) ? connect.headers['set-cookie'] : [connect.headers['set-cookie']];
+    const stateCookie = connectCookies.find((value) => typeof value === 'string' && value.startsWith('apple_oauth_state='))?.split(';', 1)[0] ?? '';
+    expect(stateCookie).toStartWith('apple_oauth_state=');
+    const callback = await server.inject({
+      method: 'POST',
+      url: '/v1/auth/apple/callback',
+      headers: { cookie: stateCookie, origin: 'https://appleid.apple.com', 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams({ code: 'apple-link-code', state: authorization.searchParams.get('state') ?? '', user: JSON.stringify({ name: { firstName: 'Linked', lastName: 'Apple' }, email: appleEmail }) }).toString(),
+    });
+    const reviewId = new URL(String(callback.headers.location), config.publicBaseUrl).searchParams.get('link_review');
+    const review = await server.inject({ method: 'GET', url: `/v1/auth/link-review/${reviewId}`, headers: { cookie: ownerCookie } });
+    const confirmed = await server.inject({
+      method: 'POST',
+      url: `/v1/auth/link-review/${reviewId}/confirm`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: { confirmation: 'LINK ACCOUNT' },
+    });
+    const session = await server.inject({ method: 'GET', url: '/v1/auth/session', headers: { cookie: ownerCookie } });
+
+    expect(connect.statusCode).toBe(302);
+    expect(authorization.origin).toBe('https://appleid.apple.com');
+    expect(authorization.searchParams.get('response_mode')).toBe('form_post');
+    expect(callback.statusCode).toBe(302);
+    expect(review.statusCode).toBe(200);
+    expect(review.json()).toMatchObject({ provider: 'apple', willMerge: false });
+    expect(confirmed.statusCode).toBe(200);
+    expect(session.json()).toMatchObject({ loggedIn: true, sub: ownerId, username: 'original-account', displayName: 'Original Account' });
+    expect((session.json().linkedProviders as string[]).sort()).toEqual(['apple', 'github']);
+  } finally {
+    await server.close();
+    deleteAuthProfile(ownerId);
     global.fetch = originalFetch;
     config.appleOauthServiceId = previous.serviceId;
     config.appleOauthTeamId = previous.teamId;
