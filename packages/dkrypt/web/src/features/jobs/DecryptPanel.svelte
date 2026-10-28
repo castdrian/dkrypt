@@ -107,7 +107,10 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 				if (["apps.apple.com", "itunes.apple.com"].includes(hostname)) {
 					const trackId = url.pathname.match(/(?:^|\/)id(\d+)(?:\/|$)/)?.[1];
 					if (trackId) {
-						const lookup = await lookupAppStoreTrack(Number(trackId));
+						const linkedCountry = url.pathname.match(/^\/([a-z]{2})\/app\//i)?.[1]?.toUpperCase();
+						const country = storefrontCountry || linkedCountry;
+						if (!storefrontCountry && linkedCountry) storefrontCountry = linkedCountry;
+						const lookup = await lookupAppStoreTrack(Number(trackId), country);
 						term = lookup.bundleId;
 						void runSearch(lookup.bundleId);
 						return;

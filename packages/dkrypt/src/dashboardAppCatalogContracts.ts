@@ -29,7 +29,10 @@ export const dashboardAppStorefrontContextResponseSchema = Type.Object({
   accountCountry: Type.Optional(Type.String({ minLength: 2, maxLength: 2 })),
   countries: Type.Array(Type.Object({ code: Type.String({ minLength: 2, maxLength: 2 }), name: Type.String() }, additionalProperties)),
 }, additionalProperties);
-export const dashboardAppTrackLookupQuerySchema = Type.Object({ trackId: Type.String() });
+export const dashboardAppTrackLookupQuerySchema = Type.Object({
+  trackId: Type.String(),
+  country: Type.Optional(Type.String({ minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$' })),
+});
 export const dashboardAppTrackLookupResponseSchema = Type.Object({ bundleId: bundleIdSchema, trackName: Type.String(), trackId: Type.Integer({ minimum: 1 }) });
 export const dashboardAppMetadataQuerySchema = Type.Object({
   bundleIds: Type.Optional(Type.String({ maxLength: 20_000 })),
@@ -115,6 +118,11 @@ export type DashboardAppSearchRoute = {
 };
 export type DashboardAppStorefrontContextRoute = {
   Reply: { 200: DashboardAppStorefrontContextResponse } & Pick<CommonRouteErrors, 401 | 500>;
+};
+
+export type DashboardAppTrackLookupRoute = {
+  Querystring: Static<typeof dashboardAppTrackLookupQuerySchema>;
+  Reply: { 200: Static<typeof dashboardAppTrackLookupResponseSchema>; 400: ApiErrorEnvelope; 401: ApiErrorEnvelope; 502: ApiErrorEnvelope };
 };
 
 export type DashboardAppMetadataRoute = {

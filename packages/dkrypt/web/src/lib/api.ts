@@ -1748,8 +1748,10 @@ export function fetchAppStorefrontContext(): Promise<{ accountCountry?: string; 
   return apiJson('/v1/dashboard/apps/storefront-context');
 }
 
-export function lookupAppStoreTrack(trackId: number): Promise<{ bundleId: string; trackName: string; trackId: number }> {
-  return apiJson(`/v1/dashboard/apps/lookup-track?trackId=${encodeURIComponent(trackId)}`);
+export function lookupAppStoreTrack(trackId: number, country?: string): Promise<{ bundleId: string; trackName: string; trackId: number }> {
+  const params = new URLSearchParams({ trackId: String(trackId) });
+  if (country) params.set('country', country);
+  return apiJson(`/v1/dashboard/apps/lookup-track?${params}`);
 }
 
 export function fetchAppCatalog(bundleIds: string[]): Promise<{ entries: AppCatalogEntry[] }> {

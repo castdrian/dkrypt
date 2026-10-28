@@ -498,6 +498,8 @@ export type TabId = 'home' | 'billing' | 'keys' | 'logs' | 'insights' | 'docs' |
 const VALID_TAB_IDS: TabId[] = ['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'];
 
 function readInitialTab(): TabId {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('url') || params.has('text') || params.has('title')) return 'home';
   const fromUrl = getQueryParam('tab');
   if (fromUrl && VALID_TAB_IDS.includes(fromUrl as TabId)) return fromUrl as TabId;
   return (localStorage.getItem('activeTab') as TabId | null) ?? 'home';

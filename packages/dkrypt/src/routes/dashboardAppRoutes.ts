@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import type {
   DashboardAppVersionsRoute,
   DashboardAppStorefrontContextRoute,
+  DashboardAppTrackLookupRoute,
   DashboardAppStorefrontsRoute,
   DashboardAppCatalogStatsRoute,
   DashboardAppMetadataRefreshRoute,
@@ -161,7 +162,7 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
       };
     });
 
-    server.get<{ Querystring: { trackId: string } }>('/v1/dashboard/apps/lookup-track', {
+    server.get<DashboardAppTrackLookupRoute>('/v1/dashboard/apps/lookup-track', {
       schema: getRouteContract('GET', '/v1/dashboard/apps/lookup-track'),
     }, async (request, reply) => {
       const trackId = Number(request.query.trackId);
@@ -169,7 +170,11 @@ export function createDashboardAppRoutes(overrides: Partial<DashboardAppServices
         return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'Invalid App Store app ID'));
       }
       try {
-        const metadata = await services.lookupAppMetadataByTrackId(trackId);
+        const country = request.query.country;
+        if (country && !iso31661.some((entry) => entry.alpha2 === country)) {
+          return reply.code(400).send(createHttpErrorEnvelope(request.id, 400, 'country is not a supported App Store storefront'));
+        }
+        const metadata = await services.lookupAppMetadataByTrackId(trackId, country);
         if (metadata.trackId !== trackId) throw new Error('App Store returned a different app');
         services.upsertAppCatalogEntries([catalogEntryFromMetadata(metadata)]);
         return { bundleId: metadata.bundleId, trackName: metadata.trackName, trackId: metadata.trackId };

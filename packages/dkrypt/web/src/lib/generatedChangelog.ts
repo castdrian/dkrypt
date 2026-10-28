@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-28",
+    "title": "feat: add share, gift, and quota recovery flows",
+    "description": "Released in 4ec2605."
+  },
+  {
+    "date": "2026-10-28",
     "title": "docs(security): clarify IP reputation data use",
     "description": "Released in 3fb4403."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-27",
     "title": "test(auth): preserve oauth rotation coverage with signup checks",
     "description": "Released in 323d63f."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "fix(security): align fixtures with abuse controls",
-    "description": "Released in c843e65."
   }
 ] as const;
