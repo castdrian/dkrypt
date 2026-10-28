@@ -1,6 +1,11 @@
 export const GENERATED_CHANGELOG = [
   {
     "date": "2026-10-28",
+    "title": "fix: route shared links to the decrypt flow",
+    "description": "Released in 3d566ce."
+  },
+  {
+    "date": "2026-10-28",
     "title": "feat: add share, gift, and quota recovery flows",
     "description": "Released in 4ec2605."
   },
@@ -33,10 +38,5 @@ export const GENERATED_CHANGELOG = [
     "date": "2026-10-27",
     "title": "test(auth): mock verified github email lookup",
     "description": "Released in 5523835."
-  },
-  {
-    "date": "2026-10-27",
-    "title": "test(auth): preserve oauth rotation coverage with signup checks",
-    "description": "Released in 323d63f."
   }
 ] as const;

@@ -496,10 +496,11 @@ export function requestOpenBatch(): void {
 export type TabId = 'home' | 'billing' | 'keys' | 'logs' | 'insights' | 'docs' | 'settings';
 
 const VALID_TAB_IDS: TabId[] = ['home', 'billing', 'keys', 'logs', 'insights', 'docs', 'settings'];
+export const SHARE_TARGET_PARAMS = ['url', 'text', 'title'] as const;
 
 function readInitialTab(): TabId {
   const params = new URLSearchParams(window.location.search);
-  if (params.has('url') || params.has('text') || params.has('title')) return 'home';
+  if (SHARE_TARGET_PARAMS.some((key) => params.has(key))) return 'home';
   const fromUrl = getQueryParam('tab');
   if (fromUrl && VALID_TAB_IDS.includes(fromUrl as TabId)) return fromUrl as TabId;
   return (localStorage.getItem('activeTab') as TabId | null) ?? 'home';

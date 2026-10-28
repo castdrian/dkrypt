@@ -31,6 +31,7 @@ import {
   failPurchasedBillingGiftCheckout,
   fulfillPurchasedBillingGift,
   getBillingCustomerId,
+  getBillingAccessCodeStatus,
   getBillingSubscriptionById,
   getBillingEntitlements,
   getBillingSubscription,
@@ -1190,7 +1191,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const now = Date.now();
     const accessCodes = listBillingAccessCodes().map((accessCode) => ({
       ...accessCode,
-      status: accessCode.purchaseStatus === 'pending' ? 'pending_payment' : accessCode.purchaseStatus === 'failed' ? 'payment_failed' : accessCode.revokedAt ? 'revoked' : accessCode.redeemedAt ? Date.parse(accessCode.expiresAt ?? '') <= now ? 'expired' : 'redeemed' : Date.parse(accessCode.redeemBy) <= now ? 'expired' : 'available',
+      status: getBillingAccessCodeStatus(accessCode, now),
     }));
     return reply.send({ accessCodes });
   });

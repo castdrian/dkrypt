@@ -187,6 +187,8 @@ export interface PurchasedBillingGift {
   code?: string;
 }
 
+export type BillingAccessCodeStatus = 'pending_payment' | 'payment_failed' | 'available' | 'redeemed' | 'expired' | 'revoked';
+
 export const STRIPE_CHECKOUT_IDEMPOTENCY_TTL_MS = 23 * 60 * 60 * 1000;
 
 export interface BillingEntitlements {
@@ -659,19 +661,17 @@ export function refundPurchasedBillingGift(paymentIntentId: string, giftId?: str
   return structuredClone(accessCode);
 }
 
+export function getBillingAccessCodeStatus(accessCode: Pick<BillingAccessCode, 'purchaseStatus' | 'revokedAt' | 'redeemedAt' | 'expiresAt' | 'redeemBy'>, now = Date.now()): BillingAccessCodeStatus {
+  if (accessCode.purchaseStatus === 'failed') return 'payment_failed';
+  if (accessCode.revokedAt || accessCode.purchaseStatus === 'refunded') return 'revoked';
+  if (accessCode.purchaseStatus === 'pending') return 'pending_payment';
+  if (accessCode.redeemedAt) return Date.parse(accessCode.expiresAt ?? '') <= now ? 'expired' : 'redeemed';
+  return Date.parse(accessCode.redeemBy) <= now ? 'expired' : 'available';
+}
+
 export function listPurchasedBillingGifts(purchaserId: string, now = Date.now()): PurchasedBillingGift[] {
   return (state.accessCodes ?? []).filter((accessCode) => accessCode.purchaserId === purchaserId).map((accessCode) => {
-    const status: PurchasedBillingGift['status'] = accessCode.purchaseStatus === 'failed'
-        ? 'payment_failed'
-        : accessCode.revokedAt || accessCode.purchaseStatus === 'refunded'
-          ? 'revoked'
-        : accessCode.purchaseStatus !== 'paid'
-          ? 'pending_payment'
-          : accessCode.redeemedAt
-            ? 'redeemed'
-            : Date.parse(accessCode.redeemBy) <= now
-              ? 'expired'
-              : 'available';
+    const status = getBillingAccessCodeStatus(accessCode, now);
     return {
       id: accessCode.id,
       planId: accessCode.planId,

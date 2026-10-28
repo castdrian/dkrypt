@@ -48,7 +48,7 @@ import { pushAppFavoritesPref, sessionHasPermission, sessionState } from "#lib/s
 		formatSearchResultMeta,
 		shouldShowSearchResultStatus,
 	} from "#lib/searchResultPresentation";
-import { decryptSearchJumpState, signupDecryptContinuationState, showToast } from "#lib/ui.svelte";
+import { decryptSearchJumpState, SHARE_TARGET_PARAMS, signupDecryptContinuationState, showToast } from "#lib/ui.svelte";
 	import { loadTestFlightCatalog, testFlightCatalogState } from "#lib/testflightCatalog.svelte";
 	import { cn } from "#lib/utils";
 	import TestFlightPickerDialog from "#features/testflight/TestFlightPickerDialog.svelte";
@@ -169,9 +169,9 @@ import { decryptSearchJumpState, signupDecryptContinuationState, showToast } fro
 			accountStorefrontCountry = context.accountCountry;
 		}).catch(() => {});
 		const params = new URLSearchParams(location.search);
-		const sharedValue = params.get("url") || params.get("text") || params.get("title");
+		const sharedValue = SHARE_TARGET_PARAMS.map((key) => params.get(key)).find(Boolean);
 		if (sharedValue) {
-			for (const key of ["url", "text", "title"]) params.delete(key);
+			for (const key of SHARE_TARGET_PARAMS) params.delete(key);
 			const query = params.toString();
 			history.replaceState(history.state, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
 			submitSharedValue(sharedValue);
