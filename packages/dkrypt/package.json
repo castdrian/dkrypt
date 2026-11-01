@@ -26,11 +26,11 @@
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.3",
-    "@fastify/static": "^10.1.7",
+    "@fastify/static": "^10.1.8",
     "@fastify/swagger": "^9.9.2",
     "@fastify/type-provider-typebox": "^6.3.0",
     "@modelcontextprotocol/server": "2.4.0",
-    "@scalar/fastify-api-reference": "^1.75.1",
+    "@scalar/fastify-api-reference": "^1.76.2",
     "@simplewebauthn/server": "^14.0.2",
     "@sinclair/typebox": "^0.34.52",
     "adm-zip": "^0.6.1",
@@ -40,11 +40,11 @@
     "fastify": "^5.12.7",
     "iso-3166": "4.4.0",
     "node-cron": "^4.6.0",
-    "nodemailer": "^10.2.0",
+    "nodemailer": "^10.2.1",
     "plist": "^5.0.0",
     "safe-regex2": "^5.1.2",
     "ssh2": "^1.17.0",
-    "stripe": "^23.0.0",
+    "stripe": "^23.0.1",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
@@ -53,7 +53,7 @@
     "@types/nodemailer": "^8.0.2",
     "@types/ssh2": "^1.15.6",
     "@types/web-push": "^3.6.4",
-    "bun-types": "^1.4.3",
+    "bun-types": "^1.4.4",
     "fast-check": "^4.10.2",
     "typescript": "^5.7.2"
   },
