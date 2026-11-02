@@ -154,7 +154,7 @@
   let redeemingAccessCode = $state(false);
   let purchasedGifts = $state<PurchasedBillingGift[]>([]);
   let giftPlanId = $state('access');
-  let giftMonths = $state<1 | 3 | 6 | 12>(1);
+  let giftDurationDays = $state<7 | 30 | 90 | 180 | 360>(30);
   let creatingGift = $state(false);
   const giftReturn = new URLSearchParams(location.search).get('gift');
   let giftCheckoutState = $state<'success' | 'cancelled' | undefined>(giftReturn === 'success' || giftReturn === 'cancelled' ? giftReturn : undefined);
@@ -167,7 +167,8 @@
   let checkoutIdempotencyPlan = $state<PlanId | undefined>();
   let checkoutIdempotencyProvider = $state<PaymentProvider | undefined>();
   let paymentProvider = $state<PaymentProvider>('stripe');
-  let buyingCredits = $state(false);
+  let buyingSingleDecrypt = $state(false);
+  let singleDecryptPaymentStatus = $state<'idle' | 'checking' | 'confirmed' | 'pending'>('idle');
   let creditCheckoutIdempotencyKey = $state<string | undefined>();
   let preserveResultId = $state<string | undefined>();
   let retainingResult = $state(false);
@@ -183,6 +184,7 @@
   let initializedPlanEstimate = false;
   let cryptoAsset = $state('USDC');
   const checkoutParams = new URLSearchParams(location.search);
+  const singleDecryptBalanceStorageKey = 'dkrypt.single-decrypt.balance-before-checkout';
   let checkoutState = $state<CheckoutState>((checkoutParams.get('checkout') ?? checkoutParams.get('crypto_checkout')) as CheckoutState);
   const resumeRequestReturn = checkoutParams.get('resumeRequest') === '1';
   let checkoutRecovery = $state<BillingCheckoutRecovery | undefined>();
@@ -262,9 +264,9 @@
     }
   }
 
-  async function buyDecryptCredits(): Promise<void> {
-    if (!billing?.decryptCredits.purchaseEnabled || !billing.entitlement.decrypt || billing.entitlement.dailyDecryptLimit === undefined) return;
-    buyingCredits = true;
+  async function buySingleDecrypt(): Promise<void> {
+    if (!billing?.decryptCredits.purchaseEnabled || !billing.entitlement.decrypt) return;
+    buyingSingleDecrypt = true;
     creditCheckoutIdempotencyKey ??= crypto.randomUUID();
     try {
       const response = await fetch('/v1/billing/credits/checkout', {
@@ -274,15 +276,49 @@
       });
       const result = await response.json().catch(() => ({})) as { url?: string; error?: string; message?: string };
       if (!response.ok || !result.url) {
-        showToast(result.message ?? result.error ?? "Couldn't start credit checkout", 'error');
+        showToast(result.message ?? result.error ?? "Couldn't start single-decrypt checkout", 'error');
         return;
+      }
+      try {
+        sessionStorage.setItem(singleDecryptBalanceStorageKey, String(billing.decryptCredits.available));
+      } catch {
+        singleDecryptPaymentStatus = 'idle';
       }
       location.assign(result.url);
     } catch {
       showToast("Couldn't connect to checkout. Try again to safely reuse this request.", 'error');
     } finally {
-      buyingCredits = false;
+      buyingSingleDecrypt = false;
     }
+  }
+
+  async function refreshSingleDecryptBalance(): Promise<number | undefined> {
+    const response = await fetch('/v1/billing/credits');
+    if (!response.ok || !billing) return undefined;
+    const result = await response.json().catch(() => ({})) as { balance?: number; grants?: BillingData['decryptCredits']['grants'] };
+    if (typeof result.balance !== 'number' || !Array.isArray(result.grants)) return undefined;
+    billing = { ...billing, decryptCredits: { ...billing.decryptCredits, available: result.balance, grants: result.grants } };
+    return result.balance;
+  }
+
+  async function checkSingleDecryptPayment(): Promise<void> {
+    singleDecryptPaymentStatus = 'checking';
+    const storedBalance = sessionStorage.getItem(singleDecryptBalanceStorageKey);
+    const parsedBalance = storedBalance === null ? Number.NaN : Number(storedBalance);
+    const baseline = Number.isFinite(parsedBalance) ? parsedBalance : undefined;
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      try {
+        const balance = await refreshSingleDecryptBalance();
+        if (baseline !== undefined && balance !== undefined && balance > baseline) {
+          singleDecryptPaymentStatus = 'confirmed';
+          return;
+        }
+      } catch {
+        singleDecryptPaymentStatus = 'checking';
+      }
+      if (attempt < 14) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    singleDecryptPaymentStatus = 'pending';
   }
 
   function toggleUsageAlert(threshold: number): void {
@@ -506,12 +542,13 @@
     if (!giftPlanId || creatingGift || !billing?.providers.stripe.ready || !billing.giftPurchasesEnabled) return;
     creatingGift = true;
     try {
-      const fingerprint = `${giftPlanId}:${giftMonths}`;
+      const fingerprint = `${giftPlanId}:${giftDurationDays}`;
       if (!giftCheckoutIdempotencyKey || giftCheckoutFingerprint !== fingerprint) {
         giftCheckoutFingerprint = fingerprint;
         giftCheckoutIdempotencyKey = crypto.randomUUID();
       }
-      const result = await createBillingGiftCheckout({ planId: giftPlanId, months: giftMonths }, giftCheckoutIdempotencyKey);
+      const input = giftDurationDays === 7 ? { planId: 'access' as const, durationDays: 7 as const } : { planId: giftPlanId, months: (giftDurationDays / 30) as 1 | 3 | 6 | 12 };
+      const result = await createBillingGiftCheckout(input, giftCheckoutIdempotencyKey);
       location.assign(result.url);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Could not start gift checkout', 'error');
@@ -725,6 +762,14 @@
       else void preserveResultAfterUpgrade();
       void refreshPurchasedGifts();
       if (giftCheckoutState === 'success') void waitForPurchasedGift();
+      if (creditCheckoutState === 'success') void checkSingleDecryptPayment();
+      else if (creditCheckoutState === 'cancelled') {
+        try {
+          sessionStorage.removeItem(singleDecryptBalanceStorageKey);
+        } catch {
+          singleDecryptPaymentStatus = 'idle';
+        }
+      }
     });
   });
 </script>
@@ -737,7 +782,7 @@
       {#if activationStatus === 'active'}<Button class="mt-2" size="sm" onclick={() => location.assign('/?continue=decrypt')}>Continue to selected release</Button>{/if}
     </div>
   {/if}
-  {#if checkoutState !== 'success' && checkoutRecovery && (billing?.entitlement.freeTier ?? true)}
+  {#if checkoutState !== 'success' && checkoutRecovery && (billing?.entitlement.freeTier || billing?.entitlement.provider === 'gift' || billing?.entitlement.planId === 'viewer')}
     {@const retryPlan = billing?.plans.find((plan) => plan.id === checkoutRecovery?.planId)}
     {#if retryPlan}<div class="rounded-xl border border-border bg-panel-muted/40 px-4 py-3 text-sm" role="status"><div class="font-medium">{checkoutState === 'cancelled' ? 'Checkout wasn’t completed' : 'Your checkout is ready to resume'}</div><p class="mt-1 text-muted">{checkoutState === 'cancelled' ? 'No payment was made.' : 'Checkout did not open or finish.'} Reopen {retryPlan.name}; your selected release stays saved.</p><Button class="mt-2" size="sm" variant="secondary" loading={openingPlan === retryPlan.id} onclick={() => { paymentProvider = checkoutRecovery?.provider ?? 'stripe'; preserveResultId = checkoutRecovery?.preserveResultId; void startCheckout(retryPlan); }}>Resume checkout</Button></div>{/if}
   {/if}
@@ -808,16 +853,21 @@
         {#if billing.quota.limit !== null && !billing.entitlement.freeTier}<div class="mt-2 text-xs text-muted">{usageForecastLabel()} · based on {billing.usageForecast.jobsInSample} jobs over {billing.usageForecast.sampleDays} days.</div><fieldset class="mt-3"><legend class="text-xs font-medium">Alert me when I use</legend><div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">{#each [50, 75, 90, 100] as threshold}<label class="inline-flex min-h-9 items-center gap-2 text-xs"><input type="checkbox" class="size-4 accent-accent" checked={decryptUsageAlertThresholdsState.value.includes(threshold)} onchange={() => toggleUsageAlert(threshold)} />{threshold}%</label>{/each}</div></fieldset>{/if}
         {#if billing.entitlement.apiRatePerMinute}<div class="mt-2 rounded-lg border border-border/70 px-3 py-2"><div class="flex items-center justify-between gap-3 text-xs"><span>API request limit</span><span class="tabular-nums">{billing.apiRateUsage?.used ?? 0} of {billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute} per minute</span></div><div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-muted"><div class="h-full rounded-full bg-accent transition-[width]" style={`width: ${Math.min(100, ((billing.apiRateUsage?.used ?? 0) / (billing.apiRateUsage?.limit ?? billing.entitlement.apiRatePerMinute)) * 100)}%`}></div></div><div class="mt-1 text-[11px] text-muted">Shared across all your API keys. Resets continuously over a rolling minute.</div></div>{/if}
         {#if billing.entitlement.provider === 'gift' && billing.entitlement.expiresAt}<div class="mt-1 text-xs text-muted">Prepaid access ends {formatDate(billing.entitlement.expiresAt)}. It does not renew.</div>{/if}
-        {#if billing.entitlement.dailyDecryptLimit !== undefined || billing.decryptCredits.available > 0}
+        {#if billing.entitlement.freeTier || billing.entitlement.dailyDecryptLimit !== undefined || billing.decryptCredits.available > 0}
         <div class="mt-4 rounded-lg border border-border/70 bg-panel-muted/20 p-3">
           <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0"><div class="font-medium">Extra decrypt credits</div><div class="mt-1 text-xs text-muted">{billing.decryptCredits.available} available{#if billing.decryptCredits.purchasePriceMinor !== undefined} · {billing.decryptCredits.purchaseQuantity} for {fmtCurrency(billing.decryptCredits.purchasePriceMinor / 100, billing.decryptCredits.purchaseCurrency ?? 'EUR')} once{/if}</div></div>
-            {#if billing.entitlement.dailyDecryptLimit !== undefined}<Button size="sm" variant="secondary" loading={buyingCredits} disabled={!billing.decryptCredits.purchaseEnabled} onclick={() => void buyDecryptCredits()}>Buy {billing.decryptCredits.purchaseQuantity} credits</Button>{/if}
+            <div class="min-w-0"><div class="font-medium">Single decrypt</div><div class="mt-1 text-xs text-muted">{billing.decryptCredits.available} purchased {billing.decryptCredits.available === 1 ? 'decrypt' : 'decrypts'} available{#if billing.decryptCredits.purchasePriceMinor !== undefined} · one new decrypt for {fmtCurrency(billing.decryptCredits.purchasePriceMinor / 100, billing.decryptCredits.purchaseCurrency ?? 'EUR')}{/if}</div></div>
+            {#if billing.decryptCredits.purchaseEnabled}<Button size="sm" variant="secondary" loading={buyingSingleDecrypt} disabled={!billing.decryptCredits.purchaseEnabled || singleDecryptPaymentStatus === 'checking' || singleDecryptPaymentStatus === 'pending'} onclick={() => void buySingleDecrypt()}>Buy one decrypt</Button>{/if}
           </div>
-          {#if billing.entitlement.dailyDecryptLimit !== undefined}<p class="mt-2 text-xs text-muted">Your included daily allowance is used first. Each credit adds one new decrypt after that allowance is used. Failed jobs return the credit. Any applicable tax is shown at checkout.</p>{:else}<p class="mt-2 text-xs text-muted">Your current plan has unlimited decrypts, so these credits remain available if you switch to a plan with a daily allowance.</p>{/if}
-          {#if billing.entitlement.dailyDecryptLimit !== undefined && !billing.decryptCredits.purchaseEnabled}<p class="mt-2 text-xs text-muted">Credit checkout is temporarily unavailable.</p>{/if}
-          {#if billing.decryptCredits.grants.length}<ul class="mt-3 divide-y divide-border/70 border-t border-border/70">{#each billing.decryptCredits.grants as grant (grant.id)}<li class="flex flex-wrap justify-between gap-2 py-2 text-xs"><span>{grant.remaining} credits · {grant.source === 'outage' ? 'service recovery' : grant.source === 'stripe' ? 'Stripe purchase' : 'account credit'}</span><span class="text-muted">{grant.expiresAt ? `Expires ${formatDate(new Date(grant.expiresAt).toISOString())}` : 'No expiry'}</span></li>{/each}</ul>{/if}
-          {#if creditCheckoutState === 'success'}<p class="mt-2 text-xs text-muted" role="status">Checkout completed. Credits appear after Stripe confirms the payment.</p>{:else if creditCheckoutState === 'cancelled'}<p class="mt-2 text-xs text-muted" role="status">Credit checkout canceled. No payment was made.</p>{/if}
+          {#if billing.entitlement.dailyDecryptLimit !== undefined}<p class="mt-2 text-xs text-muted">Your included daily allowance is used first. One purchase adds exactly one new decrypt. Failed jobs return the purchase. Any applicable tax is shown at checkout.</p>{:else if billing.entitlement.freeTier}<p class="mt-2 text-xs text-muted">Your 3 included decrypts per rolling 30 days are used first. A single purchase adds exactly one more decrypt and does not start a subscription. Free results remain available for 30 minutes.</p>{:else}<p class="mt-2 text-xs text-muted">Your current plan has unlimited decrypts, so purchased decrypts remain available if you later switch to a plan with a limit.</p>{/if}
+          {#if (billing.entitlement.freeTier || billing.entitlement.dailyDecryptLimit !== undefined) && !billing.decryptCredits.purchaseEnabled}<p class="mt-2 text-xs text-muted">Single-decrypt checkout is temporarily unavailable.</p>{/if}
+          {#if billing.decryptCredits.grants.length}<ul class="mt-3 divide-y divide-border/70 border-t border-border/70">{#each billing.decryptCredits.grants as grant (grant.id)}<li class="flex flex-wrap justify-between gap-2 py-2 text-xs"><span>{grant.remaining} {grant.remaining === 1 ? 'decrypt' : 'decrypts'} · {grant.source === 'one_time' ? 'single purchase' : grant.source === 'outage' ? 'service recovery' : grant.source === 'stripe' ? 'previous Stripe purchase' : 'account credit'}</span><span class="text-muted">{grant.expiresAt ? `Expires ${formatDate(new Date(grant.expiresAt).toISOString())}` : 'No expiry'}</span></li>{/each}</ul>{/if}
+          {#if creditCheckoutState === 'success'}
+            {#if singleDecryptPaymentStatus === 'checking'}<p class="mt-2 text-xs text-muted" role="status">Checking Stripe payment confirmation…</p>
+            {:else if singleDecryptPaymentStatus === 'confirmed'}<p class="mt-2 text-xs text-ok" role="status">Payment confirmed. Your single decrypt is ready.</p>
+            {:else if singleDecryptPaymentStatus === 'pending'}<div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted" role="status"><span>Stripe is still processing the confirmation. You will not be charged again while this is pending.</span><Button size="sm" variant="secondary" onclick={() => void checkSingleDecryptPayment()}>Check payment</Button></div>
+            {:else}<p class="mt-2 text-xs text-muted" role="status">Checkout completed. Your decrypt appears after Stripe confirms the payment.</p>{/if}
+          {:else if creditCheckoutState === 'cancelled'}<p class="mt-2 text-xs text-muted" role="status">Single-decrypt checkout canceled. No payment was made.</p>{/if}
         </div>
         {/if}
         <div class="mt-3 flex flex-wrap gap-2"><a class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-panel-muted" href="/v1/billing/usage.csv"><Download class="h-3.5 w-3.5" />Download usage journal</a><Button size="sm" variant="secondary" onclick={() => void toggleQuotaHistory()}>{quotaHistoryOpen ? 'Hide allowance history' : 'View allowance history'}</Button></div>
@@ -873,14 +923,15 @@
 
   {#if billing}
     {@const selectedGiftPlan = billing.plans.find((plan) => plan.id === giftPlanId)}
+    {@const giftAmount = selectedGiftPlan ? selectedGiftPlan.amount * (giftDurationDays === 7 ? 1 : giftDurationDays / 30) : undefined}
     <Card title="Gift a plan">
-      <p class="text-sm text-muted">Buy fixed-term access for someone else. The code activates when they redeem it and does not renew.</p>
+      <p class="text-sm text-muted">Buy fixed-term access for someone else, or redeem the code yourself. It activates when redeemed and never renews.</p>
       <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
-        <label class="block text-xs text-muted">Plan<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftPlanId} onchange={() => { giftCheckoutIdempotencyKey = undefined; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}>{#each billing.plans.filter((plan) => !plan.legacy) as plan (plan.id)}<option value={plan.id}>{plan.name} · {fallbackPrice(plan)}/month</option>{/each}</select></label>
-        <label class="block text-xs text-muted">Gift length<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftMonths} onchange={() => { giftCheckoutIdempotencyKey = undefined; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}><option value={1}>30 days</option><option value={3}>90 days</option><option value={6}>180 days</option><option value={12}>360 days</option></select></label>
+        <label class="block text-xs text-muted">Plan<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftPlanId} onchange={() => { giftCheckoutIdempotencyKey = undefined; if (giftPlanId !== 'access' && giftDurationDays === 7) giftDurationDays = 30; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}>{#each billing.plans.filter((plan) => !plan.legacy) as plan (plan.id)}<option value={plan.id}>{plan.name} · {fallbackPrice(plan)}/month</option>{/each}</select></label>
+        <label class="block text-xs text-muted">Gift length<select class="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text" bind:value={giftDurationDays} onchange={() => { giftCheckoutIdempotencyKey = undefined; }} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled}><option value={30}>30 days</option><option value={90}>90 days</option><option value={180}>180 days</option><option value={360}>360 days</option>{#if giftPlanId === 'access'}<option value={7}>7-day Access pass</option>{/if}</select></label>
         <Button loading={creatingGift} disabled={!billing.providers.stripe.ready || !billing.giftPurchasesEnabled || !giftPlanId} onclick={() => void startGiftCheckout()}><Gift class="size-4" />Buy gift</Button>
       </div>
-      {#if selectedGiftPlan}<p class="mt-2 text-xs text-muted">One-time total: {fmtCurrency(selectedGiftPlan.amount * giftMonths, selectedGiftPlan.currency)} for {giftMonths * 30} days.</p>{/if}
+      {#if selectedGiftPlan && giftAmount !== undefined}<p class="mt-2 text-xs text-muted">One-time total: {fmtCurrency(giftAmount, selectedGiftPlan.currency)} for {giftDurationDays} days. The 7-day Access pass costs the same as one month of Access and does not renew.</p>{/if}
       {#if !billing.giftPurchasesEnabled}<p class="mt-2 text-xs text-muted">Gift purchases are not configured on this instance.</p>{:else if !billing.providers.stripe.ready}<p class="mt-2 text-xs text-muted">Gift purchases are temporarily unavailable because Stripe checkout is not ready.</p>{/if}
       {#if purchasedGifts.length}
         <div class="mt-4 border-t border-border pt-3"><div class="mb-2 text-sm font-medium">Your gift codes</div><ul class="divide-y divide-border/70">{#each purchasedGifts as gift (gift.id)}<li class="flex flex-wrap items-center justify-between gap-3 py-2"><span class="min-w-0"><span class="block text-sm font-medium">{planLabel(gift.planId as PlanId)} · {gift.durationDays} days</span><span class="text-xs text-muted">{gift.status === 'available' ? `Redeem by ${formatDate(gift.redeemBy)}` : gift.status.replace('_', ' ')}</span></span>{#if gift.code}<span class="flex items-center gap-2"><code class="rounded bg-panel-muted px-2 py-1 font-mono text-xs" data-sensitive="true">{gift.code}</code><Button variant="secondary" size="icon" aria-label="Copy gift code" onclick={() => void copyGiftCode(gift.code!)}><Copy class="size-4" /></Button></span>{/if}</li>{/each}</ul></div>

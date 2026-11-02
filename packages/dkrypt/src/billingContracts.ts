@@ -31,10 +31,16 @@ export const billingAccessCodeRedeemBodySchema = Type.Object({
   code: Type.String({ minLength: 8, maxLength: 128 }),
 }, { additionalProperties: false });
 
-export const billingGiftCheckoutBodySchema = Type.Object({
-  planId: Type.String({ minLength: 1, maxLength: 64 }),
-  months: Type.Union([Type.Literal(1), Type.Literal(3), Type.Literal(6), Type.Literal(12)]),
-}, { additionalProperties: false });
+export const billingGiftCheckoutBodySchema = Type.Union([
+  Type.Object({
+    planId: Type.String({ minLength: 1, maxLength: 64 }),
+    months: Type.Union([Type.Literal(1), Type.Literal(3), Type.Literal(6), Type.Literal(12)]),
+  }, { additionalProperties: false }),
+  Type.Object({
+    planId: Type.Literal('access'),
+    durationDays: Type.Literal(7),
+  }, { additionalProperties: false }),
+]);
 
 export const billingAccessCodeParamsSchema = Type.Object({
   id: Type.String({ minLength: 1, maxLength: 128 }),

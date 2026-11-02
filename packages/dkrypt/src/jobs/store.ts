@@ -21,7 +21,7 @@ import { runDecrypt, runOfflineAppStoreDecrypt } from '#jobs/runner.js';
 import { appendJobTimelineEvent, type Job, type JobSource, type TestFlightJobSource } from '#jobs/types.js';
 import { effectiveQueuePriority, sortQueuedByEffectivePriority } from '#jobs/fairQueue.js';
 import { artifactDownloadName, artifactKeyForJob, buildDashboardArtifactFileUrl, getArtifactById, getArtifactByKey, getArtifactForJob, linkArtifactToProject, migrateLegacyPath, promoteArtifact, type ArtifactRecord } from '#artifacts.js';
-import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
+import { admitPersistedJob, claimPersistedJobWorker, closePersistedJobs, countPersistedActiveWorkers, countPersistedRunningJobs, deletePersistedJob, findPersistedActiveJobId, findPersistedJobById, findPersistedReusableCompletedJobIds, getDecryptQuotaUsage, getFreeDecryptQuotaUsage, heartbeatPersistedWorker, isPersistedWorkerResourceActive, listPersistedExpiredRunningJobs, listPersistedWorkers, loadPersistedActiveJobs, loadPersistedJobs, markPersistedWorkerOffline, mergeDecryptCreditOwner, mergeDecryptQuotaOwner, registerPersistedWorker, requeuePersistedExpiredRunningJob, reconcileDecryptQuota, releasePersistedJobWorker, releasePersistedWorkersById, renewPersistedJobWorker, replacePersistedJobs, requestPersistedJobCancellation, setPersistedWorkerDrain, settleDecryptQuota, sharedOfflineWorkerCapacity, workerRuntimeConfigurationConsistent, type JobBuildLookup, type JobWorkerLease, type WorkerRuntimeConfiguration } from '#jobs/repository.js';
 import { terminateChildProcess } from '#jobs/process.js';
 import { assessQueueServiceObjective, completedJobDurationP95Ms, projectCompletedJobDurationP95Ms, queueServiceObjectiveBreachDescription, queueServiceObjectiveMs } from '#jobs/slo.js';
 import { classifyJobFailure } from '#util/failureCategory.js';
@@ -976,6 +976,7 @@ export function mergeActiveJobOwner(targetUserId: string, sourceUserId: string):
     }
   }
   mergeDecryptQuotaOwner(targetUserId, sourceUserId);
+  mergeDecryptCreditOwner(targetUserId, sourceUserId);
   if (changed) {
     persistActiveJobs();
     emitJobsChanged();
@@ -1288,14 +1289,22 @@ export function prioritizeQueuedJob(id: string, projectId?: string): boolean {
   const targetProjectId = projectId ?? job.projectId ?? DEFAULT_PROJECT_ID;
   const scopedQueue = queue.filter((jobId) => (jobs.get(jobId)?.projectId ?? DEFAULT_PROJECT_ID) === targetProjectId);
   const idx = scopedQueue.indexOf(id);
-  if (idx <= 0) return idx === 0;
-
-  const reordered = [id, ...scopedQueue.filter((jobId) => jobId !== id)];
+  if (idx < 0) return false;
+  const targetPriority = effectiveQueuePriority(job);
+  const higherPriorityJobs = scopedQueue.filter((jobId) => {
+    if (jobId === id) return false;
+    const candidate = jobs.get(jobId);
+    return candidate !== undefined && effectiveQueuePriority(candidate) > targetPriority;
+  });
+  const higherPrioritySet = new Set(higherPriorityJobs);
+  const otherJobs = scopedQueue.filter((jobId) => jobId !== id && !higherPrioritySet.has(jobId));
+  const reordered = [...higherPriorityJobs, id, ...otherJobs];
+  if (reordered.every((jobId, index) => jobId === scopedQueue[index])) return true;
   let scopedIndex = 0;
   const nextQueue = queue.map((jobId) => (jobs.get(jobId)?.projectId ?? DEFAULT_PROJECT_ID) === targetProjectId ? reordered[scopedIndex++]! : jobId);
   queue.length = 0;
   queue.push(...nextQueue);
-  log.info('job bumped to front of queue', { jobId: id, bundleId: job.bundleId });
+  log.info('job moved to run next within its priority tier', { jobId: id, bundleId: job.bundleId, priority: targetPriority });
   emitJobsChanged();
   return true;
 }

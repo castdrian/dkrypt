@@ -260,6 +260,40 @@ test('free quota reservations are released when work fails or is cancelled', asy
   }
 });
 
+test('a one-time decrypt purchase is only used after the free allowance and returns after failure', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-one-time-free-quota-'));
+  let repository: ReturnType<typeof createJobRepository> | undefined;
+
+  try {
+    repository = createJobRepository(openStateCollectionDatabase({ stateDir, filename: 'state.sqlite' }, ['jobs', 'job_timelines']));
+    const ownerId = 'one-time-free@example.test';
+    const startedAt = Date.now();
+    repository.grantCredits(ownerId, 1, 'one_time', 'pi_single_decrypt_test', undefined, startedAt);
+
+    for (let index = 0; index < 3; index += 1) {
+      const job = createJob({ id: `one-time-free-included-${index}`, bundleId: `com.example.included${index}`, createdAt: startedAt + index });
+      repository.admit(job, ownerId, 3, true, abuseContext);
+      repository.settleQuota(job.id, true);
+    }
+
+    const purchased = createJob({ id: 'one-time-free-purchased', bundleId: 'com.example.purchased', createdAt: startedAt + 3 });
+    repository.admit(purchased, ownerId, 3, true);
+    expect(repository.creditBalance(ownerId, startedAt + 3).available).toBe(0);
+    expect(repository.freeQuotaUsage(ownerId, startedAt + 3).used).toBe(3);
+    repository.settleQuota(purchased.id, false);
+    expect(repository.creditBalance(ownerId, startedAt + 4).available).toBe(1);
+
+    const retry = createJob({ id: 'one-time-free-retry', bundleId: 'com.example.retry', createdAt: startedAt + 5 });
+    repository.admit(retry, ownerId, 3, true);
+    repository.settleQuota(retry.id, true);
+    expect(repository.creditBalance(ownerId, startedAt + 6).available).toBe(0);
+    expect(repository.freeQuotaUsage(ownerId, startedAt + 6).used).toBe(3);
+  } finally {
+    repository?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('burst credits reserve atomically, return after failed jobs, expire, and revoke on Stripe refunds', async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'dkrypt-job-credit-ledger-'));
   let repository: ReturnType<typeof createJobRepository> | undefined;

@@ -4,6 +4,7 @@ import {
   type BillingSubscription,
   canCreateApiKeyImmediately,
   createBillingAccessCode,
+  createPurchasedBillingGift,
   exportBillingSnapshot,
   findStripeCheckoutIdempotencyAttempt,
   getBillingCustomerId,
@@ -13,6 +14,8 @@ import {
   isBillingSnapshot,
   listPlans,
   listBillingAccessCodes,
+  listPurchasedBillingGifts,
+  fulfillPurchasedBillingGift,
   recordStripeCheckoutIdempotencyAttempt,
   redeemBillingAccessCode,
   revokeBillingAccessCode,
@@ -22,6 +25,7 @@ import {
 } from '#billing.js';
 import { dashboardEvents } from '#events.js';
 import { PermissionFlag } from '#permissions.js';
+import { config } from '#config.js';
 
 function subscription(planId: BillingSubscription['planId'], status = 'active'): BillingSubscription {
   return {
@@ -211,6 +215,30 @@ describe('prepaid billing access codes', () => {
     expect(isBillingSnapshot({ customers: [], subscriptions: [] })).toBe(true);
     expect(exportBillingSnapshot().accessCodes).toBeDefined();
   });
+});
+
+test('the short Access pass creates redeemable seven-day prepaid access', () => {
+  const previousSnapshot = exportBillingSnapshot();
+  const previousSecret = config.billingGiftEncryptionSecret;
+  const purchaserId = `short-pass-${crypto.randomUUID()}`;
+
+  try {
+    config.billingGiftEncryptionSecret = 'short-pass-test-secret-with-32-characters';
+    replaceBillingSnapshot({ customers: [], subscriptions: [] });
+    const gift = createPurchasedBillingGift({ planId: 'access', durationDays: 7, purchaserId, idempotencyKey: crypto.randomUUID() });
+    expect(gift).toMatchObject({ planId: 'access', durationDays: 7, purchaseStatus: 'pending' });
+    expect(createPurchasedBillingGift({ planId: 'plus', durationDays: 7, purchaserId, idempotencyKey: crypto.randomUUID() })).toBeUndefined();
+    expect(fulfillPurchasedBillingGift({ id: gift!.id, purchaserId, checkoutSessionId: 'cs_short_pass' })).toBe('paid');
+    const purchased = listPurchasedBillingGifts(purchaserId);
+    expect(purchased).toMatchObject([{ id: gift!.id, planId: 'access', durationDays: 7, status: 'available' }]);
+    const redemptionAt = Date.now();
+    const redeemed = redeemBillingAccessCode(purchased[0]!.code!, purchaserId, redemptionAt);
+    expect(redeemed).toMatchObject({ accessCode: { durationDays: 7, redeemedBy: purchaserId } });
+    expect(getBillingEntitlements(purchaserId).expiresAt).toBe(new Date(redemptionAt + 7 * 24 * 60 * 60 * 1000).toISOString());
+  } finally {
+    config.billingGiftEncryptionSecret = previousSecret;
+    replaceBillingSnapshot(previousSnapshot);
+  }
 });
 
 describe('billing dashboard updates', () => {

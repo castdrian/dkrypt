@@ -18,6 +18,7 @@ import {
   setAuthUsername,
 } from '#identity.js';
 import { PermissionFlag, serializeBits } from '#permissions.js';
+import { findStripeDecryptCreditOwner, getDecryptCreditBalance, grantDecryptCredits } from '#jobs/repository.js';
 import {
   addAllowedUser,
   createApiKey,
@@ -70,6 +71,26 @@ describe('resolveOauthAccount', () => {
     expect(listAllowedUsers().some((user) => user.username === githubUserId)).toBe(false);
     expect(listAllowedUsers().find((user) => user.username === discordUserId)?.roleIds).toContain(role.id);
     expect(listApiKeysForOwner(discordUserId)).toHaveLength(1);
+  });
+
+  test('account merges preserve purchased decrypts and deduplicate delayed payment webhooks', () => {
+    const discordId = randomUUID();
+    const githubId = randomUUID();
+    const targetUserId = `discord:${discordId}`;
+    const sourceUserId = `github:${githubId}`;
+    const paymentIntentId = `pi_${randomUUID()}`;
+
+    resolveOauthAccount({ fallbackUserId: targetUserId, identity: identity('discord', discordId) });
+    resolveOauthAccount({ fallbackUserId: sourceUserId, identity: identity('github', githubId) });
+    grantDecryptCredits(sourceUserId, 1, 'one_time', paymentIntentId);
+
+    linkOauthAccount(targetUserId, identity('github', githubId));
+
+    expect(getDecryptCreditBalance(sourceUserId).available).toBe(0);
+    expect(getDecryptCreditBalance(targetUserId).available).toBe(1);
+    expect(findStripeDecryptCreditOwner(paymentIntentId)).toBe(targetUserId);
+    expect(grantDecryptCredits(sourceUserId, 1, 'one_time', paymentIntentId).granted).toBeFalse();
+    expect(getDecryptCreditBalance(targetUserId).available).toBe(1);
   });
 
   test('removes a linked provider while keeping another OAuth identity', () => {

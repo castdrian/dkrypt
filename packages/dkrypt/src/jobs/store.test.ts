@@ -948,6 +948,28 @@ test('reordering and prioritizing changes the one shared queue', async () => {
   }
 });
 
+test('run next moves a job ahead within its priority tier without passing higher-priority work', async () => {
+  await clearActiveTestJobs();
+  const blocker = enqueueDecryptJob(`com.test.run-next-blocker.${crypto.randomUUID()}`, 'manual');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const higherPriority = enqueueDecryptJob(`com.test.run-next-high.${crypto.randomUUID()}`, 'manual', { priority: 5 });
+  const target = enqueueDecryptJob(`com.test.run-next-target.${crypto.randomUUID()}`, 'manual', { priority: 0 });
+  const samePriority = enqueueDecryptJob(`com.test.run-next-same.${crypto.randomUUID()}`, 'manual', { priority: 0 });
+  const lowerPriority = enqueueDecryptJob(`com.test.run-next-low.${crypto.randomUUID()}`, 'manual', { priority: -5 });
+
+  try {
+    expect(blocker.status).toBe('running');
+    expect(reorderQueue([target.id, samePriority.id, higherPriority.id, lowerPriority.id])).toBe(true);
+    expect(getQueueInfo(target.id)!.position).toBeLessThan(getQueueInfo(higherPriority.id)!.position);
+    expect(prioritizeQueuedJob(target.id)).toBe(true);
+    expect(getQueueInfo(higherPriority.id)!.position).toBeLessThan(getQueueInfo(target.id)!.position);
+    expect(getQueueInfo(target.id)!.position).toBeLessThan(getQueueInfo(samePriority.id)!.position);
+    expect(getQueueInfo(samePriority.id)!.position).toBeLessThan(getQueueInfo(lowerPriority.id)!.position);
+  } finally {
+    await clearActiveTestJobs();
+  }
+});
+
 test('resuming a paused job restores its queue position', async () => {
   await clearActiveTestJobs();
   const blocker = enqueueDecryptJob(`com.test.pause-blocker.${crypto.randomUUID()}`, 'manual');

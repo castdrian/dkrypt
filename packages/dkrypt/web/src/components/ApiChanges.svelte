@@ -45,7 +45,7 @@
     </Card>
     <Card title="Importable API collections">
       <p class="text-sm text-muted">Start with dkrypt’s public API operations and set your instance URL and API key in your local environment.</p>
-      <div class="mt-3 flex flex-wrap gap-2"><a class={buttonVariants('secondary', 'sm')} href="/downloads/dkrypt-postman.json" download>Postman collection</a><a class={buttonVariants('secondary', 'sm')} href="/downloads/dkrypt-bruno.zip" download>Bruno collection</a></div>
+      <div class="mt-3 flex flex-wrap gap-2"><a class={buttonVariants('secondary', 'sm')} href="/downloads/dkrypt-bruno.zip" download>Bruno collection</a></div>
     </Card>
     <Card title="Go, Swift, and Rust SDKs">
       <p class="text-sm text-muted">Download a small client for decrypt requests, job status, and IPA downloads. Each client uses only the public API-key operations.</p>

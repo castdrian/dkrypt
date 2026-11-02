@@ -585,9 +585,10 @@ export function billingGiftPurchasesEnabled(): boolean {
   return config.billingGiftEncryptionSecret.length >= 32;
 }
 
-export function createPurchasedBillingGift(input: { planId: string; months: number; purchaserId: string; idempotencyKey: string; now?: number }): BillingAccessCode | undefined {
+export function createPurchasedBillingGift(input: { planId: string; durationDays: number; purchaserId: string; idempotencyKey: string; now?: number }): BillingAccessCode | undefined {
   const plan = planDefinitions.find((definition) => definition.id === input.planId);
-  if (!billingGiftPurchasesEnabled() || !plan || plan.legacy || ![1, 3, 6, 12].includes(input.months) || !input.purchaserId || !input.idempotencyKey) return undefined;
+  const supportedDuration = [30, 90, 180, 360].includes(input.durationDays) || (plan?.id === 'access' && input.durationDays === 7);
+  if (!billingGiftPurchasesEnabled() || !plan || plan.legacy || !supportedDuration || !input.purchaserId || !input.idempotencyKey) return undefined;
   state.accessCodes ??= [];
   const existing = state.accessCodes.find((accessCode) => accessCode.purchaserId === input.purchaserId && accessCode.purchaseIdempotencyKey === input.idempotencyKey);
   if (existing) return structuredClone(existing);
@@ -599,7 +600,7 @@ export function createPurchasedBillingGift(input: { planId: string; months: numb
     codeHash: hashBillingAccessCode(normalized),
     prefix: `${code.slice(0, 12)}…`,
     planId: plan.id,
-    durationDays: input.months * 30,
+    durationDays: input.durationDays,
     redeemBy: new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(),
     createdBy: input.purchaserId,
     createdAt: new Date(now).toISOString(),

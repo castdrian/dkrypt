@@ -37,11 +37,9 @@ writeFileSync(path.join(outputDirectory, 'go', 'dkrypt_test.go'), renderGoClient
 writeFileSync(path.join(outputDirectory, 'swift', 'DkryptClient.swift'), renderSwiftClient());
 writeFileSync(path.join(outputDirectory, 'rust', 'Cargo.toml'), renderRustManifest());
 writeFileSync(path.join(outputDirectory, 'rust', 'src', 'lib.rs'), renderRustClient());
-writeFileSync(path.join(outputDirectory, 'postman.collection.json'), `${JSON.stringify(renderPostmanCollection(document), null, 2)}\n`);
 writeFileSync(path.join(outputDirectory, 'README.md'), renderClientReadme());
 const downloadsDirectory = path.resolve(process.cwd(), 'web', 'public', 'downloads');
 mkdirSync(downloadsDirectory, { recursive: true });
-writeFileSync(path.join(downloadsDirectory, 'dkrypt-postman.json'), `${JSON.stringify(renderPostmanCollection(document), null, 2)}\n`);
 writeFileSync(path.join(downloadsDirectory, 'dkrypt-bruno.zip'), renderBrunoCollection(document));
 writeFileSync(path.join(downloadsDirectory, 'dkrypt-go-sdk.zip'), renderSdkArchive([
   [path.join(outputDirectory, 'go', 'go.mod'), 'dkrypt-go/go.mod'],
@@ -82,7 +80,7 @@ Copy the Rust client folder into a Cargo workspace or download its archive. The 
 
 ## API collections
 
-Import \u0060postman.collection.json\u0060 in Postman or import the Bruno archive. Set the collection's \u0060baseUrl\u0060 and \u0060apiKey\u0060 values locally.
+Import the Bruno archive and set the collection's \u0060baseUrl\u0060 and \u0060apiKey\u0060 values locally.
 `;
 }
 
@@ -432,37 +430,6 @@ mod tests {
     }
 }
 `;
-}
-
-function renderPostmanCollection(document: { paths?: Record<string, Record<string, unknown>> }): unknown {
-  const items = Object.entries(document.paths ?? {}).flatMap(([path, methods]) => Object.keys(methods)
-    .filter((method) => ['get', 'post', 'put', 'patch', 'delete'].includes(method.toLowerCase()))
-    .map((method) => {
-      const route = path.replace(/\{([^}]+)\}/g, '{{$1}}');
-      const name = `${method.toUpperCase()} ${path}`;
-      const request: Record<string, unknown> = {
-        method: method.toUpperCase(),
-        header: [{ key: 'Accept', value: 'application/json' }],
-        url: { raw: `{{baseUrl}}${route}`, host: ['{{baseUrl}}'], path: route.split('/').filter(Boolean) },
-      };
-      if (method.toLowerCase() === 'post') {
-        const example = path === '/v1/decrypts'
-          ? { bundleId: 'com.example.app' }
-          : path === '/v1/testflight/decrypt'
-            ? { bundleId: 'com.example.app', appId: 123456789, build: { id: 987654321, cfBundleShortVersion: '1.0', cfBundleVersion: '42', bundleId: 'com.example.app' } }
-            : path === '/v1/jobs/status'
-              ? { ids: ['{{jobId}}'] }
-              : undefined;
-        if (example) request.body = { mode: 'raw', raw: JSON.stringify(example, null, 2), options: { raw: { language: 'json' } } };
-      }
-      return { name, request, response: [] };
-    }));
-  return {
-    info: { name: 'dkrypt Public API', description: 'Public API-key operations for dkrypt decrypt jobs and IPA artifacts.', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
-    auth: { type: 'bearer', bearer: [{ key: 'token', value: '{{apiKey}}', type: 'string' }] },
-    variable: [{ key: 'baseUrl', value: 'http://localhost:3000' }, { key: 'apiKey', value: '' }, { key: 'jobId', value: '' }],
-    item: items,
-  };
 }
 
 function renderBrunoCollection(document: { paths?: Record<string, Record<string, unknown>> }): Buffer {

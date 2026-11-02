@@ -441,11 +441,9 @@
 												size="sm"
 												variant="secondary"
 												loading={prioritizing.has(j.id)}
-												disabled={queuedJobIds[0] ===
-													j.id}
 												onclick={() => prioritize(j.id)}
 											>
-												Bump to front
+												Run next
 											</Button>
 										{/if}
 										{/if}

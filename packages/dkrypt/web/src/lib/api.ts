@@ -2727,7 +2727,7 @@ export function fetchPurchasedBillingGifts(): Promise<{ gifts: PurchasedBillingG
   return apiJson('/v1/billing/gifts');
 }
 
-export function createBillingGiftCheckout(input: { planId: string; months: 1 | 3 | 6 | 12 }, idempotencyKey: string): Promise<{ giftId: string; url: string; amountMinor: number; currency: 'EUR' }> {
+export function createBillingGiftCheckout(input: { planId: string; months: 1 | 3 | 6 | 12 } | { planId: 'access'; durationDays: 7 }, idempotencyKey: string): Promise<{ giftId: string; url: string; amountMinor: number; currency: 'EUR' }> {
   return apiJson('/v1/billing/gifts/checkout', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(input) });
 }
 

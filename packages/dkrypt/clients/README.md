@@ -16,4 +16,4 @@ Copy the Rust client folder into a Cargo workspace or download its archive. The 
 
 ## API collections
 
-Import `postman.collection.json` in Postman or import the Bruno archive. Set the collection's `baseUrl` and `apiKey` values locally.
+Import the Bruno archive and set the collection's `baseUrl` and `apiKey` values locally.

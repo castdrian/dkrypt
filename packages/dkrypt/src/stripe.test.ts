@@ -16,6 +16,7 @@ import { billingRoutes, processStripeEvent } from '#routes/billing.js';
 import { buildTestServer } from '#testServer.js';
 import { STRIPE_WEBHOOK_EVENTS } from '#stripeWebhookEvents.js';
 import { clearStripeWebhookHealthCache } from '#stripeWebhookHealth.js';
+import { getDecryptCreditBalance } from '#jobs/repository.js';
 import { getAuditLog, getUserEffectivePermissions } from '#store/state.js';
 import { flushTelemetry } from '#telemetry.js';
 import { setSessionCookie } from '#session.js';
@@ -23,10 +24,10 @@ import { claimWebhook, getWebhookInboxRecord, markWebhookFailed, markWebhookProc
 
 const webhookSecret = 'whsec_dkrypt_test';
 
-function createSessionCookie(permissions: bigint): string {
+function createSessionCookie(permissions: bigint, userId = 'root'): string {
   let cookieHeader = '';
   const response = { setHeader: (_name: string, value: string) => { cookieHeader = value; } } as unknown as HttpResponse;
-  setSessionCookie(response, { sub: 'root', permissions });
+  setSessionCookie(response, { sub: userId, permissions });
   return cookieHeader.split(';', 1)[0];
 }
 
@@ -128,6 +129,63 @@ describe('Stripe billing webhooks', () => {
       'invoice.payment_failed',
       'charge.refunded',
     ]));
+  });
+
+  test('grants exactly one single-decrypt purchase and deduplicates Stripe webhook retries', async () => {
+    const userId = `single-decrypt-${crypto.randomUUID()}`;
+    const paymentIntentId = `pi_${crypto.randomUUID()}`;
+    const session = {
+      id: `cs_${crypto.randomUUID()}`,
+      object: 'checkout.session',
+      mode: 'payment',
+      payment_status: 'paid',
+      payment_intent: paymentIntentId,
+      metadata: { purpose: 'single_decrypt', dkrypt_user_id: userId, credit_quantity: '1' },
+    };
+
+    await processStripeEvent(event('checkout.session.completed', session));
+    await processStripeEvent(event('checkout.session.async_payment_succeeded', session));
+
+    expect(getDecryptCreditBalance(userId).available).toBe(1);
+    expect(getDecryptCreditBalance(userId).grants).toEqual(expect.arrayContaining([
+      expect.objectContaining({ remaining: 1, source: 'one_time' }),
+    ]));
+    const refundClient = { paymentIntents: { retrieve: async () => ({ id: paymentIntentId, metadata: { purpose: 'single_decrypt' } }) } } as unknown as Stripe;
+    await processStripeEvent(event('charge.refunded', {
+      id: `ch_${crypto.randomUUID()}`,
+      object: 'charge',
+      amount: config.stripeSingleDecryptPriceMinor,
+      amount_refunded: config.stripeSingleDecryptPriceMinor,
+      currency: 'eur',
+      refunded: true,
+      payment_intent: paymentIntentId,
+    }), refundClient);
+    expect(getDecryptCreditBalance(userId).available).toBe(0);
+  });
+
+  test('starts a one-decrypt Stripe checkout for a free account without a subscription', async () => {
+    const userId = `single-decrypt-checkout-${crypto.randomUUID()}`;
+    const provider = createStripeCheckoutDouble();
+    const server = Fastify();
+    await server.register(billingRoutes, { stripeClient: () => provider.client });
+
+    try {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/credits/checkout',
+        headers: { cookie: createSessionCookie(PermissionFlag.requestDecrypt, userId), 'idempotency-key': 'single-decrypt-checkout-test' },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({ quantity: 1, amountMinor: config.stripeSingleDecryptPriceMinor, currency: 'EUR' });
+      const checkout = provider.calls[0]!.parameters;
+      const lineItems = checkout.line_items as Array<{ price_data: { currency: string; unit_amount: number; product_data: Record<string, unknown> } }>;
+      expect(lineItems[0]?.price_data).toEqual({ currency: 'eur', unit_amount: config.stripeSingleDecryptPriceMinor, product_data: expect.any(Object) });
+      expect(checkout.metadata).toMatchObject({ purpose: 'single_decrypt', dkrypt_user_id: userId, credit_quantity: '1' });
+      expect(checkout.managed_payments).toEqual({ enabled: true });
+    } finally {
+      await server.close();
+    }
   });
 
   test('links checkout sessions and grants the plan from a subscription event', async () => {
@@ -1120,7 +1178,7 @@ describe('Stripe billing webhooks', () => {
         missingEvents: [],
       }),
     });
-    const managerCookie = createSessionCookie(PermissionFlag.manageBilling);
+    const managerCookie = createSessionCookie(PermissionFlag.manageBilling | PermissionFlag.requestDecrypt);
     const viewerCookie = createSessionCookie(0n);
     const managerHeaders = { cookie: managerCookie };
 
@@ -1149,6 +1207,11 @@ describe('Stripe billing webhooks', () => {
         headers: { ...managerHeaders, 'idempotency-key': 'paused-new-crypto-checkout' },
         payload: { planId: 'regular', provider: 'crypto', cryptoAsset: 'USDC' },
       });
+      const singleDecryptCheckout = await server.inject({
+        method: 'POST',
+        url: '/v1/billing/credits/checkout',
+        headers: { ...managerHeaders, 'idempotency-key': 'paused-single-decrypt-checkout' },
+      });
 
       expect(anonymous.statusCode).toBe(401);
       expect(viewer.statusCode).toBe(403);
@@ -1166,6 +1229,8 @@ describe('Stripe billing webhooks', () => {
       });
       expect(newCryptoCheckout.statusCode).toBe(503);
       expect(newCryptoCheckout.json()).toMatchObject({ code: 'billing_checkouts_paused', retryable: true });
+      expect(singleDecryptCheckout.statusCode).toBe(503);
+      expect(singleDecryptCheckout.json()).toMatchObject({ code: 'billing_checkouts_paused', retryable: true });
     } finally {
       await server.inject({ method: 'PUT', url: '/v1/billing/checkouts', headers: managerHeaders, payload: { paused: false } });
       await server.close();

@@ -392,6 +392,10 @@ export async function processStripeEvent(event: Stripe.Event, stripeClient?: Str
         fulfillDecryptCreditCheckout(event.data.object as Stripe.Checkout.Session);
         return;
       }
+      if ((event.data.object as Stripe.Checkout.Session).metadata?.purpose === 'single_decrypt') {
+        fulfillSingleDecryptCheckout(event.data.object as Stripe.Checkout.Session);
+        return;
+      }
       await reconcileSuccessfulCheckoutSession(event, stripeClient);
       return;
     case 'checkout.session.async_payment_failed':
@@ -438,6 +442,15 @@ function fulfillDecryptCreditCheckout(session: Stripe.Checkout.Session): void {
   if (result.granted) recordAudit(userId, 'billing.decrypt-credit.grant', result.id, `${config.stripeDecryptCreditQuantity} credits from Stripe checkout ${session.id}`);
 }
 
+function fulfillSingleDecryptCheckout(session: Stripe.Checkout.Session): void {
+  if (session.mode !== 'payment' || session.payment_status !== 'paid') return;
+  const userId = metadataUserId(session.metadata);
+  const paymentIntentId = stripeObjectId(session.payment_intent);
+  if (!userId || session.metadata?.credit_quantity !== '1' || !paymentIntentId) throw new Error('single decrypt checkout metadata is invalid');
+  const result = grantDecryptCredits(userId, 1, 'one_time', paymentIntentId);
+  if (result.granted) recordAudit(userId, 'billing.decrypt-credit.grant', result.id, `single decrypt purchase from Stripe checkout ${session.id}`);
+}
+
 async function processStripeCreditRefund(charge: Stripe.Charge, stripeClient?: Stripe): Promise<boolean> {
   const paymentIntentId = stripeObjectId(charge.payment_intent);
   if (!paymentIntentId) return false;
@@ -449,11 +462,12 @@ async function processStripeCreditRefund(charge: Stripe.Charge, stripeClient?: S
   }
   if (stripeClient && typeof stripeClient.paymentIntents?.retrieve !== 'function') return false;
   const paymentIntent = await stripeOperation(stripeClient, (client) => client.paymentIntents.retrieve(paymentIntentId));
-  if (paymentIntent.metadata.purpose !== 'decrypt_credit_pack') return false;
+  if (!['decrypt_credit_pack', 'single_decrypt'].includes(paymentIntent.metadata.purpose ?? '')) return false;
   const userId = metadataUserId(paymentIntent.metadata);
   const quantity = Number(paymentIntent.metadata.credit_quantity);
-  if (!userId || !Number.isInteger(quantity) || quantity < 1 || quantity > 100_000) throw new Error(`refunded decrypt credit payment ${charge.id} has invalid metadata`);
-  const result = revokeStripeDecryptCredits(userId, paymentIntentId, quantity);
+  const singlePurchase = paymentIntent.metadata.purpose === 'single_decrypt';
+  if (!userId || !Number.isInteger(quantity) || (singlePurchase && quantity !== 1) || quantity < 1 || quantity > 100_000) throw new Error(`refunded decrypt credit payment ${charge.id} has invalid metadata`);
+  const result = revokeStripeDecryptCredits(userId, paymentIntentId, quantity, undefined, singlePurchase ? 'one_time' : 'stripe');
   if (result.revoked) recordAudit(userId, 'billing.decrypt-credit.refund', result.id, `full refund of ${charge.id} revoked unused decrypt credits`);
   return true;
 }
@@ -584,35 +598,8 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   const callStripe = <T>(request: (client: Stripe) => Promise<T>): Promise<T> => options.stripeClient
     ? request(options.stripeClient())
     : stripeRequest(request);
-  let decryptCreditPriceCache: { priceId: string; expiresAt: number; offer: { amountMinor: number; currency: string } | null } | undefined;
-  let decryptCreditPriceLookup: Promise<{ amountMinor: number; currency: string } | undefined> | undefined;
-  const getDecryptCreditPriceOffer = async (): Promise<{ amountMinor: number; currency: string } | undefined> => {
-    const priceId = config.stripeDecryptCreditPriceId;
-    if (!stripeEnabled || !priceId) return undefined;
-    if (decryptCreditPriceCache?.priceId === priceId && decryptCreditPriceCache.expiresAt > Date.now()) return decryptCreditPriceCache.offer ?? undefined;
-    if (decryptCreditPriceLookup) return decryptCreditPriceLookup;
-    const lookup = callStripe(async (client) => {
-      const price = await client.prices.retrieve(priceId);
-      if (!price.active || price.type !== 'one_time' || price.currency !== 'eur' || price.unit_amount === null || price.unit_amount < 1
-        || price.metadata.purpose !== 'decrypt_credit_pack'
-        || price.metadata.credit_quantity !== String(config.stripeDecryptCreditQuantity)) return undefined;
-      return { amountMinor: price.unit_amount, currency: price.currency.toUpperCase() };
-    }).catch((error) => {
-      log.warn('decrypt credit price lookup failed', { error: String(error) });
-      return undefined;
-    }).then((offer) => {
-      decryptCreditPriceCache = {
-        priceId,
-        expiresAt: Date.now() + (offer ? 5 * 60_000 : 30_000),
-        offer: offer ?? null,
-      };
-      return offer;
-    }).finally(() => {
-      decryptCreditPriceLookup = undefined;
-    });
-    decryptCreditPriceLookup = lookup;
-    return lookup;
-  };
+  const getSingleDecryptPriceOffer = async (): Promise<{ amountMinor: number; currency: string } | undefined> =>
+    stripeEnabled ? { amountMinor: config.stripeSingleDecryptPriceMinor, currency: 'EUR' } : undefined;
   const getPaymentMethodStatus = async (userId: string, subscriptionId: string | undefined): Promise<Record<string, unknown> | undefined> => {
     if (!stripeEnabled || !subscriptionId) return undefined;
     const cached = stripePaymentMethodStatusCache.get(subscriptionId);
@@ -695,13 +682,13 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const balance = getDecryptCreditBalance(userId);
     const entitlement = getBillingEntitlements(userId);
-    const price = entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
+    const price = entitlement.freeTier || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
     return {
       balance: balance.available,
       grants: balance.grants,
       purchase: {
         enabled: Boolean(price),
-        quantity: config.stripeDecryptCreditQuantity,
+        quantity: 1,
         provider: 'stripe',
         ...(price ? { amountMinor: price.amountMinor, currency: price.currency } : {}),
       },
@@ -717,34 +704,35 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9._:-]{8,200}$/.test(idempotencyKey)) {
       return sendBillingError(request, reply, 400, 'provide an Idempotency-Key with 8 to 200 URL-safe characters', 'idempotency_key_required');
     }
+    if (areNewBillingCheckoutsPaused()) return sendBillingError(request, reply, 503, 'New checkouts are temporarily paused by an administrator', 'billing_checkouts_paused');
     const entitlement = getBillingEntitlements(userId);
-    if (!entitlement.decrypt) return sendBillingError(request, reply, 403, 'an active decrypt plan is required to purchase burst credits');
-    if (entitlement.dailyDecryptLimit === undefined) return sendBillingError(request, reply, 403, 'burst credits are only available with plans that have a daily decrypt allowance', 'decrypt_credit_purchase_not_applicable');
-    const creditPriceOffer = await getDecryptCreditPriceOffer();
-    if (!creditPriceOffer) return sendBillingError(request, reply, 503, 'one-time decrypt credits are not configured', 'decrypt_credit_checkout_unavailable');
+    if (!entitlement.decrypt) return sendBillingError(request, reply, 403, 'decrypt access is required to purchase a single decrypt');
+    if (!entitlement.freeTier && entitlement.dailyDecryptLimit === undefined) return sendBillingError(request, reply, 403, 'single decrypt purchases are for accounts with a limited allowance', 'decrypt_credit_purchase_not_applicable');
+    const creditPriceOffer = await getSingleDecryptPriceOffer();
+    if (!creditPriceOffer) return sendBillingError(request, reply, 503, 'single-decrypt checkout is unavailable', 'decrypt_credit_checkout_unavailable');
     if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another billing checkout is already being created', 'checkout_in_progress');
     try {
       const profile = getAuthProfile(userId);
       const parameters = {
         mode: 'payment',
-        line_items: [{ price: config.stripeDecryptCreditPriceId, quantity: 1 }],
+        line_items: [{ price_data: { currency: 'eur', unit_amount: creditPriceOffer.amountMinor, product_data: { name: 'Single dkrypt decrypt', description: 'One new decrypt after your included allowance is used.' } }, quantity: 1 }],
         customer: getBillingCustomerId(userId),
         customer_email: getBillingCustomerId(userId) ? undefined : profile?.email,
         client_reference_id: userId,
-        metadata: { purpose: 'decrypt_credit_pack', dkrypt_user_id: userId, credit_quantity: String(config.stripeDecryptCreditQuantity), dkrypt_idempotency_key: idempotencyKey },
-        payment_intent_data: { metadata: { purpose: 'decrypt_credit_pack', dkrypt_user_id: userId, credit_quantity: String(config.stripeDecryptCreditQuantity) } },
+        metadata: { purpose: 'single_decrypt', dkrypt_user_id: userId, credit_quantity: '1', dkrypt_idempotency_key: idempotencyKey },
+        payment_intent_data: { metadata: { purpose: 'single_decrypt', dkrypt_user_id: userId, credit_quantity: '1' } },
         success_url: `${config.publicBaseUrl}/?tab=billing&credits=success`,
         cancel_url: `${config.publicBaseUrl}/?tab=billing&credits=cancelled`,
         managed_payments: { enabled: true },
         integration_identifier: createIntegrationIdentifier(idempotencyKey),
       } satisfies Stripe.Checkout.SessionCreateParams;
-      const providerIdempotencyKey = `decrypt-credit-${createHash('sha256').update(`${userId}:${idempotencyKey}`).digest('hex')}`;
+      const providerIdempotencyKey = `single-decrypt-${createHash('sha256').update(`${userId}:${idempotencyKey}`).digest('hex')}`;
       const session = await callStripe((client) => client.checkout.sessions.create(parameters, { idempotencyKey: providerIdempotencyKey }));
       if (!session.url) return sendBillingError(request, reply, 502, 'Stripe did not return an active checkout URL');
-      return reply.code(201).send({ url: session.url, quantity: config.stripeDecryptCreditQuantity });
+      return reply.code(201).send({ url: session.url, quantity: 1, amountMinor: creditPriceOffer.amountMinor, currency: creditPriceOffer.currency });
     } catch (error) {
-      log.error('decrypt credit checkout failed', { userId, error: String(error) });
-      return sendBillingError(request, reply, 502, 'could not start the credit checkout');
+      log.error('single-decrypt checkout failed', { userId, error: String(error) });
+      return sendBillingError(request, reply, 502, 'could not start the single-decrypt checkout');
     } finally {
       releaseBillingCheckoutLock(userId);
     }
@@ -806,7 +794,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       : getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
     quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
     const credits = getDecryptCreditBalance(userId);
-    const decryptCreditPriceOffer = entitlement.freeTier || entitlement.dailyDecryptLimit === undefined ? undefined : await getDecryptCreditPriceOffer();
+    const decryptCreditPriceOffer = entitlement.freeTier || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
     const sampleDays = 7;
     const recentQuotaAdmissions = entitlement.freeTier ? [] : getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
     const averagePerDay = recentQuotaAdmissions.length / sampleDays;
@@ -838,7 +826,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
         available: credits.available,
         grants: credits.grants,
         purchaseEnabled: Boolean(decryptCreditPriceOffer),
-        purchaseQuantity: config.stripeDecryptCreditQuantity,
+        purchaseQuantity: 1,
         ...(decryptCreditPriceOffer ? { purchasePriceMinor: decryptCreditPriceOffer.amountMinor, purchaseCurrency: decryptCreditPriceOffer.currency } : {}),
       },
       apiRateUsage: getAccountApiRateUsage(userId),
@@ -1050,6 +1038,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
   server.post<BillingGiftCheckoutRoute>('/v1/billing/gifts/checkout', { schema: getRouteContract('POST', '/v1/billing/gifts/checkout'), preHandler: fastifyRequireSession }, async (request, reply) => {
     const userId = getFastifySession(request)!.sub;
     const plan = getPurchasablePlan(request.body.planId, userId);
+    const durationDays = 'durationDays' in request.body ? request.body.durationDays : request.body.months * 30;
     if (!plan || plan.legacy) return sendBillingError(request, reply, 400, 'choose an available paid plan');
     if (!billingGiftPurchasesEnabled()) return sendBillingError(request, reply, 503, 'gift checkout is temporarily unavailable');
     const idempotencyKey = getBillingIdempotencyKey(request, reply, userId, 'gift-checkout');
@@ -1059,7 +1048,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another checkout is already in progress for this account');
     let gift;
     try {
-      gift = createPurchasedBillingGift({ planId: plan.id, months: request.body.months, purchaserId: userId, idempotencyKey });
+      gift = createPurchasedBillingGift({ planId: plan.id, durationDays, purchaserId: userId, idempotencyKey });
     } catch (error) {
       releaseBillingCheckoutLock(userId);
       log.error('paid gift reservation failed', { userId, planId: plan.id, error: String(error) });
@@ -1069,16 +1058,16 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       releaseBillingCheckoutLock(userId);
       return sendBillingError(request, reply, 400, 'gift purchase details are invalid');
     }
-    if (gift.planId !== plan.id || gift.durationDays !== request.body.months * 30 || gift.purchaseStatus !== 'pending') {
+    if (gift.planId !== plan.id || gift.durationDays !== durationDays || gift.purchaseStatus !== 'pending') {
       releaseBillingCheckoutLock(userId);
       return sendBillingError(request, reply, 409, 'Idempotency-Key was already used for a different or completed gift purchase', 'idempotency_conflict');
     }
-    const amountMinor = Math.round(plan.amount * request.body.months * 100);
+    const amountMinor = durationDays === 7 ? Math.round(plan.amount * 100) : Math.round(plan.amount * durationDays / 30 * 100);
     const metadata = { purpose: 'paid_gift_access_code', gift_id: gift.id, dkrypt_user_id: userId, plan_id: plan.id, duration_days: String(gift.durationDays) };
     try {
       const session = await callStripe((client) => client.checkout.sessions.create({
         mode: 'payment',
-        line_items: [{ price_data: { currency: 'eur', unit_amount: amountMinor, product_data: { name: `${plan.name} gift access`, description: `${gift.durationDays} days of dkrypt access` } }, quantity: 1 }],
+        line_items: [{ price_data: { currency: 'eur', unit_amount: amountMinor, product_data: { name: durationDays === 7 ? 'dkrypt 7-day Access pass' : `${plan.name} gift access`, description: `${gift.durationDays} days of dkrypt access` } }, quantity: 1 }],
         customer: getBillingCustomerId(userId),
         customer_email: getBillingCustomerId(userId) ? undefined : getAuthProfile(userId)?.email,
         client_reference_id: userId,
@@ -1092,7 +1081,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       if (!session.url || !setPurchasedBillingGiftCheckout(gift.id, userId, session.id)) {
         return sendBillingError(request, reply, 502, 'Stripe could not start gift checkout');
       }
-      recordAudit(userId, 'billing.checkout', gift.id, `started ${plan.id} gift checkout for ${gift.durationDays} days`);
+      recordAudit(userId, 'billing.checkout', gift.id, `started ${plan.id} access checkout for ${gift.durationDays} days`);
       return reply.code(201).send({ giftId: gift.id, url: session.url, amountMinor, currency: 'EUR' });
     } catch (error) {
       log.error('Stripe gift checkout session failed', { userId, giftId: gift.id, planId: plan.id, error: String(error) });
