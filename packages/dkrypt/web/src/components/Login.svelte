@@ -201,8 +201,6 @@
     </div>
     <h2 class="mb-6.5 text-[19px] font-semibold">Sign in</h2>
 
-    <a href="/demo" class="mb-4 inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-border px-3 text-sm font-medium text-text transition-colors hover:bg-panel-muted">Try the interactive demo</a>
-
     {#if sessionState.githubOauthEnabled && !signupProvider}
       <a
         href={oauthLoginUrl('github')}
