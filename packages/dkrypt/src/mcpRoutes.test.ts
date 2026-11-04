@@ -70,10 +70,10 @@ test('MCP requests require OAuth bearer authorization and do not accept an empty
   }
 });
 
-test('Free accounts cannot authorize MCP access', async () => {
+test('Free accounts without manually assigned decrypt access cannot authorize MCP access', async () => {
   const server = await buildTestServer({ includePublicRoutes: false });
   const userId = `mcp-free-${randomBytes(8).toString('hex')}@example.test`;
-  const role = createRole({ name: `MCP Free ${randomBytes(4).toString('hex')}`, color: '#7958e8', permissions: PermissionFlag.administrator.toString() }, 'test setup');
+  const role = createRole({ name: `MCP Free ${randomBytes(4).toString('hex')}`, color: '#7958e8', permissions: PermissionFlag.viewLogs.toString() }, 'test setup');
   addAllowedUser(userId, [role.id], 'test setup');
   const client = await server.inject({
     method: 'POST',
