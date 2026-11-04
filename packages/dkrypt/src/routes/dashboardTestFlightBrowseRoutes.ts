@@ -7,7 +7,7 @@ import type {
 } from '#dashboardTestFlightContracts.js';
 import { recordFastifyDashboardActivity } from '#dashboardActivity.js';
 import { getRouteContract } from '#contracts.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { requestAbuseContext } from '#abuseProtection.js';
 import { fastifyBlockDuringMaintenance } from '#maintenance.js';
 import { jobSummary } from '#jobs/http.js';
@@ -254,7 +254,7 @@ export function createDashboardTestFlightBrowseRoutes(overrides: Partial<TestFli
         ?? (request.body.preferPrimary && recentlyVerifiedDevices.some((device) => device.id === primaryDeviceId)
           ? primaryDeviceId
           : recentlyVerifiedDevices[0]?.id);
-      const abuse = requestAbuseContext(request.ip, request.headers.cookie, getBillingEntitlements(session.sub).freeTier);
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, isFreeTierForPermission(session.sub, PermissionFlag.requestDecrypt));
       const job = services.enqueueDecryptJob(
         bundleId,
         'manual',

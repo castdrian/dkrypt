@@ -18,7 +18,7 @@ import {
 import { abuseAddressHash, admitNewOauthAccount, assessSignupAdmission, blockedEmailDomain, consumeSignupChallenge, ensureAbuseBrowserSignal, getSignupAbuseSignals, isSignupChallengeConfigured, refreshIpReputation, signupChallengeSiteKey, verifySignupChallenge } from '#abuseProtection.js';
 import { linkOauthAccount, resolveOauthAccount } from '#account.js';
 import { getRouteContract } from '#contracts.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission, hasManualDecryptRoleAccess } from '#accountAccess.js';
 import { config, isAppleOauthEnabled, isDiscordBotEnabled, isDiscordOauthEnabled, isGithubOauthEnabled } from '#config.js';
 import { fetchMemberRoleIds } from '#discord.js';
 import {
@@ -139,10 +139,11 @@ export const authRoutes: FastifyPluginAsyncTypebox = async (server) => {
   server.get(SESSION_ROUTE, { schema: getRouteContract('GET', SESSION_ROUTE) }, async (request, reply) => {
     const session = getFastifySession(request);
     const profile = session ? getAuthProfile(session.sub) : undefined;
-    if (session && getBillingEntitlements(session.sub).freeTier) ensureAbuseBrowserSignal(reply, request.headers.cookie);
+    if (session && isFreeTierForPermission(session.sub, PermissionFlag.requestDecrypt)) ensureAbuseBrowserSignal(reply, request.headers.cookie);
     return reply.send({
       loggedIn: !!session,
-      freeTier: session ? getBillingEntitlements(session.sub).freeTier === true : false,
+      freeTier: session ? isFreeTierForPermission(session.sub, PermissionFlag.requestDecrypt) : false,
+      manualRoleAccess: session ? hasManualDecryptRoleAccess(session.sub) : false,
       sub: session?.sub,
       username: profile?.username,
       displayName: profile?.displayName,

@@ -82,6 +82,7 @@ import { log } from '#logger.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
 import { PermissionFlag } from '#permissions.js';
 import { areNewBillingCheckoutsPaused, getUserPrefs, recordAudit, setNewBillingCheckoutsPaused } from '#store/state.js';
+import { hasManualDecryptRoleAccess, isFreeTierForPermission } from '#accountAccess.js';
 import { constructStripeWebhookEvent, stripeRequest } from '#stripe.js';
 import { getStripeWebhookHealth as inspectStripeWebhookHealth, StripeWebhookEndpointNotFoundError, syncStripeWebhookEvents, type StripeWebhookHealth } from '#stripeWebhookHealth.js';
 import { claimWebhook, countWebhookInbox, getWebhookInboxRecord, listWebhookInbox, markWebhookFailed, markWebhookProcessed, quarantineWebhook, receiveWebhook, releaseWebhookClaim } from '#webhookInbox.js';
@@ -682,7 +683,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const balance = getDecryptCreditBalance(userId);
     const entitlement = getBillingEntitlements(userId);
-    const price = entitlement.freeTier || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
+    const price = isFreeTierForPermission(userId, PermissionFlag.requestDecrypt) || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
     return {
       balance: balance.available,
       grants: balance.grants,
@@ -706,8 +707,9 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     }
     if (areNewBillingCheckoutsPaused()) return sendBillingError(request, reply, 503, 'New checkouts are temporarily paused by an administrator', 'billing_checkouts_paused');
     const entitlement = getBillingEntitlements(userId);
+    const freeTier = isFreeTierForPermission(userId, PermissionFlag.requestDecrypt);
     if (!entitlement.decrypt) return sendBillingError(request, reply, 403, 'decrypt access is required to purchase a single decrypt');
-    if (!entitlement.freeTier && entitlement.dailyDecryptLimit === undefined) return sendBillingError(request, reply, 403, 'single decrypt purchases are for accounts with a limited allowance', 'decrypt_credit_purchase_not_applicable');
+    if (!freeTier && entitlement.dailyDecryptLimit === undefined) return sendBillingError(request, reply, 403, 'single decrypt purchases are for accounts with a limited allowance', 'decrypt_credit_purchase_not_applicable');
     const creditPriceOffer = await getSingleDecryptPriceOffer();
     if (!creditPriceOffer) return sendBillingError(request, reply, 503, 'single-decrypt checkout is unavailable', 'decrypt_credit_checkout_unavailable');
     if (!acquireBillingCheckoutLock(userId)) return sendBillingError(request, reply, 409, 'another billing checkout is already being created', 'checkout_in_progress');
@@ -788,15 +790,18 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
     const userId = getFastifySession(request)!.sub;
     const profile = getAuthProfile(userId);
     const entitlement = getBillingEntitlements(userId);
+    const manualRoleAccess = hasManualDecryptRoleAccess(userId);
+    const freeTier = isFreeTierForPermission(userId, PermissionFlag.requestDecrypt);
+    const responseEntitlement = { ...entitlement, freeTier, manualRoleAccess };
     const paymentMethod = await getPaymentMethodStatus(userId, entitlement.provider === 'stripe' ? entitlement.subscriptionId : undefined);
-    const quota = entitlement.freeTier
+    const quota = freeTier
       ? getFreeDecryptQuotaUsage(userId)
       : getDecryptQuotaUsage(userId, entitlement.dailyDecryptLimit);
-    quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
+    quota.windowMs = freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
     const credits = getDecryptCreditBalance(userId);
-    const decryptCreditPriceOffer = entitlement.freeTier || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
+    const decryptCreditPriceOffer = freeTier || entitlement.dailyDecryptLimit !== undefined ? await getSingleDecryptPriceOffer() : undefined;
     const sampleDays = 7;
-    const recentQuotaAdmissions = entitlement.freeTier ? [] : getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
+    const recentQuotaAdmissions = freeTier ? [] : getDecryptQuotaJournal(userId, 10_000).filter((entry) => entry.admittedAt > Date.now() - sampleDays * 86_400_000);
     const averagePerDay = recentQuotaAdmissions.length / sampleDays;
     const crypto = await getNowPaymentsProviderStatus();
     const minimumResults = crypto.enabled && crypto.ready
@@ -820,7 +825,7 @@ export const billingRoutes: FastifyPluginAsyncTypebox<{
       customerEmail: profile?.email,
       paymentMethod,
       legacyBilling: hasLegacyBillingRecord(userId),
-      entitlement,
+      entitlement: responseEntitlement,
       quota,
       decryptCredits: {
         available: credits.available,

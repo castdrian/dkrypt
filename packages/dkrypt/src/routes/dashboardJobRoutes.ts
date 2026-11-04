@@ -6,6 +6,7 @@ import { getRouteContract } from '#contracts.js';
 import { jobSummary } from '#jobs/http.js';
 import { getJob, retainFreeJobResult } from '#jobs/store.js';
 import { getBillingEntitlements } from '#billing.js';
+import { hasManualDecryptRoleAccess } from '#accountAccess.js';
 import type { Job, JobExecutionStage } from '#jobs/types.js';
 import type { DeviceTransport } from '#apiCommonContracts.js';
 import { getFailureGuidance } from '#util/failureGuidance.js';
@@ -191,7 +192,7 @@ export const dashboardJobRoutes: FastifyPluginAsyncTypebox = async (server) => {
       return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'temporary result not found'));
     }
     const entitlement = getBillingEntitlements(session.sub);
-    if (!entitlement.decrypt || entitlement.freeTier) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'an active paid plan is required to keep this result'));
+    if (!entitlement.decrypt || (entitlement.freeTier && !hasManualDecryptRoleAccess(session.sub))) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'decrypt access is required to keep this result'));
     if (job.status !== 'done') return reply.code(409).send(createHttpErrorEnvelope(request.id, 409, 'this result is not ready to keep'));
     if (job.temporaryResultExpiresAt !== undefined && job.temporaryResultExpiresAt <= Date.now()) {
       return reply.code(410).send(createHttpErrorEnvelope(request.id, 410, 'the temporary download window has expired'));

@@ -2,7 +2,7 @@ import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { normalizeVersionSelector, resolveDecryptTarget, VERSION_SELECTOR_RE } from '#decryptTarget.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { AutomationOwnerUnavailableError, enqueueDecryptJob } from '#jobs/store.js';
 import { DailyDecryptLimitError, FreeAbuseContextUnavailableError, FreeAbuseLimitError, FreeDecryptLimitError } from '#jobs/repository.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
@@ -45,7 +45,7 @@ export const signedTriggerRoutes: FastifyPluginAsyncTypebox = async (server) => 
     try {
       const target = await resolveDecryptTarget(input.bundleId, normalizeVersionSelector(input.version));
       if (target.channel !== input.source) throw new Error('resolved release does not match the allowed source');
-      const abuse = requestAbuseContext(request.ip, request.headers.cookie, Boolean(policy.billingOwnerId && getBillingEntitlements(policy.billingOwnerId).freeTier));
+      const abuse = requestAbuseContext(request.ip, request.headers.cookie, Boolean(policy.billingOwnerId && isFreeTierForPermission(policy.billingOwnerId, PermissionFlag.requestDecrypt)));
       const job = enqueueDecryptJob(input.bundleId, 'manual', { externalVersionId: target.externalVersionId, testflight: target.testflight, versionLabel: target.versionLabel, projectId: policy.projectId, queuedBy: `integration:${policy.id}`, billingOwnerId: policy.billingOwnerId, minimumOsVersion: target.minimumOsVersion, abuseNetworkHash: abuse.networkHash, abuseAddressHash: abuse.addressHash, abuseBrowserHash: abuse.browserHash, abuseTurnstileHash: abuse.turnstileHash, abuseNetworkDecryptLimit: abuse.networkDecryptLimit, abuseAddressDecryptLimit: abuse.addressDecryptLimit });
       finishIntegrationDelivery(delivery, 'accepted', job.id);
       return reply.code(202).send({ jobId: job.id, duplicate: false });

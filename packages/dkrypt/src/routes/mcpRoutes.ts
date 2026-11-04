@@ -15,7 +15,7 @@ import { PermissionFlag, hasPermission } from '#permissions.js';
 import { lookupAppMetadata } from '#appStoreMetadata.js';
 import type { TFBuild } from '#testflight.js';
 import { getMaintenanceStatus } from '#maintenance.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 
 const RESOURCE = `${config.publicBaseUrl.replace(/\/$/, '')}/v1/mcp`;
 const RESOURCE_METADATA = `${config.publicBaseUrl.replace(/\/$/, '')}/.well-known/oauth-protected-resource/mcp`;
@@ -245,11 +245,10 @@ function supportedScope(value: string): value is SupportedScope {
 }
 
 function userCanUseScope(userId: string, scope: SupportedScope): boolean {
-  if (getBillingEntitlements(userId).freeTier) return false;
   const permissions = getUserEffectivePermissions(userId);
-  return scope === 'devices:read'
-    ? hasPermission(permissions, PermissionFlag.viewDevices)
-    : hasPermission(permissions, PermissionFlag.requestDecrypt);
+  const permission = scope === 'devices:read' ? PermissionFlag.viewDevices : PermissionFlag.requestDecrypt;
+  if (isFreeTierForPermission(userId, permission)) return false;
+  return hasPermission(permissions, permission);
 }
 
 function userCanUseAllScopes(userId: string, scopes: readonly SupportedScope[]): boolean {

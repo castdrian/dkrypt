@@ -6,6 +6,7 @@ import { getDeviceHealth, getDeviceInstallBlocker, getDeviceReadiness } from '#d
 import { getRouteContract } from '#contracts.js';
 import { getActiveJobs } from '#jobs/store.js';
 import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { getDecryptQuotaUsage, getFreeDecryptQuotaUsage } from '#jobs/repository.js';
 import { PermissionFlag } from '#permissions.js';
 import { fastifyRequirePermission, fastifyRequireSession, getFastifySession } from '#session.js';
@@ -70,6 +71,7 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
     }, async (request, reply) => {
       const session = getFastifySession(request)!;
       const entitlement = getBillingEntitlements(session.sub);
+      const freeTier = isFreeTierForPermission(session.sub, PermissionFlag.requestDecrypt);
       const operationalView = canViewOperationalDashboard(session.permissions);
       const projectId = DEFAULT_PROJECT_ID;
 
@@ -83,10 +85,10 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
         try {
           const target = await services.resolveDecryptTarget(bundleId, versionLabel, platform);
           const readiness = services.getOfflineAppStoreReadiness({ platform });
-          const quota = entitlement.freeTier
+          const quota = freeTier
             ? getFreeDecryptQuotaUsage(session.sub)
             : getDecryptQuotaUsage(session.sub, entitlement.dailyDecryptLimit);
-          quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
+          quota.windowMs = freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
           return {
             bundleId,
             platform,
@@ -100,7 +102,7 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
             estimatedDurationMs: operationalView ? services.getAverageJobDurationMs(bundleId, projectId) : undefined,
             queueLength: operationalView ? services.getActiveJobs().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId).length : undefined,
             canQueue: readiness.ready,
-            quota: { ...quota, freeTier: entitlement.freeTier ?? false, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
+            quota: { ...quota, freeTier, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
             devices: [],
           };
         } catch (error) {
@@ -199,10 +201,10 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
         }
       }));
 
-      const quota = entitlement.freeTier
+      const quota = freeTier
         ? getFreeDecryptQuotaUsage(session.sub)
         : getDecryptQuotaUsage(session.sub, entitlement.dailyDecryptLimit);
-      quota.windowMs = entitlement.freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
+      quota.windowMs = freeTier ? entitlement.rollingDecryptWindowMs : entitlement.dailyDecryptLimit === undefined ? undefined : 24 * 60 * 60 * 1000;
       return {
         bundleId,
         versionLabel,
@@ -211,7 +213,7 @@ export function createDashboardDecryptPreflightRoutes(overrides: Partial<Dashboa
         estimatedDurationMs: operationalView ? services.getAverageJobDurationMs(bundleId, projectId) : undefined,
         queueLength: operationalView ? services.getActiveJobs().filter((job) => (job.projectId ?? DEFAULT_PROJECT_ID) === projectId).length : undefined,
         canQueue: checks.some((check) => check.ready),
-        quota: { ...quota, freeTier: entitlement.freeTier ?? false, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
+        quota: { ...quota, freeTier, legacy: entitlement.legacy ?? false, apiRatePerMinute: entitlement.apiRatePerMinute },
         devices: operationalView ? checks : [],
       };
     });

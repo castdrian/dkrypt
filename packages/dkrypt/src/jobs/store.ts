@@ -7,13 +7,14 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '#config.js';
 import { getBillingEntitlements, setBillingEntitlementChangeHandler } from '#billing.js';
+import { hasManualDecryptRoleAccess } from '#accountAccess.js';
 import { emitJobsChanged } from '#events.js';
 import { scopedLogger } from '#logger.js';
 
 const log = scopedLogger('jobs');
 import { sendMailToUser } from '#mail.js';
 import { sendPushToUser } from '#push.js';
-import { DEFAULT_PROJECT_ID, deleteJobHistoryEntry, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, hasManuallyAssignedPermission, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
+import { DEFAULT_PROJECT_ID, deleteJobHistoryEntry, getAccountJobQuotaLimits, getAllJobHistory, getApiKeyById, getDevice, getEffectiveDevices, getTestFlightCatalogCache, getUserEffectivePermissions, getUserPrefs, getUserPriority, hasManuallyAssignedPermission, recordDecryptQuotaThresholdNotice, recordDeviceActivity, recordJobHistory, updateDevice, type DeviceRecord } from '#store/state.js';
 import { hasPermission, PermissionFlag } from '#permissions.js';
 import { uninstallFromDevice } from '#appStoreInstall.js';
 import { getCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -743,7 +744,8 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   const lookup = { bundleId, externalVersionId, testFlightBuildId: testflight?.build.id, projectId, platform };
   const entitlement = billingOwnerId ? getBillingEntitlements(billingOwnerId) : undefined;
   const hasUnmeteredRoleApiAccess = Boolean(apiKeyId && billingOwnerId && hasManuallyAssignedPermission(billingOwnerId, PermissionFlag.createApiKeys | PermissionFlag.accessApi));
-  const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root' && !hasUnmeteredRoleApiAccess;
+  const hasManualDecryptAccess = Boolean(billingOwnerId && hasManualDecryptRoleAccess(billingOwnerId));
+  const freeTierResult = entitlement?.freeTier === true && billingOwnerId?.toLowerCase() !== 'root' && !hasUnmeteredRoleApiAccess && !hasManualDecryptAccess;
   const effectivePriority = freeTierResult ? -5 : priority;
   const existing = findActiveJobForBundle(lookup, freeTierResult ? billingOwnerId : undefined);
   if (existing) {
@@ -802,7 +804,7 @@ export function enqueueDecryptJob(bundleId: string, source: JobSource, options: 
   let quotaLimit: number | undefined;
   let previousUsage: number | undefined;
   if (billingOwnerId && entitlement) {
-    if (entitlement.freeTier && !hasUnmeteredRoleApiAccess) {
+    if (entitlement.freeTier && !hasUnmeteredRoleApiAccess && !hasManualDecryptAccess) {
       quotaOwnerId = billingOwnerId;
       quotaLimit = entitlement.rollingDecryptLimit;
       previousUsage = getFreeDecryptQuotaUsage(billingOwnerId).used;
@@ -1312,16 +1314,18 @@ export function prioritizeQueuedJob(id: string, projectId?: string): boolean {
 function applyBillingPriorityToQueuedJobs(userId: string): void {
   syncPersistedJobsFromRepository(true);
   const entitlement = getBillingEntitlements(userId);
-  if (entitlement.freeTier) return;
+  const hasManualDecryptAccess = hasManualDecryptRoleAccess(userId);
+  if (entitlement.freeTier && !hasManualDecryptAccess) return;
+  const accountPriority = hasManualDecryptAccess ? getUserPriority(userId) : entitlement.priority;
   const accountId = userId.toLowerCase();
   let changed = false;
   for (const job of jobs.values()) {
     if (job.status !== 'queued') continue;
     if ((job.billingOwnerId ?? job.queuedBy)?.toLowerCase() !== accountId) continue;
-    const upgradedPriority = Math.max(job.priority, entitlement.priority);
+    const upgradedPriority = Math.max(job.priority, accountPriority);
     if (upgradedPriority <= job.priority) continue;
     job.priority = upgradedPriority;
-    appendJobTimelineEvent(job, 'Paid plan priority applied while queued', 'queued');
+    appendJobTimelineEvent(job, hasManualDecryptAccess ? 'Assigned role priority applied while queued' : 'Paid plan priority applied while queued', 'queued');
     if (job.pausedAt === undefined) {
       removeQueuedJob(job.id);
       insertByPriority(job.id, upgradedPriority);

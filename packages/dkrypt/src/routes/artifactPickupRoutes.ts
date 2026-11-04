@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { artifactFileAvailable, getArtifactById, getArtifactForJob, touchArtifact } from '#artifacts.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { PermissionFlag } from '#permissions.js';
 import { streamFilePath, jobFileAvailable } from '#jobs/http.js';
 import { getJob } from '#jobs/store.js';
@@ -28,7 +28,7 @@ export const artifactPickupRoutes: FastifyPluginAsyncTypebox = async (server) =>
 
     const now = Date.now();
     if (artifactId) {
-      if (getBillingEntitlements(session.sub).freeTier) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'shared library downloads require a paid plan'));
+      if (isFreeTierForPermission(session.sub, PermissionFlag.requestDecrypt)) return reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'shared library downloads require decrypt access'));
       const artifact = getArtifactById(artifactId);
       if (!artifact || !artifact.projectIds.includes(DEFAULT_PROJECT_ID) || !artifactFileAvailable(artifact)) return reply.code(404).send(createHttpErrorEnvelope(request.id, 404, 'artifact not found'));
       const expiresAt = now + PICKUP_LINK_TTL_MS;

@@ -61,6 +61,7 @@ export function permissionsSummary(bits: bigint): string {
 export interface SessionInfo {
   loggedIn: boolean;
   freeTier?: boolean;
+  manualRoleAccess?: boolean;
   sub?: string;
   username?: string;
   displayName?: string;

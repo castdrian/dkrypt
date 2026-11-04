@@ -5,6 +5,7 @@ import { hasPermission, PermissionFlag } from '#permissions.js';
 import { isPublicApiKeyRoute } from '#publicApi.js';
 import { authenticateGithubOidc } from '#githubOidc.js';
 import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { setRateLimitHeaders, SlidingWindowRateLimiter } from '#util/rateLimit.js';
 
 const fastifyApiKeyContext = new WeakMap<FastifyRequest, ApiKeyAuthResult>();
@@ -110,7 +111,7 @@ export function fastifyRequireApiKey(request: FastifyRequest, reply: FastifyRepl
           return;
         }
         const ownerId = policy.billingOwnerId ?? 'root';
-        if (ownerId !== 'root' && getBillingEntitlements(ownerId).freeTier) {
+        if (ownerId !== 'root' && isFreeTierForPermission(ownerId, MANUAL_API_ACCESS_PERMISSIONS)) {
           reply.code(403).send({ error: 'API access is available on paid plans', code: 'free_api_unavailable', message: 'API access is available on paid plans', requestId: request.id, retryable: false });
           return;
         }

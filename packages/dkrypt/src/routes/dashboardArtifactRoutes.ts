@@ -23,7 +23,7 @@ import { compareIpaStructures, readIpaStructure } from '#ipaStructure.js';
 import { analyzeIpaInIsolatedProcess, IpaInspectionCapacityError, optimizeIpaForDeviceInIsolatedProcess, readIpaAssetPreviewInIsolatedProcess } from '#jobs/ipaInspection.js';
 import { formatArtifactFilename } from '#artifactFilename.js';
 import { getUserPrefs, updateUserPrefs } from '#store/state.js';
-import { getBillingEntitlements } from '#billing.js';
+import { isFreeTierForPermission } from '#accountAccess.js';
 import { canViewOperationalDashboard } from '#dashboardAccess.js';
 
 const IPA_UPLOAD_CONTENT_TYPE = 'application/vnd.dkrypt.ipa';
@@ -102,7 +102,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
     server.addHook('preHandler', recordFastifyDashboardActivity);
     server.addHook('preHandler', (request, reply, done) => {
       const userId = getFastifySession(request)?.sub;
-      if (!userId || !getBillingEntitlements(userId).freeTier) return done();
+      if (!userId || !isFreeTierForPermission(userId, PermissionFlag.requestDecrypt)) return done();
       const metadataRoute = request.method === 'GET' && ['/v1/dashboard/artifacts', '/v1/dashboard/artifacts/:id'].includes(request.routeOptions.url ?? '');
       if (metadataRoute) return done();
       reply.code(403).send(createHttpErrorEnvelope(request.id, 403, 'Free accounts can browse library metadata but cannot access shared IPA files or management tools'));
@@ -115,7 +115,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: getRouteContract('GET', '/v1/dashboard/artifacts'),
       preHandler: canRequestDecrypt,
     }, (request) => {
-      const freeTier = getBillingEntitlements(getFastifySession(request)!.sub).freeTier;
+      const freeTier = isFreeTierForPermission(getFastifySession(request)!.sub, PermissionFlag.requestDecrypt);
       const operationalView = canViewOperationalDashboard(getFastifySession(request)!.permissions);
       const projectId = DEFAULT_PROJECT_ID;
       const cursor = request.query.cursor;
@@ -152,7 +152,7 @@ export function createDashboardArtifactRoutes(overrides: Partial<DashboardArtifa
       schema: { hide: true, params: dashboardArtifactParamsSchema, querystring: dashboardArtifactDetailQuerySchema, response: { 200: dashboardArtifactResponseSchema, 404: ErrorEnvelope } },
       preHandler: canRequestDecrypt,
     }, (request, reply) => {
-      const freeTier = getBillingEntitlements(getFastifySession(request)!.sub).freeTier;
+      const freeTier = isFreeTierForPermission(getFastifySession(request)!.sub, PermissionFlag.requestDecrypt);
       const operationalView = canViewOperationalDashboard(getFastifySession(request)!.permissions);
       const artifact = services.getArtifactById(request.params.id);
       const projectId = DEFAULT_PROJECT_ID;

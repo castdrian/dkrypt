@@ -531,6 +531,7 @@ const AuthMfaResponse = object({ enabled: Type.Boolean(), recoveryCodesRemaining
 const AuthSessionResponse = object({
   loggedIn: Type.Boolean(),
   freeTier: Type.Boolean(),
+  manualRoleAccess: Type.Boolean(),
   sub: Type.Optional(Identifier),
   username: Type.Optional(Type.String()),
   displayName: Type.Optional(Type.String()),
