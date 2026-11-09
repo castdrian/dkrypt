@@ -9,7 +9,7 @@ import { getDiskUsage } from '#util/diskUsage.js';
 import { getCachedDeviceHealth, setCachedDeviceHealth } from '#deviceHealthCache.js';
 import { incrementMetric, observeMetric, setGaugeMetric } from '#metrics.js';
 import { throwIfAborted } from '#util/abort.js';
-import { getDeviceSourceBlocker, getRootlessJailbreakBlocker, isBridgeHeartbeatFresh } from '#deviceInstallEligibility.js';
+import { getDeviceSourceBlocker, getRootlessJailbreakBlocker, hasStaleSpringBoardHeartbeat, isBridgeHeartbeatFresh } from '#deviceInstallEligibility.js';
 import type { DeviceInstallSource } from '#deviceInstallEligibility.js';
 export { getDeviceInstallBlocker, isBridgeHeartbeatFresh } from '#deviceInstallEligibility.js';
 
@@ -27,6 +27,7 @@ export interface DeviceHealth {
   jailbreakAvailable?: boolean;
   testFlightRunning?: boolean;
   testFlightBridgeReachable?: boolean;
+  springBoardVerifiedAt?: number;
   darkEnabled?: boolean;
   displayMode?: 'dark_awake' | 'dark_sleep' | 'restore_idle' | 'unchanged';
   autoinstallPaused?: boolean;
@@ -185,7 +186,7 @@ export function getDeviceReadiness(health: DeviceHealth, source?: DeviceInstallS
     score -= 30;
     reasons.push('device agent is unavailable');
   }
-  if (health.bridgeHeartbeats?.springboard && !isBridgeHeartbeatFresh(health.bridgeHeartbeats.springboard)) {
+  if (hasStaleSpringBoardHeartbeat(health)) {
     score -= 50;
     reasons.push('autoinstall SpringBoard heartbeat is stale');
   }
@@ -354,6 +355,7 @@ export interface DeviceHealthQueries {
 export interface DeviceTelemetry {
   testFlightRunning: boolean;
   testFlightBridgeReachable?: boolean;
+  springBoardVerifiedAt?: number;
   jailbreakAvailable?: boolean;
   darkEnabled?: boolean;
   displayMode?: DeviceHealth['displayMode'];
@@ -386,6 +388,7 @@ async function runHealthQuery<T>(name: string, query: () => Promise<T>, fallback
 export async function collectDeviceTelemetry(queries: DeviceHealthQueries, signal?: AbortSignal): Promise<DeviceTelemetry> {
   const testFlightRunning = await runHealthQuery('TestFlight process status', queries.testFlightRunning, false, signal);
   const springBoardStatus = await runHealthQuery('SpringBoard bridge status', queries.springBoardStatus, { ok: false }, signal);
+  const springBoardVerifiedAt = springBoardStatus.ok ? Date.now() : undefined;
   const jailbreakAvailable = await runHealthQuery('rootless jailbreak status', queries.jailbreakAvailable, undefined, signal);
   const battery = await runHealthQuery('battery status', queries.battery, undefined, signal);
   const storage = await runHealthQuery('storage status', queries.storage, undefined, signal);
@@ -397,6 +400,7 @@ export async function collectDeviceTelemetry(queries: DeviceHealthQueries, signa
   return {
     testFlightRunning,
     testFlightBridgeReachable: springBoardStatus.ok,
+    springBoardVerifiedAt,
     jailbreakAvailable,
     darkEnabled: springBoardStatus.value?.darkEnabled,
     displayMode: springBoardStatus.value?.displayMode,
@@ -634,6 +638,7 @@ async function computeDeviceHealth(device: DeviceRecord, signal?: AbortSignal): 
       agentHeartbeatAt,
       testFlightRunning: telemetry.testFlightRunning,
       testFlightBridgeReachable: telemetry.testFlightBridgeReachable,
+      springBoardVerifiedAt: telemetry.springBoardVerifiedAt,
       jailbreakAvailable: telemetry.jailbreakAvailable,
       darkEnabled: telemetry.darkEnabled,
       displayMode: telemetry.displayMode,

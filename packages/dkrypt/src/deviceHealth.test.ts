@@ -120,6 +120,12 @@ describe('getDeviceReadiness', () => {
     expect(getDeviceInstallBlocker(health({ bridgeHeartbeats: { springboard: { at: 0 } } }))).toContain('heartbeat');
   });
 
+  test('accepts a recent SpringBoard response when the heartbeat file is stale', () => {
+    const sample = health({ testFlightBridgeReachable: true, springBoardVerifiedAt: Date.now(), bridgeHeartbeats: { springboard: { at: 0 } } });
+    expect(getDeviceInstallBlocker(sample, undefined, 'testflight')).toBeUndefined();
+    expect(getDeviceInstallBlocker({ ...sample, springBoardVerifiedAt: Date.now() - 7 * 60_000 }, undefined, 'testflight')).toContain('heartbeat');
+  });
+
   test('blocks decrypt when USB SSH or SFTP is unavailable without marking the device offline', () => {
     const deviceHealth = applyDeviceSshTunnelHealth({
       reachable: true,

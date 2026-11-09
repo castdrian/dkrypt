@@ -11,6 +11,12 @@ export function isBridgeHeartbeatFresh(heartbeat: { at?: number } | undefined, n
   return typeof heartbeat?.at === 'number' && now - heartbeat.at * 1000 <= BRIDGE_HEARTBEAT_MAX_AGE_MS;
 }
 
+export function hasStaleSpringBoardHeartbeat(health: DeviceHealth, now = Date.now()): boolean {
+  const heartbeat = health.bridgeHeartbeats?.springboard;
+  if (!heartbeat || isBridgeHeartbeatFresh(heartbeat, now)) return false;
+  return health.testFlightBridgeReachable !== true || health.springBoardVerifiedAt === undefined || now - health.springBoardVerifiedAt > 6 * 60_000;
+}
+
 export type DeviceInstallSource = 'appstore' | 'testflight';
 
 export function getDeviceSourceBlocker(health: DeviceHealth, source: DeviceInstallSource): string | undefined {
@@ -45,7 +51,7 @@ export function getDeviceInstallBlocker(health: DeviceHealth, installSizeBytes?:
   const sourceBlocker = source ? getDeviceSourceBlocker(health, source) : undefined;
   if (sourceBlocker) return sourceBlocker;
   if (!source && health.testFlightBridgeReachable === false) return 'autoinstall SpringBoard bridge is unresponsive';
-  if (health.bridgeHeartbeats?.springboard && !isBridgeHeartbeatFresh(health.bridgeHeartbeats.springboard)) return 'autoinstall SpringBoard heartbeat is stale';
+  if (hasStaleSpringBoardHeartbeat(health)) return 'autoinstall SpringBoard heartbeat is stale';
   if (health.batteryPercent !== undefined && !health.batteryCharging && health.batteryPercent < 15) return `device battery is ${health.batteryPercent}% and not charging`;
   if (health.batteryTemperatureC !== undefined && health.batteryTemperatureC >= 45) return `device temperature is ${health.batteryTemperatureC.toFixed(1)}°C`;
   const normalizedInstallSizeBytes = typeof installSizeBytes === 'number' && Number.isFinite(installSizeBytes) && installSizeBytes > 0 ? installSizeBytes : undefined;
