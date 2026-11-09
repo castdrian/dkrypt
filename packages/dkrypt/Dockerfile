@@ -6,7 +6,7 @@ RUN set -eu; \
   mkdir -p /src/ipadecrypt; \
   cp -R "${source}"/. /src/ipadecrypt/; \
   cd /src/ipadecrypt; \
-  go mod edit -require=golang.org/x/crypto@v0.55.0 -require=golang.org/x/mod@v0.40.0 -require=golang.org/x/net@v0.60.0; \
+  go mod edit -require=golang.org/x/crypto@v0.55.0 -require=golang.org/x/mod@v0.40.0 -require=golang.org/x/net@v0.62.0; \
   go mod tidy; \
   go test ./...; \
   go build -trimpath -o /go/bin/ipadecrypt ./cmd/ipadecrypt
