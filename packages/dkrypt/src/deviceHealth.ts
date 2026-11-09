@@ -3,7 +3,7 @@ import { trackBackgroundWork } from '#backgroundWork.js';
 import { execCommand, getRustDeviceBridgeHealth, isDirectUsbDeviceAgentConnection, isRustDeviceConnection, isTestFlightRunning, probeDeviceSshTunnel, readBridgeHeartbeats, sendSpringBoardBridgeRequest, tryIoregCandidates, withSSH, type BridgeHeartbeat, type DeviceClient, type DeviceConnection, type DeviceTransport } from '#idevice.js';
 import { scopedLogger } from '#logger.js';
 import { EMBED_COLOR, notify } from '#notify.js';
-import { notifyDeviceDispatchStateChanged, releasePinnedJobsForDevice } from '#jobs/store.js';
+import { getActiveJobs, notifyDeviceDispatchStateChanged, releasePinnedJobsForDevice } from '#jobs/store.js';
 import { getEffectiveDevices, getEffectiveSettings, hasSustainedDeviceHealthFailures, recordDeviceActivity, recordDeviceAlertNotification, recordDeviceHealthCheck, type DeviceRecord, type DeviceSubsystemDetail, type DeviceSubsystemId } from '#store/state.js';
 import { getDiskUsage } from '#util/diskUsage.js';
 import { getCachedDeviceHealth, setCachedDeviceHealth } from '#deviceHealthCache.js';
@@ -767,6 +767,7 @@ export async function getDeviceHealth(deviceId: string, force = false, signal?: 
 }
 
 const HEALTH_POLL_INTERVAL_MS = 5 * 60_000;
+const QUEUED_DEVICE_HEALTH_RETRY_MS = 30_000;
 
 interface DeviceAlertState {
   unreachableSince?: number;
@@ -1044,17 +1045,29 @@ export function refreshUsbDeviceHealth(udid: string): Promise<void> {
 
 export function startDeviceHealthPoller(): void {
   if (deviceHealthTimer) return;
+  let lastFullPollAt: number | undefined;
   const poll = async () => {
-    const devices = getEffectiveDevices().filter((d) => d.enabled);
+    const now = Date.now();
+    const fullPoll = lastFullPollAt === undefined || now - lastFullPollAt >= HEALTH_POLL_INTERVAL_MS;
+    if (fullPoll) lastFullPollAt = now;
+    const waitingJobs = fullPoll ? [] : getActiveJobs().filter((job) =>
+      job.status === 'queued' && job.pausedAt === undefined && (!job.platform || job.platform === 'ios'));
+    const devices = getEffectiveDevices().filter((device) => {
+      if (!device.enabled) return false;
+      if (fullPoll) return true;
+      if (device.draining || !waitingJobs.some((job) => !job.preferredDeviceId || job.preferredDeviceId === device.id)) return false;
+      const health = getCachedDeviceHealth(device.id)?.value;
+      return !health?.reachable || health.testFlightBridgeReachable !== true || hasStaleSpringBoardHeartbeat(health, now);
+    });
     await Promise.all(devices.map((d) => pollOneDeviceOnce(d).catch((err) => log.warn('device health poll failed', { deviceId: d.id, error: String(err) }))));
-    await checkDiskFullAlert().catch((err) => log.warn('disk full check failed', { error: String(err) }));
+    if (fullPoll) await checkDiskFullAlert().catch((err) => log.warn('disk full check failed', { error: String(err) }));
   };
 
   const runPoll = () => {
     void trackBackgroundWork('device-health-poll', poll).catch((error: unknown) => log.warn('device health poll failed', { error: String(error) }));
   };
   runPoll();
-  deviceHealthTimer = setInterval(runPoll, HEALTH_POLL_INTERVAL_MS).unref();
+  deviceHealthTimer = setInterval(runPoll, QUEUED_DEVICE_HEALTH_RETRY_MS).unref();
 }
 
 let deviceHealthTimer: NodeJS.Timeout | undefined;
