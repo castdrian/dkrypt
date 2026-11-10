@@ -17,7 +17,7 @@ export function minimumOsVersionForBuild(build: TFBuild | undefined): string | u
   return candidate.trim();
 }
 
-function testFlightAccessBlocker(
+export function testFlightAccessBlocker(
   job: Pick<Job, 'testflight'>,
   deviceId: string,
   catalog: TestFlightCatalogCache | undefined,

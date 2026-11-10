@@ -1,3 +1,4 @@
+import { testFlightAccessBlocker } from '#jobs/deviceDispatch.js';
 import { BridgeError } from '#idevice.js';
 import { scopedLogger } from '#logger.js';
 import { trackBackgroundWork } from '#backgroundWork.js';
@@ -594,10 +595,16 @@ export function startTestFlightSubscriptionPoller(): void {
   if (syncTimer) return;
   refreshTestFlightCatalogInBackground();
   queuedCatalogRefreshTimer = setInterval(() => {
-    if (catalogRefreshPromise || !getTestFlightCatalogCacheState().stale) return;
-    if (getActiveJobs().some((job) => job.status === 'queued' && job.pausedAt === undefined && job.testflight)) {
-      refreshTestFlightCatalogInBackground();
-    }
+    if (catalogRefreshPromise) return;
+    const devices = getEffectiveDevices().filter((device) => device.enabled && !device.draining);
+    const catalog = getTestFlightCatalogCache();
+    const now = Date.now();
+    const needsVerification = getActiveJobs().some((job) => {
+      if (job.status !== 'queued' || job.pausedAt !== undefined || !job.testflight) return false;
+      const candidates = devices.filter((device) => !job.preferredDeviceId || job.preferredDeviceId === device.id);
+      return candidates.length > 0 && candidates.every((device) => testFlightAccessBlocker(job, device.id, catalog, now));
+    });
+    if (needsVerification) refreshTestFlightCatalogInBackground();
   }, 30_000).unref();
   syncTimer = setInterval(() => {
     void trackBackgroundWork('testflight-subscription-sync', syncApprovedTestFlightSubscriptions)
