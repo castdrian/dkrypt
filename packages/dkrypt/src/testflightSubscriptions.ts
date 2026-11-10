@@ -26,7 +26,7 @@ import {
 } from '#store/state.js';
 import { listTestFlightApps, statusTestFlightInvite, subscribeToTestFlightInvite, unsubscribeFromTestFlightInvite, type TFDeviceApp } from '#testflight.js';
 import { TESTFLIGHT_VERIFICATION_TTL_MS } from '#testflightPolicy.js';
-import { notifyDeviceDispatchStateChanged } from '#jobs/store.js';
+import { getActiveJobs, notifyDeviceDispatchStateChanged } from '#jobs/store.js';
 
 const log = scopedLogger('testflight');
 
@@ -588,10 +588,18 @@ export async function syncApprovedTestFlightSubscriptions(): Promise<void> {
 }
 
 let syncTimer: NodeJS.Timeout | undefined;
+let queuedCatalogRefreshTimer: NodeJS.Timeout | undefined;
 
 export function startTestFlightSubscriptionPoller(): void {
+  if (syncTimer) return;
   refreshTestFlightCatalogInBackground();
-  if (!syncTimer) syncTimer = setInterval(() => {
+  queuedCatalogRefreshTimer = setInterval(() => {
+    if (catalogRefreshPromise || !getTestFlightCatalogCacheState().stale) return;
+    if (getActiveJobs().some((job) => job.status === 'queued' && job.pausedAt === undefined && job.testflight)) {
+      refreshTestFlightCatalogInBackground();
+    }
+  }, 30_000).unref();
+  syncTimer = setInterval(() => {
     void trackBackgroundWork('testflight-subscription-sync', syncApprovedTestFlightSubscriptions)
       .catch((error: unknown) => log.warn('TestFlight subscription poll failed', { error: String(error) }));
   }, TESTFLIGHT_VERIFICATION_TTL_MS).unref();
@@ -600,6 +608,8 @@ export function startTestFlightSubscriptionPoller(): void {
 export function stopTestFlightSubscriptionPoller(): void {
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = undefined;
+  if (queuedCatalogRefreshTimer) clearInterval(queuedCatalogRefreshTimer);
+  queuedCatalogRefreshTimer = undefined;
 }
 
 export function subscriptionsForUser(userId: string, manager: boolean): TestFlightSubscription[] {
