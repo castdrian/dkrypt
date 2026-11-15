@@ -1,4 +1,4 @@
-FROM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS ipadecrypt
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS ipadecrypt
 ARG IPADECRYPT_VERSION=v0.7.5
 RUN set -eu; \
   go mod download github.com/londek/ipadecrypt@${IPADECRYPT_VERSION}; \
@@ -11,7 +11,7 @@ RUN set -eu; \
   go test ./...; \
   go build -trimpath -o /go/bin/ipadecrypt ./cmd/ipadecrypt
 
-FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS device-bridge
+FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS device-bridge
 WORKDIR /bridge
 COPY packages/device-bridge/Cargo.toml packages/device-bridge/Cargo.lock ./
 COPY packages/device-bridge/src ./src
@@ -19,7 +19,7 @@ ARG CARGO_AUDITABLE_VERSION=0.7.4
 RUN cargo install cargo-auditable --version ${CARGO_AUDITABLE_VERSION} --locked \
   && cargo auditable build --release --locked
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS netmuxd
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS netmuxd
 ARG NETMUXD_VERSION=v0.4.3
 ARG TARGETARCH=amd64
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tar && rm -rf /var/lib/apt/lists/*
@@ -34,7 +34,7 @@ RUN set -eu; \
   tar --extract --file /tmp/netmuxd.tar.gz --directory /usr/local/bin; \
   chmod 0755 /usr/local/bin/netmuxd
 
-FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS appstore-downloader
+FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS appstore-downloader
 WORKDIR /src
 COPY packages/appstore-core/Cargo.toml packages/appstore-core/LICENSE packages/appstore-core/UPSTREAM ./packages/appstore-core/
 COPY packages/appstore-core/src ./packages/appstore-core/src
