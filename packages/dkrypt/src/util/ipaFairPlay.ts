@@ -232,8 +232,11 @@ export function verifyIpaFairPlayDecrypted(ipaPath: string): FairPlayVerificatio
     const magic = readUInt32(bytes, 0, false);
     // CAFEBABE also identifies Java class resources. Only treat a malformed fat
     // header as Mach-O when it declares a plausible architecture table.
-    const fatCount = readUInt32(bytes, 4, magic === 0xbebafeca || magic === 0xbfbafeca);
-    const fatMagic = [0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic ?? -1) && fatCount !== undefined && fatCount > 0 && fatCount <= 128;
+    const fatLittleEndian = magic === 0xbebafeca || magic === 0xbfbafeca;
+    const fatCount = readUInt32(bytes, 4, fatLittleEndian);
+    const firstCpu = readUInt32(bytes, 8, fatLittleEndian);
+    const recognizedCpu = [7, 12, 18, 0x01000007, 0x0100000c, 0x01000012, 0x0200000c].includes(firstCpu ?? -1);
+    const fatMagic = [0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic ?? -1) && fatCount !== undefined && fatCount > 0 && fatCount <= 128 && recognizedCpu;
     if (encrypted === undefined && (fatMagic || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe].includes(magic ?? -1))) {
       throw new Error(`downloaded IPA contains a malformed Mach-O image: ${entry.entryName}`);
     }

@@ -130,6 +130,18 @@ test('FairPlay verification rejects truncated embedded Mach-O images and command
   } finally { rmSync(path.dirname(ipaPath), { recursive: true, force: true }); }
 });
 
+test('FairPlay verification does not confuse Java class resources with malformed fat Mach-O images', () => {
+  const javaClass = Buffer.alloc(32);
+  javaClass.writeUInt32BE(0xcafebabe, 0);
+  javaClass.writeUInt16BE(52, 6); // Java 8: minor 0 / major 52 resembles 52 architectures.
+  javaClass.writeUInt16BE(10, 8); // Constant-pool count, not a Mach-O CPU type.
+  javaClass[10] = 7;
+  const ipaPath = createIpa(machO(0), javaClass, 'Payload/Example.app/Resources/Example.class');
+  try {
+    expect(verifyIpaFairPlayDecrypted(ipaPath).encryptedPaths).toEqual([]);
+  } finally { rmSync(path.dirname(ipaPath), { recursive: true, force: true }); }
+});
+
 test('FairPlay verification rejects zero-filled plaintext even when cryptid was cleared', () => {
   const executable = Buffer.concat([machO(0), Buffer.alloc(32)]);
   executable.writeUInt32LE(56, 40);
