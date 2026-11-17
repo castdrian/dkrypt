@@ -36,3 +36,7 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/tool.mk
 
 include $(THEOS_MAKE_PATH)/bundle.mk
+
+after-stage::
+	mkdir -p $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/usr/share/doc/dev.adrian.autoinstall
+	cp appstore/NOTICE $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/usr/share/doc/dev.adrian.autoinstall/appstorectl-NOTICE
