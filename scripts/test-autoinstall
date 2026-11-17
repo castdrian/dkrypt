@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+root_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/dkrypt-native-tests.XXXXXX")"
+trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
+for source in FreeInstallConfirmation PurchaseResponse InstallSupport; do
+    clang -fobjc-arc -fmodules-cache-path="$test_dir/modules" -framework Foundation \
+        "$root_dir/packages/autoinstall/tests/$source.m" -o "$test_dir/$source"
+    "$test_dir/$source"
+done

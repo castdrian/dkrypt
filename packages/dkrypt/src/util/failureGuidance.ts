@@ -9,6 +9,9 @@ export interface FailureGuidance {
 
 export function getFailureGuidance(message: string | undefined, queueReason?: string): FailureGuidance {
   const category = categorizeFailure(message);
+  if (/App Store authorization requires action|MZCommerce\..*(?:\.Auth|SignatureRequired)/i.test(message ?? '')) {
+    return { category: 'Authorization required', title: 'App Store authorization is required', action: 'Complete the Apple Account password, biometric, or approval prompt on the device, then retry.', retryRecommended: false };
+  }
   if (category === 'Cancelled') return { category, title: 'Job was cancelled', action: 'Queue the decrypt again when you are ready.', retryRecommended: true };
   if (category === 'Queue wait expired') {
     const hasQueueReason = Boolean(queueReason?.trim()) || /job deadline exceeded while waiting in the queue:\s*\S/i.test(message ?? '');

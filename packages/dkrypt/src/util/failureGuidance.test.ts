@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import { getFailureGuidance } from './failureGuidance.js';
 
+test('authorization failures request device action instead of another automatic retry', () => {
+  expect(getFailureGuidance('App Store authorization requires action on the device (MZCommerce.ConfirmPaymentSheet.Auth)')).toMatchObject({
+    category: 'Authorization required', retryRecommended: false,
+  });
+});
+
 test('offers a concrete recovery action for bridge failures', () => {
   expect(getFailureGuidance('autoinstall bridge request timed out')).toEqual({
     category: 'Timed out',

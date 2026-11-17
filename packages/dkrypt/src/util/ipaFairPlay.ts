@@ -70,31 +70,41 @@ function hasEncryptedLoadCommand(buffer: Buffer, slice: MachOSlice): boolean | u
   const commandBytes = readUInt32(buffer, slice.offset + 20, littleEndian);
   if (commandCount === undefined || commandBytes === undefined || commandCount > 65_536 || slice.offset + headerSize + commandBytes > slice.offset + slice.size) return undefined;
   let commandOffset = slice.offset + headerSize;
+  const commandsEnd = commandOffset + commandBytes;
+  let encrypted = false;
   for (let index = 0; index < commandCount; index += 1) {
+    if (commandOffset + 8 > commandsEnd) return undefined;
     const command = readUInt32(buffer, commandOffset, littleEndian);
     const commandSize = readUInt32(buffer, commandOffset + 4, littleEndian);
-    if (command === undefined || commandSize === undefined || commandSize < 8 || commandOffset + commandSize > slice.offset + slice.size) return undefined;
-    if ((command === 0x21 || command === 0x2c) && commandSize >= 20) {
+    if (command === undefined || commandSize === undefined || commandSize < 8 || commandSize % 4 !== 0 || commandOffset + commandSize > commandsEnd) return undefined;
+    if (command === 0x21 || command === 0x2c) {
+      if (commandSize < (command === 0x2c ? 24 : 20)) return undefined;
       const cryptId = readUInt32(buffer, commandOffset + 16, littleEndian);
-      if (cryptId === undefined) return undefined;
-      if (cryptId !== 0) return true;
+      const cryptOffset = readUInt32(buffer, commandOffset + 8, littleEndian);
+      const cryptSize = readUInt32(buffer, commandOffset + 12, littleEndian);
+      if (cryptId === undefined || cryptOffset === undefined || cryptSize === undefined || cryptOffset + cryptSize > slice.size) return undefined;
+      if (cryptId !== 0) encrypted = true;
+      else if (cryptSize > 0 && !buffer.subarray(slice.offset + cryptOffset, slice.offset + cryptOffset + cryptSize).some((byte) => byte !== 0)) {
+        throw new Error('downloaded IPA contains an empty decrypted Mach-O region');
+      }
     }
     commandOffset += commandSize;
   }
-  return false;
+  return commandOffset === commandsEnd ? encrypted : undefined;
 }
 
 function isEncryptedMachO(buffer: Buffer): boolean | undefined {
   const slices = readSlices(buffer);
   if (slices.length === 0) return undefined;
   let parsed = false;
+  let foundEncrypted = false;
   for (const slice of slices) {
     const encrypted = hasEncryptedLoadCommand(buffer, slice);
-    if (encrypted === undefined) continue;
+    if (encrypted === undefined) return undefined;
     parsed = true;
-    if (encrypted) return true;
+    if (encrypted) foundEncrypted = true;
   }
-  return parsed ? false : undefined;
+  return parsed ? foundEncrypted : undefined;
 }
 
 function parseInfoPlist(buffer: Buffer): Record<string, unknown> {
@@ -216,7 +226,19 @@ export function verifyIpaFairPlayDecrypted(ipaPath: string): FairPlayVerificatio
   const primarySlices = readSlices(primaryBuffer);
   if (!primarySlices.some((slice) => slice.cpuType === 0x0100000c)) throw new Error('downloaded IPA primary executable has no arm64 Mach-O slice');
   if (isEncryptedMachO(primaryBuffer) === undefined) throw new Error('downloaded IPA primary executable is malformed');
-  const encryptedPaths = entries.flatMap((entry) => isEncryptedMachO(entry.getData()) === true ? [entry.entryName] : []);
+  const encryptedPaths = entries.flatMap((entry) => {
+    const bytes = entry.getData();
+    const encrypted = isEncryptedMachO(bytes);
+    const magic = readUInt32(bytes, 0, false);
+    // CAFEBABE also identifies Java class resources. Only treat a malformed fat
+    // header as Mach-O when it declares a plausible architecture table.
+    const fatCount = readUInt32(bytes, 4, magic === 0xbebafeca || magic === 0xbfbafeca);
+    const fatMagic = [0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(magic ?? -1) && fatCount !== undefined && fatCount > 0 && fatCount <= 128;
+    if (encrypted === undefined && (fatMagic || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe].includes(magic ?? -1))) {
+      throw new Error(`downloaded IPA contains a malformed Mach-O image: ${entry.entryName}`);
+    }
+    return encrypted === true ? [entry.entryName] : [];
+  });
   const primaryEncrypted = encryptedPaths.includes(primaryExecutable);
   return { encryptedPaths, primaryExecutable, primaryEncrypted };
 }

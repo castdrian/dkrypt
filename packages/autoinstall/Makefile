@@ -12,7 +12,12 @@ autoinstall_FILES = $(shell find sources -name "*.x*" -o -name "*.m*")
 autoinstall_CFLAGS = -fobjc-arc -DBRIDGE_VERSION='@"$(THEOS_PACKAGE_BASE_VERSION)"'
 autoinstall_FRAMEWORKS = Foundation UIKit StoreKit
 
-TOOL_NAME = autoinstall-device-agent
+TOOL_NAME = autoinstall-device-agent autoinstall-appstore
+autoinstall-appstore_FILES = appstore/main.m
+autoinstall-appstore_CFLAGS = -fobjc-arc
+autoinstall-appstore_FRAMEWORKS = Foundation StoreKit
+autoinstall-appstore_CODESIGN_FLAGS = -Sappstore/entitlements.plist
+autoinstall-appstore_INSTALL_PATH = /usr/libexec
 autoinstall-device-agent_FILES = device-agent/DeviceAgent.m
 autoinstall-device-agent_CFLAGS = -fobjc-arc -DAGENT_VERSION='@"$(THEOS_PACKAGE_BASE_VERSION)"'
 autoinstall-device-agent_FRAMEWORKS = Foundation

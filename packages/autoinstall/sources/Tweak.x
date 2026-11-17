@@ -2557,7 +2557,8 @@ static void handleAppStoreRequest(NSDictionary *req, NSString *responsePath, NSS
                         @"ok": @NO,
                         @"operationId": operationId,
                         @"state": @"failed",
-                        @"error": error.localizedDescription ?: @"The App Store purchase operation failed"
+                        @"error": AIStoreError(error)[@"message"],
+                        @"details": AIStoreError(error)
                     };
                     writeBridgeTransaction(@"appstore", operationId, @"failed", failure);
                     writeJSONFile(kASInstallStatusPath, failure);
