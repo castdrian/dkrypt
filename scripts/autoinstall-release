@@ -95,6 +95,10 @@ if [[ "$installed_version" != "$expected_version" ]]; then
   rollback
   exit 1
 fi
+if [[ "$mode" == "deploy" ]] && ! ssh "${ssh_options[@]}" "$target" "test -x /var/jb/usr/libexec/autoinstall-appstore"; then
+  rollback
+  exit 1
+fi
 agent_ready=false
 for _ in {1..15}; do
   if ssh "${ssh_options[@]}" "$target" "test -x /var/jb/usr/libexec/autoinstall-device-agent && { launchctl print user/501/dev.adrian.autoinstall.device-agent >/dev/null 2>&1 || ps ax | grep -q '[a]utoinstall-device-agent'; }"; then

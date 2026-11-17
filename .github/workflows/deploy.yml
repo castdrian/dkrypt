@@ -15,6 +15,12 @@ permissions:
   contents: read
 
 jobs:
+  native-tests:
+    name: Native install validation
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - run: sh scripts/test-autoinstall
   ci:
     name: Typecheck & test
     runs-on: ubuntu-24.04
@@ -122,7 +128,7 @@ jobs:
 
   image:
     name: Build immutable image
-    needs: [ci, fairplay-credential-bundle]
+    needs: [ci, native-tests, fairplay-credential-bundle]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

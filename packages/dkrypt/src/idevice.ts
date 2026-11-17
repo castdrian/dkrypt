@@ -3,6 +3,8 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { connect as connectSocket, type Socket } from 'node:net';
 import path from 'node:path';
 import { Client, type Channel } from 'ssh2';
+import { parse as parseXmlPlist } from 'plist';
+import { parseBuffer as parseBinaryPlist } from 'bplist-parser';
 import { config } from '#config.js';
 import type { DeviceTransport } from '#apiCommonContracts.js';
 import { scopedLogger } from '#logger.js';
@@ -1558,13 +1560,43 @@ export async function uninstallInstalledBundle(conn: DeviceClient, bundleId: str
 }
 
 export async function findInstalledAppStoreBundle(conn: DeviceClient, bundleId: string): Promise<string | undefined> {
-  const { stdout } = await execCommand(
-    conn,
+  if (!/^[A-Za-z0-9.-]{1,200}$/.test(bundleId)) throw new Error('unsafe installed App Store bundle identifier');
+  const helper = '/var/jb/usr/libexec/autoinstall-appstore';
+  const inspection = await execCommand(conn, `if [ -x ${helper} ]; then ${helper} inspect '${bundleId}'; else exit 127; fi`);
+  if (inspection.code !== 127) {
+    let result: { ok?: boolean; appPath?: unknown };
+    try { result = JSON.parse(inspection.stdout); } catch { throw new Error('App Store installed-bundle inspection returned invalid JSON'); }
+    if (inspection.code !== 0 || result?.ok !== true) throw new Error('App Store installed-bundle inspection failed');
+    if (result.appPath === null) return undefined;
+    if (typeof result.appPath !== 'string' || !/^\/var\/containers\/Bundle\/Application\/[^/]+\/[^/]+\.app$/.test(result.appPath)) throw new Error('App Store installed-bundle inspection returned an invalid path');
+    return result.appPath;
+  }
+  // Compatibility with older device packages. Parse the plist instead of grepping its bytes:
+  // binary plists can contain the requested ID in unrelated metadata or as a prefix.
+  const { stdout, code } = await execCommand(conn,
     `for d in /var/containers/Bundle/Application/*/*.app; do ` +
-      `if [ -d "$d/SC_Info" ] && grep -laq "${bundleId}" "$d/Info.plist" 2>/dev/null; then echo "$d"; break; fi; done`,
-  );
-  const line = stdout.trim().split('\n')[0];
-  return line || undefined;
+    `[ -d "$d/SC_Info" ] && [ -s "$d/Info.plist" ] || continue; ` +
+    `printf '%s\\t' "$d"; base64 < "$d/Info.plist" | tr -d '\\n'; printf '\\n'; done`);
+  if (code !== 0) throw new Error('could not enumerate installed App Store bundles');
+  for (const line of stdout.split('\n')) {
+    const [appPath, encoded] = line.split('\t');
+    if (!appPath || !encoded || !/^\/var\/containers\/Bundle\/Application\/[^/]+\/[^/]+\.app$/.test(appPath)) continue;
+    let info: Record<string, unknown>;
+    try {
+      const bytes = Buffer.from(encoded, 'base64');
+      info = bytes.subarray(0, 8).equals(Buffer.from('bplist00'))
+        ? (parseBinaryPlist(bytes) as Record<string, unknown>[])[0] ?? {}
+        : parseXmlPlist(bytes.toString('utf8')) as Record<string, unknown>;
+    } catch { continue; }
+    const executable = info.CFBundleExecutable;
+    if (info.CFBundleIdentifier !== bundleId || typeof executable !== 'string' || !executable || /[\/\x00-\x1f]/.test(executable) || executable === '..' || executable === '.') continue;
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const target = quote(`${appPath}/${executable}`);
+    const licensePrefix = quote(`${appPath}/SC_Info/${executable}`);
+    const check = await execCommand(conn, `test -s ${target} && { for f in ${licensePrefix}.sinf ${licensePrefix}.supf ${licensePrefix}.*.sinf ${licensePrefix}.*.supf; do [ -s "$f" ] && exit 0; done; exit 1; }`);
+    if (check.code === 0) return appPath;
+  }
+  return undefined;
 }
 
 export async function listInstalledAppStoreBundles(conn: DeviceClient): Promise<string[]> {

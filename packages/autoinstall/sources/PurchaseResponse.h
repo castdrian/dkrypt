@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "../appstore/InstallSupport.h"
 
 @protocol AutoinstallPurchaseResponseProtocol <NSObject>
 @optional

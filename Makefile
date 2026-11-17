@@ -1,4 +1,7 @@
-.PHONY: check autoinstall-package autoinstall-deploy autoinstall-rollback
+.PHONY: check autoinstall-test autoinstall-package autoinstall-deploy autoinstall-rollback
+
+autoinstall-test:
+	sh scripts/test-autoinstall
 
 check:
 	cd packages/dkrypt && bun run test && bun run typecheck && bun run typecheck:web

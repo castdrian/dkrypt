@@ -22,6 +22,7 @@ import { getPrimaryDevice, type DeviceRecord } from '#store/state.js';
 import { BRIDGE_CAPABILITIES, hasBridgeCapabilities } from '#bridgeProtocol.js';
 import { compareVersions, normalizeVersion } from '#util/version.js';
 import { delayWithSignal, throwIfAborted } from '#util/abort.js';
+import { AppStorePurchaseError, probeDirectAppStore, readDirectAppStoreOperation, submitDirectAppStore, storeFailureMessage } from '#directAppStore.js';
 
 const log = scopedLogger('appstore');
 
@@ -158,7 +159,8 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
   if (!SAFE_BUNDLE_ID_RE.test(bundleId)) {
     throw new Error(`refusing to install App Store app with unsafe bundleId: ${JSON.stringify(bundleId)}`);
   }
-  const versionId = externalVersionId && APP_EXT_VERSION_ID_RE.test(externalVersionId) ? Number(externalVersionId) : undefined;
+  if (options.operationId !== undefined && !/^[A-Za-z0-9_.-]{1,160}$/.test(options.operationId)) throw new Error('invalid App Store operation ID');
+  const versionId = externalVersionId && APP_EXT_VERSION_ID_RE.test(externalVersionId) && BigInt(externalVersionId) > 0n && BigInt(externalVersionId) <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(externalVersionId) : undefined;
   if (externalVersionId && versionId === undefined) {
     throw new Error(`refusing to install with non-numeric externalVersionId: ${JSON.stringify(externalVersionId)}`);
   }
@@ -181,11 +183,12 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
   return withSSH(options.device ?? primaryDevice(), async (conn, operationSignal) => {
     activeSignal = operationSignal;
     ensureNotCancelled();
-    await ensureAppStoreBridgeReady(conn, operationSignal);
+    const direct = await probeDirectAppStore(conn, operationSignal);
+    if (!direct) await ensureAppStoreBridgeReady(conn, operationSignal);
     ensureNotCancelled();
     let country: string;
     try {
-      const storefront = await sendAppStoreBridgeRequest(conn, { action: 'storefront' }, 15_000, operationSignal);
+      const storefront = direct ?? await sendAppStoreBridgeRequest(conn, { action: 'storefront' }, 15_000, operationSignal);
       ensureNotCancelled();
       country = appStoreCountryCode(storefront);
     } catch (error) {
@@ -194,6 +197,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
     }
     const { trackId, version: latestVersion } = await lookupCurrentVersion(bundleId, operationSignal, country);
     ensureNotCancelled();
+    if (!Number.isSafeInteger(trackId) || trackId <= 0) throw new Error('App Store returned an invalid track ID');
     if (options.currentVersion && options.currentVersion.trackId !== trackId) {
       throw new Error(`the App Store track ID for ${bundleId} changed between metadata resolution and device verification`);
     }
@@ -215,9 +219,13 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       throw new Error(`App Store automation requires a verified free ${country} listing for ${bundleId}`);
     }
     const appNames = [listing.trackName];
+    let operationId = options.operationId ?? randomUUID();
+    const directRequest = { bundleId, adamId: String(trackId), ...(externalVersionId ? { versionId: externalVersionId } : {}), operationId, verifiedPrice: listing.price };
+    const resumedPurchase = direct && options.operationId ? await readDirectAppStoreOperation(conn, directRequest, operationSignal) : undefined;
+    ensureNotCancelled();
     const existing = await findInstalledAppStoreBundle(conn, bundleId);
     ensureNotCancelled();
-    if (existing) {
+    if (existing && !resumedPurchase) {
       report('removing the installed app before the App Store install');
       const removed = (await uninstallInstalledApp(conn, bundleId)) || (await uninstallInstalledBundle(conn, bundleId, existing));
       ensureNotCancelled();
@@ -226,24 +234,28 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       }
     }
 
-    report('restarting the App Store to clear pending purchases');
-    await restartAppStore(conn, operationSignal);
+    if (!direct) {
+      report('restarting the App Store to clear pending purchases');
+      await restartAppStore(conn, operationSignal);
 
-    report('bringing the App Store to the foreground');
-    await ensureAppStoreForeground(conn, operationSignal);
-    ensureNotCancelled();
-    await ensureAppStoreBridgeReady(conn, operationSignal);
+      report('bringing the App Store to the foreground');
+      await ensureAppStoreForeground(conn, operationSignal);
+      ensureNotCancelled();
+      await ensureAppStoreBridgeReady(conn, operationSignal);
+    }
 
     try {
       ensureNotCancelled();
-      report('arming headless auto-confirm and sending install request');
-      await armAppStoreAutoConfirm(conn, 'Install');
+      report(direct ? 'submitting the install directly to appstored' : 'arming headless auto-confirm and sending install request');
+      if (!direct) await armAppStoreAutoConfirm(conn, 'Install');
       ensureNotCancelled();
 
-      let operationId = options.operationId ?? randomUUID();
       const request: Record<string, unknown> = { action: 'install', adamId: trackId, appName: listing.trackName, appNames, verifiedPrice: listing.price, contextMode: 'fallback', operationId };
       if (versionId !== undefined) request.versionId = versionId;
-      const installResponse = await sendAppStoreBridgeRequest(conn, request, 20_000, operationSignal);
+      const installResponse = direct
+        ? resumedPurchase ?? await submitDirectAppStore(conn, directRequest, operationSignal)
+        : await sendAppStoreBridgeRequest(conn, request, 20_000, operationSignal);
+      if (direct && installResponse.biometric === 'repaired') report('cleared an unusable biometric purchase opt-in');
       ensureNotCancelled();
       if (installResponse?.requested === false && installResponse?.completed !== true) {
         throw new Error('App Store did not start the requested installation');
@@ -259,8 +271,8 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       let lastInstallStatusAt = Number.NEGATIVE_INFINITY;
       let lastReportedAt = 0;
       let lastUnexpectedVersion: string | undefined;
-      let lastInstallState: string | undefined;
-      let lastInstallStatusVerified = false;
+      let lastInstallState: string | undefined = direct ? 'completed' : undefined;
+      let lastInstallStatusVerified = Boolean(direct);
       let authorizationReported = false;
       let purchaseCompletedAt: number | undefined;
       let retriedCompletedPurchase = false;
@@ -290,7 +302,9 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
           if (install?.state === 'completed') purchaseCompletedAt ??= Date.now();
           if (install?.state === 'failed') {
             const detail = typeof install.error === 'string' ? install.error : 'the App Store reported an installation failure';
-            throw new Error(`App Store install operation failed: ${detail}`);
+            const message = storeFailureMessage({ ...install, error: detail });
+            if (install.details && typeof install.details === 'object' && (install.details as Record<string, unknown>).retryable === false) throw new AppStorePurchaseError(`App Store install operation failed: ${message}`);
+            throw new Error(`App Store install operation failed: ${message}`);
           }
           if ((install?.state === 'authorizing' || install?.state === 'requires_user_action') && !authorizationReported) {
             authorizationReported = true;
@@ -315,7 +329,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
             return { ...installedVersion, bundleId, appPath: bundlePath, fairPlayProtected: true, elapsedMs: Date.now() - start };
           }
         }
-        if (!retriedCompletedPurchase && purchaseCompletedAt !== undefined && Date.now() - purchaseCompletedAt >= APP_STORE_COMPLETED_DOWNLOAD_RETRY_DELAY_MS && Date.now() + APP_STORE_DOWNLOAD_RETRY_MIN_REMAINING_MS < deadline) {
+        if (!direct && !retriedCompletedPurchase && purchaseCompletedAt !== undefined && Date.now() - purchaseCompletedAt >= APP_STORE_COMPLETED_DOWNLOAD_RETRY_DELAY_MS && Date.now() + APP_STORE_DOWNLOAD_RETRY_MIN_REMAINING_MS < deadline) {
           ensureNotCancelled();
           report('App Store confirmed the purchase but did not install the app; retrying the download once');
           await restartAppStore(conn, operationSignal);
@@ -347,7 +361,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       if (finalBundlePath) {
         const finalVersion = await readInstalledBundleVersions(conn, finalBundlePath);
         ensureNotCancelled();
-          const matchesTarget = normalizeVersion(finalVersion.shortVersion ?? '') === targetVersion || (finalVersion.shortVersion ? compareVersions(finalVersion.shortVersion, targetVersion) === 0 : false);
+        const matchesTarget = normalizeVersion(finalVersion.shortVersion ?? '') === targetVersion || (finalVersion.shortVersion ? compareVersions(finalVersion.shortVersion, targetVersion) === 0 : false);
         if (matchesTarget) {
           report(`install verified during final device check: ${finalVersion.shortVersion ?? 'unknown version'} build ${finalVersion.buildVersion ?? 'unknown'}`);
           return { ...finalVersion, bundleId, appPath: finalBundlePath, fairPlayProtected: true, elapsedMs: Date.now() - start };
@@ -368,7 +382,7 @@ export async function installFromAppStore(bundleId: string, options: AppStoreIns
       }
       throw new AppStoreInstallTimeoutError(`timed out waiting for ${bundleId} to install from the App Store after ${Math.round(waitTimeoutMs / 1000)}s`);
     } finally {
-      await clearAppStoreAutoConfirm(conn).catch(() => {});
+      if (!direct) await clearAppStoreAutoConfirm(conn).catch(() => {});
     }
     }, options.signal, 'foreground');
 }

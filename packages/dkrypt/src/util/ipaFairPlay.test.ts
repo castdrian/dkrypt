@@ -121,6 +121,35 @@ test('FairPlay verifier rejects malformed primary executables', () => {
   }
 });
 
+test('FairPlay verification rejects truncated embedded Mach-O images and commands outside sizeofcmds', () => {
+  const malformed = machO(0);
+  malformed.writeUInt32LE(8, 20);
+  const ipaPath = createIpa(machO(0), malformed);
+  try {
+    expect(() => verifyIpaFairPlayDecrypted(ipaPath)).toThrow('malformed Mach-O image');
+  } finally { rmSync(path.dirname(ipaPath), { recursive: true, force: true }); }
+});
+
+test('FairPlay verification rejects zero-filled plaintext even when cryptid was cleared', () => {
+  const executable = Buffer.concat([machO(0), Buffer.alloc(32)]);
+  executable.writeUInt32LE(56, 40);
+  executable.writeUInt32LE(32, 44);
+  const ipaPath = createIpa(executable);
+  try {
+    expect(() => verifyIpaFairPlayDecrypted(ipaPath)).toThrow('empty decrypted Mach-O region');
+  } finally { rmSync(path.dirname(ipaPath), { recursive: true, force: true }); }
+});
+
+test('FairPlay verification rejects encryption ranges beyond the image', () => {
+  const executable = machO(0);
+  executable.writeUInt32LE(56, 40);
+  executable.writeUInt32LE(32, 44);
+  const ipaPath = createIpa(executable);
+  try {
+    expect(() => verifyIpaFairPlayDecrypted(ipaPath)).toThrow('primary executable is malformed');
+  } finally { rmSync(path.dirname(ipaPath), { recursive: true, force: true }); }
+});
+
 test('FairPlay selector is stable for an account and key pair and differs across keys', () => {
   const firstPath = createIpaWithSinf(sinf([1, 2, 3, 4], [5, 6, 7, 8]));
   const samePath = createIpaWithSinf(sinf([1, 2, 3, 4], [5, 6, 7, 8]));

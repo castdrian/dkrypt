@@ -27,6 +27,10 @@ let currentVersionCountry: string | undefined;
 let localizedLookupError = false;
 let localizedListingPrice = 0;
 let localizedListingBundleId = '';
+let directProbe: Record<string, unknown> | undefined;
+let directResult: Record<string, unknown>;
+let directPayload: Record<string, unknown> | undefined;
+let directOperation: Record<string, unknown> | undefined;
 const originalSetTimeout = globalThis.setTimeout;
 const originalDateNow = Date.now;
 
@@ -38,7 +42,14 @@ mock.module('#idevice.js', () => ({
   ...idevice,
   armAppStoreAutoConfirm: async () => calls.push('arm'),
   clearAppStoreAutoConfirm: async () => calls.push('clear'),
-  execCommand: async (_conn: object, _command: string) => {
+  execCommand: async (_conn: object, command: string) => {
+    if (command.includes('autoinstall-appstore probe')) return { stdout: directProbe ? JSON.stringify(directProbe) : '', stderr: '', code: directProbe ? 0 : 127 };
+    if (command.includes('autoinstall-appstore operation')) return { stdout: JSON.stringify(directOperation ?? { ok: true, found: false }), stderr: '', code: 0 };
+    if (command.includes('autoinstall-appstore install')) {
+      calls.push('direct-purchase');
+      directPayload = JSON.parse(Buffer.from(command.match(/install '([^']+)'/)![1]!, 'base64').toString());
+      return { stdout: JSON.stringify(directResult), stderr: '', code: 0 };
+    }
     calls.push('restart');
     return { stdout: '', stderr: '', code: 0 };
   },
@@ -156,6 +167,52 @@ describe('installFromAppStore', () => {
     localizedLookupError = false;
     localizedListingPrice = 0;
     localizedListingBundleId = '';
+    directProbe = undefined;
+    directResult = { ok: true, state: 'purchased' };
+    directPayload = undefined;
+    directOperation = undefined;
+  });
+
+  test('installs directly without starting App Store or arming UI confirmation', async () => {
+    directProbe = { ok: true, supported: true, protocol: 1, countryCode: 'DE' };
+    await installFromAppStore('com.example.app', { operationId: 'job-direct', externalVersionId: '123456789', expectedVersion: '338.0' });
+    expect(calls).toEqual(['uninstall', 'direct-purchase']);
+    expect(foregroundRequests).toBe(0);
+    expect(directPayload).toEqual({ bundleId: 'com.example.app', adamId: '123', operationId: 'job-direct', versionId: '123456789', verifiedPrice: 0 });
+  });
+
+  test('does not fall back or resubmit when direct purchase needs authorization', async () => {
+    directProbe = { ok: true, supported: true, protocol: 1, countryCode: 'DE' };
+    directResult = { ok: false, error: 'App Store authorization requires action on the device', details: { dialogId: 'MZCommerce.ConfirmPaymentSheet.Auth', chain: [{ domain: 'AMSErrorDomain', code: 305 }] } };
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('MZCommerce.ConfirmPaymentSheet.Auth; AMSErrorDomain 305');
+    expect(calls).toEqual(['uninstall', 'direct-purchase']);
+    expect(installRequests).toHaveLength(0);
+  });
+
+  test('resumes a completed direct purchase without uninstalling its installed app or buying again', async () => {
+    directProbe = { ok: true, supported: true, protocol: 1, countryCode: 'DE' };
+    directOperation = { ok: true, found: true, state: 'purchased' };
+    await installFromAppStore('com.example.app', { operationId: 'job-direct' });
+    expect(calls).toEqual([]);
+    expect(foregroundRequests).toBe(0);
+  });
+
+  test('uses the compatibility backend only when direct support is explicitly absent', async () => {
+    directProbe = { ok: true, supported: false, protocol: 1 };
+    await installFromAppStore('com.example.app');
+    expect(calls).toContain('request');
+    expect(calls).not.toContain('direct-purchase');
+  });
+
+  test('does not remove the existing app when direct storefront verification fails', async () => {
+    directProbe = { ok: true, supported: true, protocol: 1, countryCode: '' };
+    await expect(installFromAppStore('com.example.app')).rejects.toThrow('could not verify the signed-in App Store storefront');
+    expect(calls).toEqual([]);
+  });
+
+  test('rejects build identifiers that would be rounded by JavaScript', async () => {
+    await expect(installFromAppStore('com.example.app', { externalVersionId: '9007199254740993', expectedVersion: '1.0' })).rejects.toThrow('non-numeric externalVersionId');
+    expect(calls).toEqual([]);
   });
 
   test('uses a distinct bridge operation id for each job retry', () => {
