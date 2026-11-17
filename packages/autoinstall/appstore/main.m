@@ -81,6 +81,10 @@ static NSString *AIBiometricPreflight(BOOL repair) {
 }
 
 static NSString *AIStorefront(void) {
+    // StoreKit's payment storefront does not require Apple Music permission.
+    // The cloud-service fallback can be unavailable to a standalone helper.
+    NSString *paymentCountry = [SKPaymentQueue defaultQueue].storefront.countryCode.uppercaseString;
+    if (paymentCountry.length == 3) return paymentCountry;
     __block BOOL done = NO;
     __block NSString *country = nil;
     SKCloudServiceController *controller = [SKCloudServiceController new];
@@ -210,8 +214,16 @@ int main(int argc, char **argv) {
                 if (supported) supported = [broker getPurchaseServiceWithError:&error] != nil;
                 NSMutableDictionary *result = [@{@"ok": @YES, @"supported": @(supported), @"protocol": @1} mutableCopy];
                 if (supported) {
-                    result[@"countryCode"] = AIStorefront() ?: @"";
-                    result[@"biometric"] = AIBiometricPreflight(NO);
+                    NSString *country = AIStorefront();
+                    if ((country.length == 2 || country.length == 3) && AIIdentifier(country, @"ABCDEFGHIJKLMNOPQRSTUVWXYZ", 3)) {
+                        result[@"countryCode"] = country;
+                        result[@"biometric"] = AIBiometricPreflight(NO);
+                    } else {
+                        // No purchase has been submitted: let the host use the
+                        // existing App Store client to verify its account country.
+                        result[@"supported"] = @NO;
+                        result[@"reason"] = @"storefront_unavailable";
+                    }
                 }
                 AIPrint(result);
             } else if ([action isEqual:@"inspect"] && argc == 3) {
