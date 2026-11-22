@@ -11,7 +11,7 @@ RUN set -eu; \
   go test ./...; \
   go build -trimpath -o /go/bin/ipadecrypt ./cmd/ipadecrypt
 
-FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS device-bridge
+FROM rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS device-bridge
 WORKDIR /bridge
 COPY packages/device-bridge/Cargo.toml packages/device-bridge/Cargo.lock ./
 COPY packages/device-bridge/src ./src
@@ -34,7 +34,7 @@ RUN set -eu; \
   tar --extract --file /tmp/netmuxd.tar.gz --directory /usr/local/bin; \
   chmod 0755 /usr/local/bin/netmuxd
 
-FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS appstore-downloader
+FROM rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS appstore-downloader
 WORKDIR /src
 COPY packages/appstore-core/Cargo.toml packages/appstore-core/LICENSE packages/appstore-core/UPSTREAM ./packages/appstore-core/
 COPY packages/appstore-core/src ./packages/appstore-core/src
